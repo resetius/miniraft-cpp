@@ -1,0 +1,42 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    permissions:
+      checks: write
+      pull-requests: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+    - name: apt-get update
+      run: sudo apt-get update
+    - name: Install packages
+      run: sudo apt-get install libcmocka-dev liburing-dev cmake ninja-build
+    - name: configure
+      run: |        
+        mkdir build 
+        echo 'add_compile_options(-fsanitize=address)' > build/local.cmake
+        echo 'add_link_options(-fsanitize=address)' >> build/local.cmake
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+    - name: make
+      run: cmake --build build
+    - name: test
+      run: cmake --build build --target test
+    - name: test-log
+      if: failure()
+      run: cat build/Testing/Temporary/LastTest.log
+    - name: Publish Unit Test Results
+      uses: EnricoMi/publish-unit-test-result-action@v1.28
+      if: always()
+      with:
+         files: build/*.xml
