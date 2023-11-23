@@ -13,5 +13,6 @@ TRaft::TRaft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts)
     , LastTime(TimeSource.now())
 { }
 
-void TRaft::follower(uint64_t now, const TMessageHolder<TMessage>& message) {
+std::unique_ptr<TResult> TRaft::follower(uint64_t now, const TMessageHolder<TMessage>& message) {
+    return nullptr;
 }

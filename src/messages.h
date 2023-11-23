@@ -57,7 +57,7 @@ struct TAppendEntriesRequest: public TMessage {
     uint32_t Src;
     uint32_t Dst;
     uint32_t LeaderId;
-    TLogEntry Entries[0];
+    char Entries[0]; // TLogEntry
 };
 
 struct TAppendEntriesResponse: public TMessage {

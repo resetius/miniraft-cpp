@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 #include <functional>
@@ -55,11 +56,13 @@ struct TVolatileState {
     TVolatileState& MergeMatchIndex(const std::vector<int>& matchIndex);
 };
 
-using TStateFunc = std::function<void(uint64_t now, const TMessageHolder<TMessage>& message)>;
+struct TResult;
+
+using TStateFunc = std::function<std::unique_ptr<TResult>(uint64_t now, const TMessageHolder<TMessage>& message)>;
 
 struct TResult {
-    TState NextState;
-    TVolatileState NextVolatileState;
+    std::unique_ptr<TState> NextState;
+    std::unique_ptr<TVolatileState> NextVolatileState;
     TStateFunc NextStateFunc;
     bool UpdateLastTime;
     TMessageHolder<TMessage> Message;
@@ -74,7 +77,7 @@ public:
     void applyResult(uint64_t now, const TResult& result, TNode* replyTo = nullptr);
 
 private:
-    void follower(uint64_t now, const TMessageHolder<TMessage>& message);
+    std::unique_ptr<TResult> follower(uint64_t now, const TMessageHolder<TMessage>& message);
 
     int Id;
     std::vector<TNode> Nodes;
@@ -82,8 +85,8 @@ private:
     int MinVotes;
     int Npeers;
     int Nservers;
-    TState State;
-    TVolatileState VolatileState;
+    std::unique_ptr<TState> State;
+    std::unique_ptr<TVolatileState> VolatileState;
 
     TStateFunc StateFunc;
     uint64_t LastTime;
