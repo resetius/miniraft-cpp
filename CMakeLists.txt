@@ -18,7 +18,7 @@ add_library(miniraft
 
 add_executable(test_raft test/test_raft.cpp)
 
-target_include_directories(test_raft PRIVATE ${CMOCKA_INCLUDE_DIRS})
+target_include_directories(test_raft PRIVATE ${CMOCKA_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src)
 target_link_directories(test_raft PRIVATE ${CMOCKA_LIBRARY_DIRS})
 target_link_libraries(test_raft miniraft ${CMOCKA_LIBRARIES})
 
