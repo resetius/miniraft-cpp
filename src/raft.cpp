@@ -8,7 +8,10 @@ TRaft::TRaft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts)
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
     , StateFunc([&](uint64_t now, const TMessageHolder<TMessage> &message) {
-        follower(now, message);
+        return follower(now, message);
     })
     , LastTime(TimeSource.now())
 { }
+
+void TRaft::follower(uint64_t now, const TMessageHolder<TMessage>& message) {
+}

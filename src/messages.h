@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <memory>
 
 #include <stdint.h>
@@ -13,6 +14,7 @@ enum class EMessageType : uint32_t {
     APPEND_ENTRIES_RESPONSE = 5,
     COMMAND_REQUEST = 6,
     COMMAND_RESPONSE = 7,
+    TIMEOUT = 8,
 };
 
 struct TMessage {
@@ -67,12 +69,19 @@ struct TAppendEntriesResponse: public TMessage {
     uint32_t Success;
 };
 
-struct CommandRequest: public TMessage {
+struct TCommandRequest: public TMessage {
+    static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
     char Data[0];
 };
 
-struct CommandResponse: public TMessage {
+struct TCommandResponse: public TMessage {
+    static constexpr EMessageType MessageType = EMessageType::COMMAND_RESPONSE;
+};
 
+struct TTimeout: public TMessage {
+    static constexpr EMessageType MessageType = EMessageType::TIMEOUT;
+    static constexpr std::chrono::milliseconds Election = std::chrono::milliseconds(5000);
+    static constexpr std::chrono::milliseconds Heartbeat = std::chrono::milliseconds(2000);
 };
 
 template<typename T>
