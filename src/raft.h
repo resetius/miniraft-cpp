@@ -66,7 +66,7 @@ struct TResult {
     TStateFunc NextStateFunc;
     bool UpdateLastTime;
     TMessageHolder<TMessage> Message;
-    std::vector<TMessageHolder<TMessage>> Messages;
+    std::vector<TMessageHolder<TAppendEntriesRequest>> Messages;
 };
 
 class TRaft {
@@ -74,7 +74,7 @@ public:
     TRaft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts);
 
     void process(const TMessageHolder<TMessage>& message, TNode* replyTo = nullptr);
-    void applyResult(uint64_t now, const TResult& result, TNode* replyTo = nullptr);
+    void applyResult(uint64_t now, std::unique_ptr<TResult> result, TNode* replyTo = nullptr);
 
 private:
     std::unique_ptr<TResult> follower(uint64_t now, const TMessageHolder<TMessage>& message);

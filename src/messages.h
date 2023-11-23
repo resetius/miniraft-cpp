@@ -30,42 +30,39 @@ struct TLogEntry: public TMessage {
     char Data[0];
 };
 
-struct TRequestVoteRequest: public TMessage {
+struct TMessageEx: public TMessage {
+    uint32_t Src;
+    uint32_t Dst;
+};
+
+struct TRequestVoteRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_REQUEST;
     uint64_t Term;
     uint64_t LastLogIndex;
     uint64_t LastLogTerm;
-    uint32_t Src;
-    uint32_t Dst;
     uint32_t CandidateId;
 };
 
-struct TRequestVoteResponse: public TMessage {
+struct TRequestVoteResponse: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_RESPONSE;
     uint64_t Term;
-    uint32_t Src;
-    uint32_t Dst;
     uint32_t VoteGranted;
 };
 
-struct TAppendEntriesRequest: public TMessage {
+struct TAppendEntriesRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_REQUEST;
     uint64_t Term;
     uint64_t PrevLogIndex;
     uint64_t PrevLogTerm;
     uint64_t LeaderCommit;
-    uint32_t Src;
-    uint32_t Dst;
     uint32_t LeaderId;
     char Entries[0]; // TLogEntry
 };
 
-struct TAppendEntriesResponse: public TMessage {
+struct TAppendEntriesResponse: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_RESPONSE;
     uint64_t Term;
     uint64_t MatchIndex;
-    uint32_t Src;
-    uint32_t Dst;
     uint32_t Success;
 };
 
@@ -110,6 +107,10 @@ struct TMessageHolder {
 
     T* operator->() {
         return Mes;
+    }
+
+    operator bool() {
+        return !!Mes;
     }
 
     template<typename U>
