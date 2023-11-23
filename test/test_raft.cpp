@@ -1,9 +1,11 @@
 #include <coroutine>
+#include <memory>
 #include <string_view>
 
 #include <poll.hpp>
 #include <messages.h>
 #include <raft.h>
+#include <timesource.h>
 #include <all.hpp>
 
 #include <stdarg.h>
@@ -17,9 +19,11 @@ using namespace NNet;
 
 namespace {
 
+using OnSendFunc = const std::function<void(const TMessageHolder<TMessage>&)>;
+
 class TFakeNode: public INode {
 public:
-    TFakeNode(const std::function<void(const TMessageHolder<TMessage>&)>& sendFunc = {})
+    TFakeNode(const OnSendFunc& sendFunc = {})
         : SendFunc(sendFunc)
     { }
 
@@ -30,8 +34,27 @@ public:
     }
 
 private:
-    std::function<void(const TMessageHolder<TMessage>&)> SendFunc;
+    OnSendFunc SendFunc;
 };
+
+class TFakeTimeSource: public ITimeSource {
+public:
+    uint64_t now() override {
+        return 0;
+    }
+};
+
+std::shared_ptr<TRaft> MakeRaft(
+    const OnSendFunc& sendFunc = {},
+    int count = 3,
+    const std::shared_ptr<ITimeSource>& timeSource = std::make_shared<TFakeTimeSource>())
+{
+    TNodeDict nodes;
+    for (int i = 2; i <= count; i++) {
+        nodes[i] = std::make_shared<TFakeNode>(sendFunc);
+    }
+    return std::make_shared<TRaft>(1, nodes, timeSource);
+}
 
 } // namespace {
 
@@ -107,12 +130,17 @@ void test_message_send_recv(void** state) {
     h1.destroy(); h2.destroy();
 };
 
+void test_initial(void**) {
+    auto raft = MakeRaft();
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
         cmocka_unit_test(test_message_create),
         cmocka_unit_test(test_message_cast),
         cmocka_unit_test(test_message_send_recv),
+        cmocka_unit_test(test_initial),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
