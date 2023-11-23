@@ -15,7 +15,27 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     , LastTime(TimeSource->Now())
 { }
 
+std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest> message) {
+    return nullptr;
+}
+
+std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message) {
+    return nullptr;
+}
+
 std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
+    if (auto maybeTimeout = message.Maybe<TTimeout>()) {
+        if (now - LastTime > TTimeout::Election) {
+            return std::make_unique<TResult>(TResult {
+                .NextStateName = EState::CANDIDATE,
+                .UpdateLastTime = true
+            });
+        }
+    } else if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
+        return OnRequestVote(std::move(maybeRequestVote.Cast()));
+    } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
+        return OnAppendEntries(maybeAppendEntries.Cast());
+    }
     return nullptr;
 }
 
@@ -95,7 +115,7 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
             Nodes[m->Dst]->Send(m);
         }
     }
-    if (result->NextStateName) {
-        StateName = static_cast<EState>(result->NextStateName);
+    if (result->NextStateName != EState::NONE) {
+        StateName = result->NextStateName;
     }
 }

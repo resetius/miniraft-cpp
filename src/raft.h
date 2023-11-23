@@ -64,21 +64,18 @@ struct TVolatileState {
     TVolatileState& MergeMatchIndex(const std::vector<int>& matchIndex);
 };
 
-struct TResult;
-
 enum class EState: int {
+    NONE = 0,
     CANDIDATE = 1,
     FOLLOWER = 2,
     LEADER = 3,
 };
 
-using TStateFunc = std::function<std::unique_ptr<TResult>(uint64_t now, const TMessageHolder<TMessage>& message)>;
-
 struct TResult {
     std::unique_ptr<TState> NextState;
     std::unique_ptr<TVolatileState> NextVolatileState;
-    int NextStateName;
-    bool UpdateLastTime;
+    EState NextStateName = EState::NONE;
+    bool UpdateLastTime = false;
     TMessageHolder<TMessage> Message;
     std::vector<TMessageHolder<TAppendEntriesRequest>> Messages;
 };
@@ -100,6 +97,9 @@ private:
     std::unique_ptr<TResult> Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
     std::unique_ptr<TResult> Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
     std::unique_ptr<TResult> Leader(ITimeSource::Time now, TMessageHolder<TMessage> message);
+
+    std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteRequest> message);
+    std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message);
 
     int Id;
     TNodeDict Nodes;
