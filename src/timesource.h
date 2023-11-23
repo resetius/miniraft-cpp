@@ -2,7 +2,12 @@
 
 #include <stdint.h>
 
-class TTimeSource {
+struct ITimeSource {
+    virtual ~ITimeSource() = default;
+    virtual uint64_t now() = 0;
+};
+
+class TTimeSource: public ITimeSource {
 public:
     uint64_t now();
 };

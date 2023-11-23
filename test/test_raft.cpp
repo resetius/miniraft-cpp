@@ -3,6 +3,7 @@
 
 #include <poll.hpp>
 #include <messages.h>
+#include <raft.h>
 #include <all.hpp>
 
 #include <stdarg.h>
@@ -13,6 +14,26 @@ extern "C" {
 }
 
 using namespace NNet;
+
+namespace {
+
+class TFakeNode: public INode {
+public:
+    TFakeNode(const std::function<void(const TMessageHolder<TMessage>&)>& sendFunc = {})
+        : SendFunc(sendFunc)
+    { }
+
+    void Send(const TMessageHolder<TMessage>& message) override {
+        if (SendFunc) {
+            SendFunc(message);
+        }
+    }
+
+private:
+    std::function<void(const TMessageHolder<TMessage>&)> SendFunc;
+};
+
+} // namespace {
 
 void test_empty(void** state) {
 

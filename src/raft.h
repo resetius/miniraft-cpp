@@ -2,13 +2,21 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <functional>
 
 #include "messages.h"
 #include "timesource.h"
 
-class TNode {
+struct INode {
+    virtual ~INode() = default;
+    virtual void Send(const TMessageHolder<TMessage>& message) = 0;
+};
+
+using TNodeDict = std::unordered_map<int, std::shared_ptr<INode>>;
+
+class TNode: public INode {
 public:
     TNode(int id, const std::string& host, int port)
         : Id_(id)
@@ -16,7 +24,7 @@ public:
         , Port_(port)
     { }
 
-    void send(const TMessageHolder<TMessage>& message);
+    void Send(const TMessageHolder<TMessage>& message) override;
 
 private:
     int Id_;
@@ -71,17 +79,17 @@ struct TResult {
 
 class TRaft {
 public:
-    TRaft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts);
+    TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource>& ts);
 
-    void process(const TMessageHolder<TMessage>& message, TNode* replyTo = nullptr);
-    void applyResult(uint64_t now, std::unique_ptr<TResult> result, TNode* replyTo = nullptr);
+    void Process(const TMessageHolder<TMessage>& message, INode* replyTo = nullptr);
+    void ApplyResult(uint64_t now, std::unique_ptr<TResult> result, INode* replyTo = nullptr);
 
 private:
-    std::unique_ptr<TResult> follower(uint64_t now, const TMessageHolder<TMessage>& message);
+    std::unique_ptr<TResult> Follower(uint64_t now, const TMessageHolder<TMessage>& message);
 
     int Id;
-    std::vector<TNode> Nodes;
-    TTimeSource TimeSource;
+    TNodeDict Nodes;
+    std::shared_ptr<ITimeSource> TimeSource;
     int MinVotes;
     int Npeers;
     int Nservers;

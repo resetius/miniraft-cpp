@@ -1,7 +1,7 @@
 #include "raft.h"
 #include "messages.h"
 
-TRaft::TRaft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts)
+TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource>& ts)
     : Id(node)
     , Nodes(nodes)
     , TimeSource(ts)
@@ -9,16 +9,16 @@ TRaft::TRaft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts)
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
     , StateFunc([&](uint64_t now, const TMessageHolder<TMessage> &message) {
-        return follower(now, message);
+        return Follower(now, message);
     })
-    , LastTime(TimeSource.now())
+    , LastTime(TimeSource->now())
 { }
 
-std::unique_ptr<TResult> TRaft::follower(uint64_t now, const TMessageHolder<TMessage>& message) {
+std::unique_ptr<TResult> TRaft::Follower(uint64_t now, const TMessageHolder<TMessage>& message) {
     return nullptr;
 }
 
-void TRaft::applyResult(uint64_t now, std::unique_ptr<TResult> result, TNode* replyTo) {
+void TRaft::ApplyResult(uint64_t now, std::unique_ptr<TResult> result, INode* replyTo) {
     if (!result) {
         return;
     }
@@ -34,22 +34,22 @@ void TRaft::applyResult(uint64_t now, std::unique_ptr<TResult> result, TNode* re
     if (result->Message) {
         if (result->Message.Maybe<TCommandResponse>()) {
             if (replyTo) {
-                replyTo->send(result->Message);
+                replyTo->Send(result->Message);
             }
         } else {
             auto messageEx = result->Message.Cast<TMessageEx>();
             if (messageEx->Dst == 0) {
-                for (auto& v : Nodes) {
-                    v.send(messageEx);
+                for (auto& [id, v] : Nodes) {
+                    v->Send(messageEx);
                 }
             } else {
-                Nodes[messageEx->Dst].send(messageEx);
+                Nodes[messageEx->Dst]->Send(messageEx);
             }
         }
     }
     if (!result->Messages.empty()) {
         for (auto& m : result->Messages) {
-            Nodes[m->Dst].send(m);
+            Nodes[m->Dst]->Send(m);
         }
     }
     if (result->NextStateFunc) {
