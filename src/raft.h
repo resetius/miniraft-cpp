@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
 #include "messages.h"
 #include "timesource.h"
@@ -13,6 +14,8 @@ public:
         , Host_(host)
         , Port_(port)
     { }
+
+    void send(const TMessageHolder<TMessage>& message);
 
 private:
     int Id_;
@@ -52,11 +55,27 @@ struct TVolatileState {
     TVolatileState& MergeMatchIndex(const std::vector<int>& matchIndex);
 };
 
-class Raft {
+using TStateFunc = std::function<void(uint64_t now, const TMessageHolder<TMessage>& message)>;
+
+struct TResult {
+    TState NextState;
+    TVolatileState NextVolatileState;
+    TStateFunc NextStateFunc;
+    bool UpdateLastTime;
+    TMessageHolder<TMessage> Message;
+    std::vector<TMessageHolder<TMessage>> Messages;
+};
+
+class TRaft {
 public:
-    Raft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts);
+    TRaft(int node, const std::vector<TNode>& nodes, const TTimeSource& ts);
+
+    void process(const TMessageHolder<TMessage>& message, TNode* replyTo = nullptr);
+    void applyResult(uint64_t now, const TResult& result, TNode* replyTo = nullptr);
 
 private:
+    void follower(uint64_t now, const TMessageHolder<TMessage>& message);
+
     int Id;
     std::vector<TNode> Nodes;
     TTimeSource TimeSource;
@@ -65,4 +84,7 @@ private:
     int Nservers;
     TState State;
     TVolatileState VolatileState;
+
+    TStateFunc StateFunc;
+    uint64_t LastTime;
 };
