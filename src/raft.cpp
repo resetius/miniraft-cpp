@@ -23,6 +23,21 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesReq
     return nullptr;
 }
 
+TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
+    auto mes = NewHoldedMessage<TRequestVoteRequest>(
+        static_cast<uint32_t>(EMessageType::REQUEST_VOTE_REQUEST),
+        sizeof(TRequestVoteRequest));
+    mes->Src = Id;
+    mes->Dst = 0;
+    mes->Term = State->CurrentTerm+1;
+    mes->CandidateId = Id;
+    mes->LastLogIndex = State->Log.size();
+    mes->LastLogTerm = State->Log.empty()
+        ? 0
+        : State->Log.back().Term;
+    return mes;
+}
+
 std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeTimeout = message.Maybe<TTimeout>()) {
         if (now - LastTime > TTimeout::Election) {
@@ -40,6 +55,26 @@ std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<T
 }
 
 std::unique_ptr<TResult> TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
+    if (auto maybeTimeout = message.Maybe<TTimeout>()) {
+        if (now - LastTime > TTimeout::Election) {
+            return std::make_unique<TResult>(TResult {
+                .NextState = std::make_unique<TState>(TState {
+                    .CurrentTerm = State->CurrentTerm+1,
+                    .VotedFor = Id,
+                    .Log = State->Log
+                }),
+                .NextVolatileState = std::make_unique<TVolatileState>(),
+                .UpdateLastTime = true,
+                .Message = CreateVote()
+            });
+        }
+    } else if (auto maybeResponseVote = message.Maybe<TRequestVoteResponse>()) {
+        // TODO
+    } else if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
+        return OnRequestVote(std::move(maybeRequestVote.Cast()));
+    } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
+        return OnAppendEntries(maybeAppendEntries.Cast());
+    }
     return nullptr;
 }
 

@@ -100,6 +100,7 @@ private:
 
     std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteRequest> message);
     std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message);
+    TMessageHolder<TRequestVoteRequest> CreateVote();
 
     int Id;
     TNodeDict Nodes;
