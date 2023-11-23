@@ -66,12 +66,18 @@ struct TVolatileState {
 
 struct TResult;
 
+enum class EState: int {
+    CANDIDATE = 1,
+    FOLLOWER = 2,
+    LEADER = 3,
+};
+
 using TStateFunc = std::function<std::unique_ptr<TResult>(uint64_t now, const TMessageHolder<TMessage>& message)>;
 
 struct TResult {
     std::unique_ptr<TState> NextState;
     std::unique_ptr<TVolatileState> NextVolatileState;
-    TStateFunc NextStateFunc;
+    int NextStateName;
     bool UpdateLastTime;
     TMessageHolder<TMessage> Message;
     std::vector<TMessageHolder<TAppendEntriesRequest>> Messages;
@@ -83,6 +89,10 @@ public:
 
     void Process(const TMessageHolder<TMessage>& message, INode* replyTo = nullptr);
     void ApplyResult(uint64_t now, std::unique_ptr<TResult> result, INode* replyTo = nullptr);
+
+    EState CurrentStateName() const {
+        return StateName;
+    }
 
 private:
     std::unique_ptr<TResult> Follower(uint64_t now, const TMessageHolder<TMessage>& message);
@@ -96,6 +106,6 @@ private:
     std::unique_ptr<TState> State;
     std::unique_ptr<TVolatileState> VolatileState;
 
-    TStateFunc StateFunc;
+    EState StateName;
     uint64_t LastTime;
 };

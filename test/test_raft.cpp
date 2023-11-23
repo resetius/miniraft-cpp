@@ -132,6 +132,7 @@ void test_message_send_recv(void** state) {
 
 void test_initial(void**) {
     auto raft = MakeRaft();
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
 int main() {

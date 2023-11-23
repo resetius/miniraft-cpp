@@ -8,9 +8,7 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     , MinVotes((nodes.size()+1/2))
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
-    , StateFunc([&](uint64_t now, const TMessageHolder<TMessage> &message) {
-        return Follower(now, message);
-    })
+    , StateName(EState::FOLLOWER)
     , LastTime(TimeSource->now())
 { }
 
@@ -52,7 +50,7 @@ void TRaft::ApplyResult(uint64_t now, std::unique_ptr<TResult> result, INode* re
             Nodes[m->Dst]->Send(m);
         }
     }
-    if (result->NextStateFunc) {
-        StateFunc = result->NextStateFunc;
+    if (result->NextStateName) {
+        StateName = static_cast<EState>(result->NextStateName);
     }
 }
