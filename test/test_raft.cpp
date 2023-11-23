@@ -1,3 +1,4 @@
+#include <chrono>
 #include <coroutine>
 #include <memory>
 #include <string_view>
@@ -39,9 +40,21 @@ private:
 
 class TFakeTimeSource: public ITimeSource {
 public:
-    uint64_t Now() override {
-        return 0;
+    TFakeTimeSource()
+        : T(std::chrono::system_clock::now())
+    { }
+
+    ITimeSource::Time Now() override {
+        return T;
     }
+
+    template<typename A, typename B>
+    void Advance(std::chrono::duration<A, B> duration) {
+        T += duration;
+    }
+
+private:
+    ITimeSource::Time T;
 };
 
 std::shared_ptr<TRaft> MakeRaft(
@@ -142,6 +155,15 @@ void test_become(void**) {
     assert_true(raft->CurrentStateName() == EState::CANDIDATE);
 }
 
+void test_become_same_func(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 3, ts);
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ts->Advance(std::chrono::milliseconds(10000));
+    raft->Become(EState::FOLLOWER);
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -150,6 +172,7 @@ int main() {
         cmocka_unit_test(test_message_send_recv),
         cmocka_unit_test(test_initial),
         cmocka_unit_test(test_become),
+        cmocka_unit_test(test_become_same_func),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

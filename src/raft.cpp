@@ -15,15 +15,15 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     , LastTime(TimeSource->Now())
 { }
 
-std::unique_ptr<TResult> TRaft::Follower(uint64_t now, TMessageHolder<TMessage> message) {
+std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     return nullptr;
 }
 
-std::unique_ptr<TResult> TRaft::Candidate(uint64_t now, TMessageHolder<TMessage> message) {
+std::unique_ptr<TResult> TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     return nullptr;
 }
 
-std::unique_ptr<TResult> TRaft::Leader(uint64_t now, TMessageHolder<TMessage> message) {
+std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     return nullptr;
 }
 
@@ -49,10 +49,10 @@ void TRaft::Process(TMessageHolder<TMessage> message, INode* replyTo) {
         result = Follower(now, std::move(message));
         break;
     case EState::CANDIDATE:
-        Candidate(now, std::move(message));
+        result = Candidate(now, std::move(message));
         break;
     case EState::LEADER:
-        Leader(now, std::move(message));
+        result = Leader(now, std::move(message));
         break;
     default:
         throw std::logic_error("Unknown state");
@@ -61,7 +61,7 @@ void TRaft::Process(TMessageHolder<TMessage> message, INode* replyTo) {
     ApplyResult(now, std::move(result), replyTo);
 }
 
-void TRaft::ApplyResult(uint64_t now, std::unique_ptr<TResult> result, INode* replyTo) {
+void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, INode* replyTo) {
     if (!result) {
         return;
     }
