@@ -22,7 +22,7 @@ void test_message_cast(void** state) {
     auto casted = mes.Cast<TLogEntry>();
     assert_true(mes.RawData == casted.RawData);
 
-    auto casted2 = mes.Maybe<RequestVoteRequest>();
+    auto casted2 = mes.Maybe<TRequestVoteRequest>();
     assert_false(casted2);
 }
 

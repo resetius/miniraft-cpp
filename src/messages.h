@@ -1,6 +1,5 @@
 #pragma once
 #include <memory>
-#include <iostream>
 
 #include <stdint.h>
 #include <typeinfo>
@@ -9,6 +8,8 @@ enum class EMessageType : uint32_t {
     NONE = 0,
     LOG_ENTRY = 1,
     REQUEST_VOTE_REQUEST = 2,
+    REQUEST_VOTE_RESPONSE = 3,
+    APPEND_ENTRIES_REQUEST = 4,
 };
 
 struct TMessage {
@@ -24,7 +25,7 @@ struct TLogEntry: public TMessage {
     char Data[0];
 };
 
-struct RequestVoteRequest: public TMessage {
+struct TRequestVoteRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_REQUEST;
     uint64_t Term;
     uint64_t LastLogIndex;
@@ -32,6 +33,26 @@ struct RequestVoteRequest: public TMessage {
     uint32_t Src;
     uint32_t Dst;
     uint32_t CandidateId;
+};
+
+class TRequestVoteResponse: public TMessage {
+    static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_RESPONSE;
+    uint64_t Term;
+    uint32_t Src;
+    uint32_t Dst;
+    uint32_t VoteGranted;
+};
+
+class TAppendEntriesRequest: public TMessage {
+    static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_REQUEST;
+    uint64_t Term;
+    uint64_t PrevLogIndex;
+    uint64_t PrevLogTerm;
+    uint64_t LeaderCommit;
+    uint32_t Src;
+    uint32_t Dst;
+    uint32_t LeaderId;
+    TLogEntry Entries[0];
 };
 
 template<typename T>
