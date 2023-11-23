@@ -1,3 +1,6 @@
+#include <memory>
+#include <stdexcept>
+
 #include "raft.h"
 #include "messages.h"
 
@@ -9,11 +12,53 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
     , StateName(EState::FOLLOWER)
-    , LastTime(TimeSource->now())
+    , LastTime(TimeSource->Now())
 { }
 
-std::unique_ptr<TResult> TRaft::Follower(uint64_t now, const TMessageHolder<TMessage>& message) {
+std::unique_ptr<TResult> TRaft::Follower(uint64_t now, TMessageHolder<TMessage> message) {
     return nullptr;
+}
+
+std::unique_ptr<TResult> TRaft::Candidate(uint64_t now, TMessageHolder<TMessage> message) {
+    return nullptr;
+}
+
+std::unique_ptr<TResult> TRaft::Leader(uint64_t now, TMessageHolder<TMessage> message) {
+    return nullptr;
+}
+
+void TRaft::Become(EState newStateName) {
+    if (StateName != newStateName) {
+        StateName = newStateName;
+        Process(NewTimeout());
+    }
+}
+
+void TRaft::Process(TMessageHolder<TMessage> message, INode* replyTo) {
+    auto now = TimeSource->Now();
+
+    if (message.IsEx()) {
+        auto messageEx = message.Cast<TMessageEx>();
+        State->CurrentTerm = messageEx->Term;
+        State->VotedFor = 0;
+        StateName = EState::FOLLOWER;
+    }
+    std::unique_ptr<TResult> result;
+    switch (StateName) {
+    case EState::FOLLOWER:
+        result = Follower(now, std::move(message));
+        break;
+    case EState::CANDIDATE:
+        Candidate(now, std::move(message));
+        break;
+    case EState::LEADER:
+        Leader(now, std::move(message));
+        break;
+    default:
+        throw std::logic_error("Unknown state");
+    }
+
+    ApplyResult(now, std::move(result), replyTo);
 }
 
 void TRaft::ApplyResult(uint64_t now, std::unique_ptr<TResult> result, INode* replyTo) {

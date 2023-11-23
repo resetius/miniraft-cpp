@@ -87,15 +87,19 @@ class TRaft {
 public:
     TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource>& ts);
 
-    void Process(const TMessageHolder<TMessage>& message, INode* replyTo = nullptr);
+    void Process(TMessageHolder<TMessage> message, INode* replyTo = nullptr);
     void ApplyResult(uint64_t now, std::unique_ptr<TResult> result, INode* replyTo = nullptr);
 
     EState CurrentStateName() const {
         return StateName;
     }
 
+    void Become(EState newStateName);
+
 private:
-    std::unique_ptr<TResult> Follower(uint64_t now, const TMessageHolder<TMessage>& message);
+    std::unique_ptr<TResult> Follower(uint64_t now, TMessageHolder<TMessage> message);
+    std::unique_ptr<TResult> Candidate(uint64_t now, TMessageHolder<TMessage> message);
+    std::unique_ptr<TResult> Leader(uint64_t now, TMessageHolder<TMessage> message);
 
     int Id;
     TNodeDict Nodes;

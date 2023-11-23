@@ -33,11 +33,11 @@ struct TLogEntry: public TMessage {
 struct TMessageEx: public TMessage {
     uint32_t Src;
     uint32_t Dst;
+    uint64_t Term;
 };
 
 struct TRequestVoteRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_REQUEST;
-    uint64_t Term;
     uint64_t LastLogIndex;
     uint64_t LastLogTerm;
     uint32_t CandidateId;
@@ -45,13 +45,11 @@ struct TRequestVoteRequest: public TMessageEx {
 
 struct TRequestVoteResponse: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_RESPONSE;
-    uint64_t Term;
     uint32_t VoteGranted;
 };
 
 struct TAppendEntriesRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_REQUEST;
-    uint64_t Term;
     uint64_t PrevLogIndex;
     uint64_t PrevLogTerm;
     uint64_t LeaderCommit;
@@ -61,7 +59,6 @@ struct TAppendEntriesRequest: public TMessageEx {
 
 struct TAppendEntriesResponse: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_RESPONSE;
-    uint64_t Term;
     uint64_t MatchIndex;
     uint32_t Success;
 };
@@ -109,8 +106,16 @@ struct TMessageHolder {
         return Mes;
     }
 
+    const T* operator->() const {
+        return Mes;
+    }
+
     operator bool() {
         return !!Mes;
+    }
+
+    bool IsEx() const {
+        return (2 <= Mes->Type && Mes->Type <= 5);
     }
 
     template<typename U>
@@ -165,4 +170,8 @@ TMessageHolder<T> NewHoldedMessage(uint32_t type, uint32_t len)
 {
     T* mes = NewMessage<T>(type, len);
     return TMessageHolder<T>(mes, std::shared_ptr<char[]>(reinterpret_cast<char*>(mes)));
+}
+
+inline TMessageHolder<TTimeout> NewTimeout() {
+    return NewHoldedMessage<TTimeout>(static_cast<uint32_t>(EMessageType::TIMEOUT), sizeof(TTimeout));
 }

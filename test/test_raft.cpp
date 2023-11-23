@@ -39,7 +39,7 @@ private:
 
 class TFakeTimeSource: public ITimeSource {
 public:
-    uint64_t now() override {
+    uint64_t Now() override {
         return 0;
     }
 };
@@ -135,6 +135,13 @@ void test_initial(void**) {
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
+void test_become(void**) {
+    auto raft = MakeRaft();
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    raft->Become(EState::CANDIDATE);
+    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -142,6 +149,7 @@ int main() {
         cmocka_unit_test(test_message_cast),
         cmocka_unit_test(test_message_send_recv),
         cmocka_unit_test(test_initial),
+        cmocka_unit_test(test_become),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

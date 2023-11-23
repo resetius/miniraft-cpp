@@ -4,10 +4,10 @@
 
 struct ITimeSource {
     virtual ~ITimeSource() = default;
-    virtual uint64_t now() = 0;
+    virtual uint64_t Now() = 0;
 };
 
 class TTimeSource: public ITimeSource {
 public:
-    uint64_t now();
+    uint64_t Now();
 };
