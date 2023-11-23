@@ -10,6 +10,9 @@ enum class EMessageType : uint32_t {
     REQUEST_VOTE_REQUEST = 2,
     REQUEST_VOTE_RESPONSE = 3,
     APPEND_ENTRIES_REQUEST = 4,
+    APPEND_ENTRIES_RESPONSE = 5,
+    COMMAND_REQUEST = 6,
+    COMMAND_RESPONSE = 7,
 };
 
 struct TMessage {
@@ -35,7 +38,7 @@ struct TRequestVoteRequest: public TMessage {
     uint32_t CandidateId;
 };
 
-class TRequestVoteResponse: public TMessage {
+struct TRequestVoteResponse: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_RESPONSE;
     uint64_t Term;
     uint32_t Src;
@@ -43,7 +46,7 @@ class TRequestVoteResponse: public TMessage {
     uint32_t VoteGranted;
 };
 
-class TAppendEntriesRequest: public TMessage {
+struct TAppendEntriesRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_REQUEST;
     uint64_t Term;
     uint64_t PrevLogIndex;
@@ -55,11 +58,32 @@ class TAppendEntriesRequest: public TMessage {
     TLogEntry Entries[0];
 };
 
+struct TAppendEntriesResponse: public TMessage {
+    static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_RESPONSE;
+    uint64_t Term;
+    uint64_t MatchIndex;
+    uint32_t Src;
+    uint32_t Dst;
+    uint32_t Success;
+};
+
+struct CommandRequest: public TMessage {
+    char Data[0];
+};
+
+struct CommandResponse: public TMessage {
+
+};
+
 template<typename T>
 requires std::derived_from<T, TMessage>
 struct TMessageHolder {
     T* Mes;
     std::shared_ptr<char[]> RawData;
+
+    TMessageHolder()
+        : Mes(nullptr)
+    { }
 
     template<typename U>
     requires std::derived_from<U, T>
@@ -105,7 +129,7 @@ struct TMessageHolder {
         };
 
         U* dst = Mes->Type == static_cast<uint32_t>(U::MessageType)
-            ? static_cast<U*>(dst)
+            ? static_cast<U*>(Mes)
             : nullptr;
 
         return Maybe {
