@@ -25,6 +25,8 @@ struct TMessage {
     char Value[0];
 };
 
+static_assert(sizeof(TMessage) == 8);
+
 struct TLogEntry: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::LOG_ENTRY;
     uint64_t Term = 1;
@@ -37,12 +39,17 @@ struct TMessageEx: public TMessage {
     uint64_t Term;
 };
 
+static_assert(sizeof(TMessageEx) == sizeof(TMessage)+16);
+
 struct TRequestVoteRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_REQUEST;
     uint64_t LastLogIndex;
     uint64_t LastLogTerm;
     uint32_t CandidateId;
+    uint32_t Padding = 0;
 };
+
+static_assert(sizeof(TRequestVoteRequest) == sizeof(TMessageEx)+24);
 
 struct TRequestVoteResponse: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_RESPONSE;
@@ -164,7 +171,7 @@ template<typename T>
 requires std::derived_from<T, TMessage>
 T* NewMessage(uint32_t type, uint32_t len) {
     char* data = new char[len];
-    T* mes = reinterpret_cast<T*>(data);
+    T* mes =  new (data) T;
     mes->Type = type;
     mes->Len = len;
     return mes;

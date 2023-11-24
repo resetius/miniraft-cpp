@@ -1,5 +1,7 @@
 #include <chrono>
 #include <coroutine>
+#include <cstdint>
+#include <iostream>
 #include <memory>
 #include <functional>
 
@@ -85,6 +87,18 @@ void assert_terms(const std::vector<TMessageHolder<TLogEntry>>& log, const std::
     assert_int_equal(log.size(), terms.size());
     for (size_t i = 0; i < log.size(); i++) {
         assert_int_equal(log[i]->Term, terms[i]);
+    }
+}
+
+template<typename T>
+void assert_message_equal(TMessageHolder<TMessage> m1, const T& m2) {
+    auto mm = m1.Maybe<T>();
+    assert(mm);
+    auto m = mm.Cast();
+    if (memcmp(m.Mes, &m2, sizeof(T)) != 0) {
+        const char* p1 = (const char*)m.Mes;
+        const char* p2 = (const char*)&m2;
+        assert_memory_equal(p1, p2, sizeof(m2));
     }
 }
 
@@ -401,6 +415,33 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
     assert_int_equal(last->MatchIndex, 0);
 }
 
+void test_candidate_initiate_election(void**) {
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](const TMessageHolder<TMessage>& message) {
+        messages.push_back(message);
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3, ts);
+    ts->Advance(std::chrono::milliseconds(10000));
+    auto term = raft->GetState()->CurrentTerm;
+    raft->Become(EState::CANDIDATE);
+    assert_int_equal(raft->GetState()->CurrentTerm, term+1);
+    assert_true(ts->Now() == raft->GetLastTime());
+    assert_int_equal(messages.size(), 2);
+    TRequestVoteRequest r;
+    r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_REQUEST);
+    r.Len = sizeof(r);
+    r.Src = 1;
+    r.Dst = 0;
+    r.Term = term+1;
+    r.CandidateId = raft->GetId();
+    r.LastLogTerm = 0;
+    r.LastLogIndex = 0;
+
+    assert_message_equal(messages[0], r);
+    assert_message_equal(messages[1], r);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -420,6 +461,7 @@ int main() {
         cmocka_unit_test(test_follower_append_entries_7c),
         cmocka_unit_test(test_follower_append_entries_7f),
         cmocka_unit_test(test_follower_append_entries_empty_to_empty_log),
+        cmocka_unit_test(test_candidate_initiate_election),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

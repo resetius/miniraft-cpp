@@ -110,6 +110,10 @@ public:
         return LastTime;
     }
 
+    const uint32_t GetId() const {
+        return Id;
+    }
+
 private:
     std::unique_ptr<TResult> Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
     std::unique_ptr<TResult> Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
