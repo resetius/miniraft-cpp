@@ -4,6 +4,7 @@
 #include <iostream>
 
 #include <string.h>
+#include <assert.h>
 
 #include "raft.h"
 #include "messages.h"
@@ -45,6 +46,12 @@ TVolatileState& TVolatileState::MergeMatchIndex(const std::unordered_map<int, ui
     for (const auto& [k, v] : matchIndex) {
         MatchIndex[k] = v;
     }
+    return *this;
+}
+
+TVolatileState& TVolatileState::SetCommitIndex(int index)
+{
+    CommitIndex = index;
     return *this;
 }
 
@@ -116,7 +123,53 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRespons
 }
 
 std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message) {
-    return nullptr;
+    if (message->Term < State->CurrentTerm) {
+        auto reply = NewHoldedMessage<TAppendEntriesResponse>(static_cast<uint32_t>(EMessageType::APPEND_ENTRIES_RESPONSE), sizeof(TAppendEntriesResponse));
+        reply->Src = Id;
+        reply->Dst = message->Src;
+        reply->Term = State->CurrentTerm;
+        reply->Success = false;
+        reply->MatchIndex = 0;
+        return std::make_unique<TResult>(TResult {
+            .UpdateLastTime = true,
+            .Message = reply,
+        });
+    }
+
+    assert(message->Term == State->CurrentTerm);
+
+    uint64_t matchIndex = 0;
+    uint64_t commitIndex = VolatileState->CommitIndex;
+    bool success = false;
+    if (message->PrevLogIndex == 0 ||
+        (message->PrevLogIndex <= State->Log.size()
+            && State->LogTerm(message->PrevLogIndex) == message->PrevLogIndex))
+    {
+        success = true;
+        auto index = message->PrevLogIndex;
+        auto log = State->Log;
+        // TODO: iterate entries
+
+        matchIndex = index;
+        commitIndex = std::max(commitIndex, message->LeaderCommit);
+    }
+
+    auto reply = NewHoldedMessage<TAppendEntriesResponse>(static_cast<uint32_t>(EMessageType::APPEND_ENTRIES_RESPONSE), sizeof(TAppendEntriesResponse));
+    reply->Src = Id;
+    reply->Dst = message->Src;
+    reply->Term = State->CurrentTerm;
+    reply->Success = false;
+    reply->MatchIndex = matchIndex;
+
+    auto nextVolatileState = *VolatileState;
+    nextVolatileState.SetCommitIndex(commitIndex);
+
+    return std::make_unique<TResult>(TResult {
+        .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
+        .NextStateName = EState::FOLLOWER,
+        .UpdateLastTime = true,
+        .Message = reply,
+    });
 }
 
 std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
