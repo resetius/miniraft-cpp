@@ -98,6 +98,10 @@ public:
         return State.get();
     }
 
+    void SetState(const TState& state) {
+        *State = state;
+    }
+
     const TVolatileState* GetVolatileState() const {
         return VolatileState.get();
     }

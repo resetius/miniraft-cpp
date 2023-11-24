@@ -69,6 +69,17 @@ std::shared_ptr<TRaft> MakeRaft(
     return std::make_shared<TRaft>(1, nodes, timeSource);
 }
 
+template<typename T=TMessage>
+std::vector<TMessageHolder<T>> MakeLog(const std::vector<uint64_t>& terms) {
+    std::vector<TMessageHolder<T>> entries;
+    for (auto term : terms) {
+        auto mes = NewHoldedMessage<TLogEntry>();
+        mes->Term = term;
+        entries.push_back(mes);
+    }
+    return entries;
+}
+
 } // namespace {
 
 void test_empty(void** state) {
@@ -226,6 +237,7 @@ void test_follower_append_entries_small_term(void**) {
     mes->PrevLogIndex = 0;
     mes->PrevLogTerm = 0;
     mes->LeaderCommit = 0;
+    mes->Nentries = 0;
     raft->Process(mes);
 
     assert_true(messages.size() == 1);
@@ -234,6 +246,36 @@ void test_follower_append_entries_small_term(void**) {
     auto reply = maybeReply.Cast();
     assert_true(reply->Dst == 2);
     assert_false(reply->Success);
+}
+
+void test_follower_append_entries_7a(void**) {
+    // leader: 1,1,1,4,4,5,5,6,6,6
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](const TMessageHolder<TMessage>& message) {
+        messages.push_back(message);
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3, ts);
+    raft->SetState(TState{
+        .CurrentTerm = 1,
+        .VotedFor = 2,
+        .Log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6})
+    });
+    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
+    mes->Src = 2;
+    mes->Dst = 1;
+    mes->Term = 1;
+    mes->LeaderId = 2;
+    mes->PrevLogIndex = 9;
+    mes->PrevLogTerm = 6;
+    mes->LeaderCommit = 9;
+    mes->Nentries = 1;
+    mes.Payload = MakeLog({6});
+    raft->Process(mes);
+    auto last = messages.back().Cast<TAppendEntriesResponse>();
+    assert_true(last->Success);
+    assert_true(last->MatchIndex = 10);
+    assert_true(raft->GetState()->Log.size() == 10);
 }
 
 int main() {
@@ -250,6 +292,7 @@ int main() {
         cmocka_unit_test(test_apply_time_change_result),
         cmocka_unit_test(test_follower_to_candidate_on_timeout),
         cmocka_unit_test(test_follower_append_entries_small_term),
+        cmocka_unit_test(test_follower_append_entries_7a),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

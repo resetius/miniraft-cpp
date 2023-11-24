@@ -92,9 +92,10 @@ struct TMessageHolder {
 
     template<typename U>
     requires std::derived_from<U, T>
-    TMessageHolder(U* u, const std::shared_ptr<char[]>& rawData)
+    TMessageHolder(U* u, const std::shared_ptr<char[]>& rawData, const std::vector<TMessageHolder<TMessage>>& payload = {})
         : Mes(u)
         , RawData(rawData)
+        , Payload(payload)
     { }
 
     template<typename U>
@@ -102,6 +103,7 @@ struct TMessageHolder {
     TMessageHolder(const TMessageHolder<U>& other)
         : Mes(other.Mes)
         , RawData(other.RawData)
+        , Payload(other.Payload)
     { }
 
     T* operator->() {
@@ -123,7 +125,7 @@ struct TMessageHolder {
     template<typename U>
     requires std::derived_from<U, T>
     TMessageHolder<U> Cast() {
-        return TMessageHolder<U>(static_cast<U*>(Mes), RawData);
+        return TMessageHolder<U>(static_cast<U*>(Mes), RawData, Payload);
     }
 
     template<typename U>
@@ -132,6 +134,7 @@ struct TMessageHolder {
         struct Maybe {
             U* Mes;
             std::shared_ptr<char[]> RawData;
+            std::vector<TMessageHolder<TMessage>> Payload;
 
             operator bool() const {
                 return Mes != nullptr;
@@ -139,7 +142,7 @@ struct TMessageHolder {
 
             TMessageHolder<U> Cast() {
                 if (Mes) {
-                    return TMessageHolder<U>(Mes, RawData);
+                    return TMessageHolder<U>(Mes, RawData, Payload);
                 }
                 throw std::bad_cast();
             }
@@ -151,7 +154,8 @@ struct TMessageHolder {
 
         return Maybe {
             .Mes = dst,
-            .RawData = RawData
+            .RawData = RawData,
+            .Payload = Payload,
         };
     }
 };

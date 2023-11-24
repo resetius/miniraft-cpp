@@ -160,7 +160,7 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRespons
 
 std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message) {
     if (message->Term < State->CurrentTerm) {
-        auto reply = NewHoldedMessage<TAppendEntriesResponse>(static_cast<uint32_t>(EMessageType::APPEND_ENTRIES_RESPONSE), sizeof(TAppendEntriesResponse));
+        auto reply = NewHoldedMessage<TAppendEntriesResponse>();
         reply->Src = Id;
         reply->Dst = message->Src;
         reply->Term = State->CurrentTerm;
@@ -177,18 +177,20 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesReq
     uint64_t matchIndex = 0;
     uint64_t commitIndex = VolatileState->CommitIndex;
     bool success = false;
+    std::unique_ptr<TState> state;
     if (message->PrevLogIndex == 0 ||
         (message->PrevLogIndex <= State->Log.size()
-            && State->LogTerm(message->PrevLogIndex) == message->PrevLogIndex))
+            && State->LogTerm(message->PrevLogIndex) == message->PrevLogTerm))
     {
         success = true;
         auto index = message->PrevLogIndex;
-        auto log = State->Log;
+        state = std::make_unique<TState>(*State);
+        auto& log = state->Log;
         for (auto& data : message.Payload) {
             auto entry = data.Cast<TLogEntry>();
             index++;
             // replace or append log entries
-            if (State->LogTerm(index) != entry->Term) {
+            if (state->LogTerm(index) != entry->Term) {
                 while (log.size() > index-1) {
                     log.pop_back();
                 }
@@ -204,13 +206,14 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesReq
     reply->Src = Id;
     reply->Dst = message->Src;
     reply->Term = State->CurrentTerm;
-    reply->Success = false;
+    reply->Success = success;
     reply->MatchIndex = matchIndex;
 
     auto nextVolatileState = *VolatileState;
     nextVolatileState.SetCommitIndex(commitIndex);
 
     return std::make_unique<TResult>(TResult {
+        .NextState = std::move(state),
         .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
         .NextStateName = EState::FOLLOWER,
         .UpdateLastTime = true,
@@ -376,9 +379,11 @@ void TRaft::Process(TMessageHolder<TMessage> message, INode* replyTo) {
 
     if (message.IsEx()) {
         auto messageEx = message.Cast<TMessageEx>();
-        State->CurrentTerm = messageEx->Term;
-        State->VotedFor = 0;
-        StateName = EState::FOLLOWER;
+        if (messageEx->Term > State->CurrentTerm) {
+            State->CurrentTerm = messageEx->Term;
+            State->VotedFor = 0;
+            StateName = EState::FOLLOWER;
+        }
     }
     std::unique_ptr<TResult> result;
     switch (StateName) {
