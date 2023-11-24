@@ -80,6 +80,14 @@ std::vector<TMessageHolder<T>> MakeLog(const std::vector<uint64_t>& terms) {
     return entries;
 }
 
+void assert_terms(const std::vector<TMessageHolder<TLogEntry>>& log, const std::vector<uint64_t>& terms)
+{
+    assert_int_equal(log.size(), terms.size());
+    for (size_t i = 0; i < log.size(); i++) {
+        assert_int_equal(log[i]->Term, terms[i]);
+    }
+}
+
 } // namespace {
 
 void test_empty(void** state) {
@@ -338,6 +346,37 @@ void test_follower_append_entries_7c(void**) {
     assert_true(raft->GetState()->Log.size() == 11);
 }
 
+void test_follower_append_entries_7f(void**) {
+    // leader: 1,1,1,4,4,5,5,6,6,6
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](const TMessageHolder<TMessage>& message) {
+        messages.push_back(message);
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3, ts);
+    raft->SetState(TState{
+        .CurrentTerm = 1,
+        .VotedFor = 2,
+        .Log = MakeLog<TLogEntry>({1,1,1,2,2,2,3,3,3,3,3})
+    });
+    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
+    mes->Src = 2;
+    mes->Dst = 1;
+    mes->Term = 8;
+    mes->LeaderId = 2;
+    mes->PrevLogIndex = 3;
+    mes->PrevLogTerm = 1;
+    mes->LeaderCommit = 9;
+    mes->Nentries = 7;
+    mes.Payload = MakeLog({4,4,5,5,6,6,6});
+    raft->Process(mes);
+    auto last = messages.back().Cast<TAppendEntriesResponse>();
+    assert_true(last->Success);
+    assert_true(last->MatchIndex = 10);
+    assert_true(raft->GetState()->Log.size() == 10);
+    assert_terms(raft->GetState()->Log, {1,1,1,4,4,5,5,6,6,6});
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -355,6 +394,7 @@ int main() {
         cmocka_unit_test(test_follower_append_entries_7a),
         cmocka_unit_test(test_follower_append_entries_7b),
         cmocka_unit_test(test_follower_append_entries_7c),
+        cmocka_unit_test(test_follower_append_entries_7f),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
