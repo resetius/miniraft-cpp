@@ -35,7 +35,7 @@ private:
 struct TState {
     int CurrentTerm = 1;
     int VotedFor = 0;
-    std::vector<TLogEntry> Log;
+    std::vector<TMessageHolder<TLogEntry>> Log;
 
     int LogTerm(int index = -1) const {
         if (index < 0) {
@@ -44,7 +44,7 @@ struct TState {
         if (index < 1 || index > Log.size()) {
             return 0;
         } else {
-            return Log[index-1].Term;
+            return Log[index-1]->Term;
         }
     }
 };

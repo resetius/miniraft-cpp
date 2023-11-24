@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <iostream>
 
+#include <string.h>
+
 #include "raft.h"
 #include "messages.h"
 
@@ -153,7 +155,7 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
     mes->LastLogIndex = State->Log.size();
     mes->LastLogTerm = State->Log.empty()
         ? 0
-        : State->Log.back().Term;
+        : State->Log.back()->Term;
     return mes;
 }
 
@@ -208,9 +210,32 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
                 .UpdateLastTime = true,
                 .Messages = CreateAppendEntries()
             });
-        } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
-            return OnAppendEntries(maybeAppendEntries.Cast());
         }
+    } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
+        return OnAppendEntries(maybeAppendEntries.Cast());
+    } else if (auto maybeCommandRequest = message.Maybe<TCommandRequest>()) {
+        auto command = maybeCommandRequest.Cast();
+        auto log = State->Log;
+        auto dataSize = command->Len - sizeof(TCommandRequest);
+        auto entry = NewHoldedMessage<TLogEntry>(static_cast<uint32_t>(EMessageType::LOG_ENTRY), sizeof(TLogEntry)+dataSize);
+        memcpy(entry->Data, command->Data, dataSize);
+        log.push_back(entry);
+        auto nextState = std::make_unique<TState>(TState {
+            .CurrentTerm = State->CurrentTerm,
+            .VotedFor = State->VotedFor,
+            .Log = std::move(log),
+        });
+        auto nextVolatileState = *VolatileState;
+        nextVolatileState.CommitAdvance(Nservers, log.size(),  *State);
+        return std::make_unique<TResult>(TResult {
+            .NextState = std::move(nextState),
+            .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
+            .Message = NewHoldedMessage<TCommandResponse>(static_cast<uint32_t>(EMessageType::COMMAND_RESPONSE), sizeof(TCommandResponse)),
+        });
+    } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
+        return OnRequestVote(std::move(maybeVoteRequest.Cast()));
+    } else if (auto maybeVoteResponse = message.Maybe<TRequestVoteResponse>()) {
+        // skip additional votes
     }
     return nullptr;
 }
