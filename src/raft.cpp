@@ -67,6 +67,40 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
 { }
 
 std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest> message) {
+    if (message->Term < State->CurrentTerm) {
+        auto reply = NewHoldedMessage<TRequestVoteResponse>(static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE), sizeof(TRequestVoteResponse));
+        reply->Src = Id;
+        reply->Dst = message->Src;
+        reply->Term = State->CurrentTerm;
+        reply->VoteGranted = false;
+        return std::make_unique<TResult>(TResult {
+            .Message = reply
+        });
+    } else if (message->Term == State->CurrentTerm) {
+        bool accept = false;
+        if (State->VotedFor == 0) {
+            accept = true;
+        } else if (State->VotedFor == message->CandidateId && message->LastLogTerm > State->LogTerm()) {
+            accept = true;
+        } else if (State->VotedFor == message->CandidateId && message->LastLogTerm == State->LogTerm() && message->LastLogIndex >= State->Log.size()) {
+            accept = true;
+        }
+
+        auto reply = NewHoldedMessage<TRequestVoteResponse>(static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE), sizeof(TRequestVoteResponse));
+        reply->Src = Id;
+        reply->Dst = message->Src;
+        reply->Term = message->Term;
+        reply->VoteGranted = accept;
+
+        return std::make_unique<TResult>(TResult {
+            .NextState = std::make_unique<TState>(TState{
+                .CurrentTerm = message->Term,
+                .VotedFor = message->CandidateId
+            }),
+            .Message = reply,
+        });
+    }
+
     return nullptr;
 }
 

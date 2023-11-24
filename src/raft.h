@@ -33,8 +33,8 @@ private:
 };
 
 struct TState {
-    int CurrentTerm = 1;
-    int VotedFor = 0;
+    uint64_t CurrentTerm = 1;
+    uint32_t VotedFor = 0;
     std::vector<TMessageHolder<TLogEntry>> Log;
 
     int LogTerm(int index = -1) const {
@@ -105,7 +105,7 @@ private:
     TMessageHolder<TRequestVoteRequest> CreateVote();
     std::vector<TMessageHolder<TAppendEntriesRequest>> CreateAppendEntries();
 
-    int Id;
+    uint32_t Id;
     TNodeDict Nodes;
     std::shared_ptr<ITimeSource> TimeSource;
     int MinVotes;
