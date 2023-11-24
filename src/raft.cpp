@@ -257,8 +257,33 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
 }
 
 std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() {
-    // TODO
-    return {};
+    std::vector<TMessageHolder<TAppendEntriesRequest>> res;
+    for (auto [nodeId, _] : Nodes) {
+        auto prevIndex = VolatileState->NextIndex[nodeId] - 1;
+        auto lastIndex = std::min(prevIndex+1, (uint64_t)State->Log.size());
+        if (VolatileState->MatchIndex[nodeId]+1 < VolatileState->NextIndex[nodeId]) {
+            lastIndex = prevIndex;
+        }
+
+        auto mes = NewHoldedMessage<TAppendEntriesRequest>(
+            static_cast<uint32_t>(EMessageType::APPEND_ENTRIES_REQUEST), sizeof(TAppendEntriesRequest));
+
+        mes->Src = Id;
+        mes->Dst = nodeId;
+        mes->Term = State->CurrentTerm;
+        mes->LeaderId = Id;
+        mes->PrevLogIndex = prevIndex;
+        mes->PrevLogTerm = State->LogTerm(prevIndex);
+        mes->LeaderCommit = std::min(VolatileState->CommitIndex, lastIndex);
+        mes->Nentries = lastIndex - prevIndex;
+        std::vector<TMessageHolder<TMessage>> payload;
+        payload.reserve(lastIndex - prevIndex);
+        for (auto i = prevIndex; i < lastIndex; i++) {
+            payload.push_back(State->Log[i]);
+        }
+        mes.Payload = std::move(payload);
+    }
+    return res;
 }
 
 std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
