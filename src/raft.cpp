@@ -148,7 +148,17 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesReq
         success = true;
         auto index = message->PrevLogIndex;
         auto log = State->Log;
-        // TODO: iterate entries
+        for (auto& data : message.Payload) {
+            auto entry = data.Cast<TLogEntry>();
+            index++;
+            // replace or append log entries
+            if (State->LogTerm(index) != entry->Term) {
+                while (log.size() > index-1) {
+                    log.pop_back();
+                }
+                log.push_back(entry);
+            }
+        }
 
         matchIndex = index;
         commitIndex = std::max(commitIndex, message->LeaderCommit);

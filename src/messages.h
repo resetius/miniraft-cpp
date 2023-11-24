@@ -54,7 +54,7 @@ struct TAppendEntriesRequest: public TMessageEx {
     uint64_t PrevLogTerm;
     uint64_t LeaderCommit;
     uint32_t LeaderId;
-    char Entries[0]; // TLogEntry
+    int32_t Nentries;
 };
 
 struct TAppendEntriesResponse: public TMessageEx {
@@ -83,6 +83,7 @@ requires std::derived_from<T, TMessage>
 struct TMessageHolder {
     T* Mes;
     std::shared_ptr<char[]> RawData;
+    std::vector<TMessageHolder<TMessage>> Payload;
 
     TMessageHolder()
         : Mes(nullptr)
