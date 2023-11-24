@@ -174,6 +174,11 @@ TMessageHolder<T> NewHoldedMessage(uint32_t type, uint32_t len)
     return TMessageHolder<T>(mes, std::shared_ptr<char[]>(reinterpret_cast<char*>(mes)));
 }
 
+template<typename T>
+TMessageHolder<T> NewHoldedMessage() {
+    return NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), sizeof(T));
+}
+
 inline TMessageHolder<TTimeout> NewTimeout() {
     return NewHoldedMessage<TTimeout>(static_cast<uint32_t>(EMessageType::TIMEOUT), sizeof(TTimeout));
 }

@@ -211,6 +211,29 @@ void test_follower_to_candidate_on_timeout(void**) {
     assert_true(raft->CurrentStateName() == EState::CANDIDATE);
 }
 
+void test_follower_append_entries_small_term(void**) {
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](const TMessageHolder<TMessage>& message) {
+        messages.push_back(message);
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3, ts);
+    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
+    mes->Src = 2;
+    mes->Dst = 1;
+    mes->Term = 0;
+    mes->LeaderId = 2;
+    mes->PrevLogIndex = 0;
+    mes->PrevLogTerm = 0;
+    mes->LeaderCommit = 0;
+    raft->Process(mes);
+
+    assert_true(messages.size() == 1);
+    auto reply = messages[0].Cast<TAppendEntriesResponse>();
+    assert_true(reply->Dst == 2);
+    assert_false(reply->Success);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -224,6 +247,7 @@ int main() {
         cmocka_unit_test(test_apply_state_func_change_result),
         cmocka_unit_test(test_apply_time_change_result),
         cmocka_unit_test(test_follower_to_candidate_on_timeout),
+        cmocka_unit_test(test_follower_append_entries_small_term),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

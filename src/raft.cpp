@@ -62,6 +62,8 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     , MinVotes((nodes.size()+1/2))
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
+    , State(std::make_unique<TState>())
+    , VolatileState(std::make_unique<TVolatileState>())
     , StateName(EState::FOLLOWER)
     , LastTime(TimeSource->Now())
 { }
