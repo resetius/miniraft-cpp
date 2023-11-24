@@ -3,8 +3,8 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
-#include <functional>
 
 #include "messages.h"
 #include "timesource.h"
@@ -52,16 +52,16 @@ struct TState {
 struct TVolatileState {
     int CommitIndex = 0;
     int LastApplied = 0;
-    std::vector<int> NextIndex;
-    std::vector<int> MatchIndex;
-    std::vector<bool> Votes;
+    std::unordered_map<int, int> NextIndex;
+    std::unordered_map<int, int> MatchIndex;
+    std::unordered_set<int> Votes;
 
-    TVolatileState& SetVotes(std::vector<bool>& votes);
+    TVolatileState& SetVotes(std::unordered_set<int>& votes);
     TVolatileState& SetLastApplied(int index);
     TVolatileState& CommitAdvance(int nservers, int lastIndex, const TState& state);
     TVolatileState& SetCommitIndex(int index);
-    TVolatileState& MergeNextIndex(const std::vector<int>& nextIndex);
-    TVolatileState& MergeMatchIndex(const std::vector<int>& matchIndex);
+    TVolatileState& MergeNextIndex(const std::unordered_map<int, int>& nextIndex);
+    TVolatileState& MergeMatchIndex(const std::unordered_map<int, int>& matchIndex);
 };
 
 enum class EState: int {
@@ -99,6 +99,7 @@ private:
     std::unique_ptr<TResult> Leader(ITimeSource::Time now, TMessageHolder<TMessage> message);
 
     std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteRequest> message);
+    std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
     std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message);
     TMessageHolder<TRequestVoteRequest> CreateVote();
 

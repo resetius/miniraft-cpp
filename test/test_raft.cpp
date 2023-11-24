@@ -1,7 +1,7 @@
 #include <chrono>
 #include <coroutine>
 #include <memory>
-#include <string_view>
+#include <functional>
 
 #include <poll.hpp>
 #include <messages.h>
