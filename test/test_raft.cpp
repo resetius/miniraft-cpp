@@ -278,6 +278,36 @@ void test_follower_append_entries_7a(void**) {
     assert_true(raft->GetState()->Log.size() == 10);
 }
 
+void test_follower_append_entries_7b(void**) {
+    // leader: 1,1,1,4,4,5,5,6,6,6
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](const TMessageHolder<TMessage>& message) {
+        messages.push_back(message);
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3, ts);
+    raft->SetState(TState{
+        .CurrentTerm = 1,
+        .VotedFor = 2,
+        .Log = MakeLog<TLogEntry>({1,1,1,4})
+    });
+    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
+    mes->Src = 2;
+    mes->Dst = 1;
+    mes->Term = 1;
+    mes->LeaderId = 2;
+    mes->PrevLogIndex = 4;
+    mes->PrevLogTerm = 4;
+    mes->LeaderCommit = 9;
+    mes->Nentries = 6;
+    mes.Payload = MakeLog({4,5,5,6,6,6});
+    raft->Process(mes);
+    auto last = messages.back().Cast<TAppendEntriesResponse>();
+    assert_true(last->Success);
+    assert_true(last->MatchIndex = 10);
+    assert_true(raft->GetState()->Log.size() == 10);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -293,6 +323,7 @@ int main() {
         cmocka_unit_test(test_follower_to_candidate_on_timeout),
         cmocka_unit_test(test_follower_append_entries_small_term),
         cmocka_unit_test(test_follower_append_entries_7a),
+        cmocka_unit_test(test_follower_append_entries_7b),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
