@@ -164,6 +164,42 @@ void test_become_same_func(void**) {
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
+void test_apply_empty_result(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 3, ts);
+    auto state = raft->GetState();
+    auto volatileState = raft->GetVolatileState();
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    raft->ApplyResult(ts->Now(), {});
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    assert_true(state == raft->GetState());
+    assert_true(volatileState == raft->GetVolatileState());
+}
+
+void test_apply_state_func_change_result(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 3, ts);
+    auto state = raft->GetState();
+    auto volatileState = raft->GetVolatileState();
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    raft->ApplyResult(ts->Now(), std::make_unique<TResult>(TResult {
+        .NextStateName = EState::CANDIDATE
+    }));
+    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+    assert_true(state == raft->GetState());
+    assert_true(volatileState == raft->GetVolatileState());
+}
+
+void test_apply_time_change_result(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 3, ts);
+    auto n = ts->Now();
+    raft->ApplyResult(n, std::make_unique<TResult>(TResult {
+        .UpdateLastTime = true
+    }));
+    assert_true(raft->GetLastTime() == n);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -173,6 +209,9 @@ int main() {
         cmocka_unit_test(test_initial),
         cmocka_unit_test(test_become),
         cmocka_unit_test(test_become_same_func),
+        cmocka_unit_test(test_apply_empty_result),
+        cmocka_unit_test(test_apply_state_func_change_result),
+        cmocka_unit_test(test_apply_time_change_result),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

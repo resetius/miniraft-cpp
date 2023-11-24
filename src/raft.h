@@ -87,11 +87,24 @@ public:
     void Process(TMessageHolder<TMessage> message, INode* replyTo = nullptr);
     void ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, INode* replyTo = nullptr);
 
+// ut
     EState CurrentStateName() const {
         return StateName;
     }
 
     void Become(EState newStateName);
+
+    const TState* GetState() const {
+        return State.get();
+    }
+
+    const TVolatileState* GetVolatileState() const {
+        return VolatileState.get();
+    }
+
+    const auto GetLastTime() const {
+        return LastTime;
+    }
 
 private:
     std::unique_ptr<TResult> Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
