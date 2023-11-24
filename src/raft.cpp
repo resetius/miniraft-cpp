@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <iostream>
@@ -8,6 +9,40 @@
 TVolatileState& TVolatileState::SetVotes(std::unordered_set<int>& votes)
 {
     Votes = votes;
+    return *this;
+}
+
+TVolatileState& TVolatileState::CommitAdvance(int nservers, int lastIndex, const TState& state)
+{
+    std::vector<uint64_t> indices; indices.reserve(MatchIndex.size()+1+nservers);
+    for (auto [_, index] : MatchIndex) {
+        indices.push_back(index);
+    }
+    indices.push_back(lastIndex);
+    while (indices.size() < nservers) {
+        indices.push_back(0);
+    }
+    std::sort(indices.begin(), indices.end());
+    auto commitIndex = std::max(CommitIndex, indices[nservers / 2]);
+    if (state.LogTerm(commitIndex) == state.CurrentTerm) {
+        CommitIndex = commitIndex;
+    }
+    return *this;
+}
+
+TVolatileState& TVolatileState::MergeNextIndex(const std::unordered_map<int, uint64_t>& nextIndex)
+{
+    for (const auto& [k, v] : nextIndex) {
+        NextIndex[k] = v;
+    }
+    return *this;
+}
+
+TVolatileState& TVolatileState::MergeMatchIndex(const std::unordered_map<int, uint64_t>& matchIndex)
+{
+    for (const auto& [k, v] : matchIndex) {
+        MatchIndex[k] = v;
+    }
     return *this;
 }
 
@@ -82,6 +117,31 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesReq
     return nullptr;
 }
 
+std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
+    if (message->Term != State->CurrentTerm) {
+        return nullptr;
+    }
+
+    auto nodeId = message->Src;
+    if (message->Success) {
+        auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], message->MatchIndex);
+        auto nextVolatileState = *VolatileState;
+        nextVolatileState
+            .MergeMatchIndex({{nodeId, matchIndex}})
+            .MergeNextIndex({{nodeId, message->MatchIndex+1}})
+            .CommitAdvance(Nservers, State->Log.size(), *State);
+        return std::make_unique<TResult>(TResult {
+            .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState)
+        });
+    } else {
+        auto nextVolatileState = *VolatileState;
+        nextVolatileState.MergeNextIndex({{nodeId, std::max((uint64_t)1, VolatileState->NextIndex[nodeId]-1)}});
+        return std::make_unique<TResult>(TResult {
+            .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState)
+        });
+    }
+}
+
 TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
     auto mes = NewHoldedMessage<TRequestVoteRequest>(
         static_cast<uint32_t>(EMessageType::REQUEST_VOTE_REQUEST),
@@ -95,6 +155,11 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
         ? 0
         : State->Log.back().Term;
     return mes;
+}
+
+std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() {
+    // TODO
+    return {};
 }
 
 std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
@@ -137,6 +202,16 @@ std::unique_ptr<TResult> TRaft::Candidate(ITimeSource::Time now, TMessageHolder<
 }
 
 std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
+    if (auto maybeTimeout = message.Maybe<TTimeout>()) {
+        if (now - LastTime > TTimeout::Heartbeat) {
+            return std::make_unique<TResult>(TResult {
+                .UpdateLastTime = true,
+                .Messages = CreateAppendEntries()
+            });
+        } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
+            return OnAppendEntries(maybeAppendEntries.Cast());
+        }
+    }
     return nullptr;
 }
 

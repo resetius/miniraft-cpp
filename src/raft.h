@@ -37,7 +37,7 @@ struct TState {
     int VotedFor = 0;
     std::vector<TLogEntry> Log;
 
-    int LogTerm(int index = -1) {
+    int LogTerm(int index = -1) const {
         if (index < 0) {
             index = Log.size();
         }
@@ -50,18 +50,18 @@ struct TState {
 };
 
 struct TVolatileState {
-    int CommitIndex = 0;
-    int LastApplied = 0;
-    std::unordered_map<int, int> NextIndex;
-    std::unordered_map<int, int> MatchIndex;
+    uint64_t CommitIndex = 0;
+    uint64_t LastApplied = 0;
+    std::unordered_map<int, uint64_t> NextIndex;
+    std::unordered_map<int, uint64_t> MatchIndex;
     std::unordered_set<int> Votes;
 
     TVolatileState& SetVotes(std::unordered_set<int>& votes);
     TVolatileState& SetLastApplied(int index);
     TVolatileState& CommitAdvance(int nservers, int lastIndex, const TState& state);
     TVolatileState& SetCommitIndex(int index);
-    TVolatileState& MergeNextIndex(const std::unordered_map<int, int>& nextIndex);
-    TVolatileState& MergeMatchIndex(const std::unordered_map<int, int>& matchIndex);
+    TVolatileState& MergeNextIndex(const std::unordered_map<int, uint64_t>& nextIndex);
+    TVolatileState& MergeMatchIndex(const std::unordered_map<int, uint64_t>& matchIndex);
 };
 
 enum class EState: int {
@@ -101,7 +101,9 @@ private:
     std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteRequest> message);
     std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
     std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message);
+    std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
     TMessageHolder<TRequestVoteRequest> CreateVote();
+    std::vector<TMessageHolder<TAppendEntriesRequest>> CreateAppendEntries();
 
     int Id;
     TNodeDict Nodes;
