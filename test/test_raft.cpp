@@ -200,6 +200,17 @@ void test_apply_time_change_result(void**) {
     assert_true(raft->GetLastTime() == n);
 }
 
+void test_follower_to_candidate_on_timeout(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 3, ts);
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    raft->Process(NewTimeout());
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ts->Advance(std::chrono::milliseconds(10000));
+    raft->Process(NewTimeout());
+    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -212,6 +223,7 @@ int main() {
         cmocka_unit_test(test_apply_empty_result),
         cmocka_unit_test(test_apply_state_func_change_result),
         cmocka_unit_test(test_apply_time_change_result),
+        cmocka_unit_test(test_follower_to_candidate_on_timeout),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
