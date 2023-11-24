@@ -229,7 +229,9 @@ void test_follower_append_entries_small_term(void**) {
     raft->Process(mes);
 
     assert_true(messages.size() == 1);
-    auto reply = messages[0].Cast<TAppendEntriesResponse>();
+    auto maybeReply = messages[0].Maybe<TAppendEntriesResponse>();
+    assert_true(maybeReply);
+    auto reply = maybeReply.Cast();
     assert_true(reply->Dst == 2);
     assert_false(reply->Success);
 }
