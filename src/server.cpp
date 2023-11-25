@@ -1,6 +1,7 @@
 #include <coroutine>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include "server.h"
 #include "messages.h"
 
@@ -10,6 +11,9 @@ TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
     uint32_t len = message->Len;
     while (len != 0) {
         auto written = co_await Socket.WriteSome(p, len);
+        if (written == 0) {
+            throw std::runtime_error("Connection closed");
+        }
         p += written;
         len -= written;
     }
@@ -33,6 +37,9 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
     len -= sizeof(TMessage);
     while (len != 0) {
         s = co_await Socket.ReadSome(p, len);
+        if (s == 0) {
+            throw std::runtime_error("Connection closed");
+        }
         p += s;
         len -= s;
     }
@@ -49,7 +56,10 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
 
 NNet::TSimpleTask TRaftServer::InboundCounnection(NNet::TSocket socket) {
     try {
-
+        while (true) {
+            auto mes = co_await TReader(socket).Read();
+            Raft->Process(std::move(mes));
+        }
     } catch (const std::exception & ex) {
         std::cerr << "Exception: " << ex.what() << "\n";
     }
