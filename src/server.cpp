@@ -55,6 +55,31 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
     co_return mes;
 }
 
+void TNode::Send(const TMessageHolder<TMessage>& message) {
+    Messages.emplace_back(message);
+}
+
+void TNode::Drain() {
+    if (!Drainer || Drainer.done()) {
+        if (Drainer && Drainer.done()) {
+            Drainer.destroy();
+        }
+        Drainer = DoDrain();
+    }
+}
+
+NNet::TTestTask TNode::DoDrain() {
+    if (!Connected) {
+        co_return;
+    }
+    auto tosend = std::move(Messages);
+    for (auto&& m : tosend) {
+        co_await TWriter(Socket).Write(std::move(m));
+    }
+    Messages.clear();
+    co_return;
+}
+
 NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     try {
         while (true) {

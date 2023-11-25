@@ -5,6 +5,7 @@
 
 #include <all.hpp>
 
+#include "poll.hpp"
 #include "timesource.h"
 #include "messages.h"
 #include "raft.h"
@@ -118,9 +119,15 @@ public:
     void Drain() override;
 
 private:
+    NNet::TTestTask DoDrain();
+
     NNet::TPoll& Poller;
     uint32_t Id;
     NNet::TAddress Address;
+    NNet::TPoll::TSocket Socket;
+    bool Connected = false;
+
+    std::coroutine_handle<> Drainer;
 
     std::vector<TMessageHolder<TMessage>> Messages;
 };
