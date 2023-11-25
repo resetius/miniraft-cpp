@@ -3,7 +3,7 @@
 #include <chrono>
 
 struct ITimeSource {
-    using Time = std::chrono::time_point<std::chrono::system_clock>;
+    using Time = std::chrono::time_point<std::chrono::steady_clock>;
     virtual ~ITimeSource() = default;
     virtual Time Now() = 0;
 };
@@ -11,6 +11,6 @@ struct ITimeSource {
 class TTimeSource: public ITimeSource {
 public:
     Time Now() override {
-        return std::chrono::system_clock::now();
+        return std::chrono::steady_clock::now();
     }
 };

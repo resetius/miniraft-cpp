@@ -109,10 +109,11 @@ private:
 
 class TNode: public INode {
 public:
-    TNode(NNet::TPoll& poller, uint32_t id, NNet::TAddress address)
+    TNode(NNet::TPoll& poller, uint32_t id, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
         : Poller(poller)
         , Id(id)
         , Address(address)
+        , TimeSource(ts)
     { }
 
     void Send(const TMessageHolder<TMessage>& message) override;
@@ -120,10 +121,12 @@ public:
 
 private:
     NNet::TTestTask DoDrain();
+    NNet::TTestTask DoConnect();
 
     NNet::TPoll& Poller;
     uint32_t Id;
     NNet::TAddress Address;
+    std::shared_ptr<ITimeSource> TimeSource;
     NNet::TPoll::TSocket Socket;
     bool Connected = false;
 

@@ -45,7 +45,7 @@ private:
 class TFakeTimeSource: public ITimeSource {
 public:
     TFakeTimeSource()
-        : T(std::chrono::system_clock::now())
+        : T(std::chrono::steady_clock::now())
     { }
 
     ITimeSource::Time Now() override {

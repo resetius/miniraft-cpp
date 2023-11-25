@@ -80,6 +80,19 @@ NNet::TTestTask TNode::DoDrain() {
     co_return;
 }
 
+NNet::TTestTask TNode::DoConnect() {
+    while (!Connected) {
+        try {
+            auto deadline = TimeSource->Now() + std::chrono::milliseconds(15000);
+            co_await Socket.Connect(deadline);
+            Connected = true;
+        } catch (const std::exception& ex) {
+            std::cout << "Error on connect: " << ex.what() << "\n";
+        }
+    }
+    co_return;
+}
+
 NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     try {
         while (true) {
