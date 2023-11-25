@@ -54,7 +54,10 @@ static_assert(sizeof(TRequestVoteRequest) == sizeof(TMessageEx)+24);
 struct TRequestVoteResponse: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_RESPONSE;
     uint32_t VoteGranted;
+    uint32_t Padding = 0;
 };
+
+static_assert(sizeof(TRequestVoteResponse) == sizeof(TMessageEx)+8);
 
 struct TAppendEntriesRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_REQUEST;

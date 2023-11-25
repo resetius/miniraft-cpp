@@ -114,9 +114,10 @@ public:
         return Id;
     }
 
+    std::unique_ptr<TResult> Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
+
 private:
     std::unique_ptr<TResult> Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
-    std::unique_ptr<TResult> Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
     std::unique_ptr<TResult> Leader(ITimeSource::Time now, TMessageHolder<TMessage> message);
 
     std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteRequest> message);

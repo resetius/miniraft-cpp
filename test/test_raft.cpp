@@ -442,6 +442,50 @@ void test_candidate_initiate_election(void**) {
     assert_message_equal(messages[1], r);
 }
 
+void test_candidate_vote_request_small_term(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 3, ts);
+    auto req = NewHoldedMessage<TRequestVoteRequest>();
+    req->Src = 2;
+    req->Dst = 1;
+    req->Term = 0;
+    req->CandidateId = 2;
+    req->LastLogTerm = 1;
+    req->LastLogIndex = 1;
+    auto result = raft->Candidate(ts->Now(), std::move(req));
+    TRequestVoteResponse r;
+    r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE);
+    r.Len = sizeof(r);
+    r.Src = 1;
+    r.Dst = 2;
+    r.Term = raft->GetState()->CurrentTerm;
+    r.VoteGranted = false;
+    assert_message_equal(result->Message, r);
+    assert_int_equal(raft->GetState()->CurrentTerm, 1);
+}
+
+void test_candidate_vote_request_ok_term(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 3, ts);
+    auto req = NewHoldedMessage<TRequestVoteRequest>();
+    req->Src = 2;
+    req->Dst = 1;
+    req->Term = 1;
+    req->CandidateId = 2;
+    req->LastLogTerm = 1;
+    req->LastLogIndex = 1;
+    auto result = raft->Candidate(ts->Now(), std::move(req));
+    TRequestVoteResponse r;
+    r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE);
+    r.Len = sizeof(r);
+    r.Src = 1;
+    r.Dst = 2;
+    r.Term = raft->GetState()->CurrentTerm;
+    r.VoteGranted = true;
+    assert_message_equal(result->Message, r);
+    assert_int_equal(raft->GetState()->CurrentTerm, 1);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -462,6 +506,8 @@ int main() {
         cmocka_unit_test(test_follower_append_entries_7f),
         cmocka_unit_test(test_follower_append_entries_empty_to_empty_log),
         cmocka_unit_test(test_candidate_initiate_election),
+        cmocka_unit_test(test_candidate_vote_request_small_term),
+        cmocka_unit_test(test_candidate_vote_request_ok_term),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
