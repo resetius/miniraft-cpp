@@ -2,6 +2,7 @@
 #include <exception>
 #include <iostream>
 #include "server.h"
+#include "messages.h"
 
 TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
     auto payload = std::move(message.Payload);
@@ -18,6 +19,31 @@ TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
     }
 
     co_return;
+}
+
+TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
+    decltype(TMessage::Type) type;
+    decltype(TMessage::Len) len;
+    auto s = co_await Socket.ReadSome((char*)&type, sizeof(type));
+    assert(s == sizeof(type));
+    s = co_await Socket.ReadSome((char*)&len, sizeof(len));
+    assert(s == sizeof(len));
+    auto mes = NewHoldedMessage<TMessage>(type, len);
+    char* p = mes->Value;
+    while (len != 0) {
+        s = co_await Socket.ReadSome(p, len);
+        p += s;
+        len -= s;
+    }
+    auto maybeAppendEntries = mes.Maybe<TAppendEntriesRequest>();
+    if (maybeAppendEntries) {
+        auto appendEntries = maybeAppendEntries.Cast();
+        mes.Payload.resize(appendEntries->Nentries);
+        for (auto& m : mes.Payload) {
+            m = co_await TReader(Socket).Read();
+        }
+    }
+    co_return mes;
 }
 
 NNet::TSimpleTask TRaftServer::InboundCounnection(NNet::TSocket socket) {
