@@ -36,6 +36,8 @@ public:
         }
     }
 
+    void Drain() override { }
+
 private:
     OnSendFunc SendFunc;
 };

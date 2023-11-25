@@ -12,25 +12,10 @@
 struct INode {
     virtual ~INode() = default;
     virtual void Send(const TMessageHolder<TMessage>& message) = 0;
+    virtual void Drain() = 0;
 };
 
 using TNodeDict = std::unordered_map<int, std::shared_ptr<INode>>;
-
-class TNode: public INode {
-public:
-    TNode(int id, const std::string& host, int port)
-        : Id_(id)
-        , Host_(host)
-        , Port_(port)
-    { }
-
-    void Send(const TMessageHolder<TMessage>& message) override;
-
-private:
-    int Id_;
-    std::string Host_;
-    int Port_;
-};
 
 struct TState {
     uint64_t CurrentTerm = 1;

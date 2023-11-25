@@ -55,11 +55,12 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
     co_return mes;
 }
 
-NNet::TSimpleTask TRaftServer::InboundCounnection(NNet::TSocket socket) {
+NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     try {
         while (true) {
             auto mes = co_await TReader(socket).Read();
             Raft->Process(std::move(mes));
+            DrainNodes();
         }
     } catch (const std::exception & ex) {
         std::cerr << "Exception: " << ex.what() << "\n";
@@ -72,12 +73,18 @@ void TRaftServer::Serve() {
     InboundServe();
 }
 
+void TRaftServer::DrainNodes() {
+    for (auto [_, node] : Nodes) {
+        node->Drain();
+    }
+}
+
 NNet::TSimpleTask TRaftServer::InboundServe() {
     Socket.Bind();
     Socket.Listen();
     while (true) {
         auto client = co_await Socket.Accept();
-        InboundCounnection(std::move(client));
+        InboundConnection(std::move(client));
     }
     co_return;
 }
@@ -88,6 +95,7 @@ NNet::TSimpleTask TRaftServer::Idle() {
     auto sleep = std::chrono::milliseconds(10);
     while (true) {
         Raft->Process(NewTimeout());
+        DrainNodes();
         auto t1 = TimeSource->Now();
         if (t1 > t0 + dt) {
             t0 = t1;

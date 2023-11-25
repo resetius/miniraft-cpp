@@ -106,6 +106,25 @@ private:
     NNet::TPoll::TSocket& Socket;
 };
 
+class TNode: public INode {
+public:
+    TNode(NNet::TPoll& poller, uint32_t id, NNet::TAddress address)
+        : Poller(poller)
+        , Id(id)
+        , Address(address)
+    { }
+
+    void Send(const TMessageHolder<TMessage>& message) override;
+    void Drain() override;
+
+private:
+    NNet::TPoll& Poller;
+    uint32_t Id;
+    NNet::TAddress Address;
+
+    std::vector<TMessageHolder<TMessage>> Messages;
+};
+
 class TRaftServer {
 public:
     TRaftServer(
@@ -126,8 +145,9 @@ public:
 private:
     NNet::TSimpleTask InboundServe();
     NNet::TSimpleTask Idle();
+    void DrainNodes();
 
-    NNet::TSimpleTask InboundCounnection(NNet::TSocket socket);
+    NNet::TSimpleTask InboundConnection(NNet::TSocket socket);
     NNet::TTestTask Connector(std::shared_ptr<INode> node);
 
     NNet::TPoll& Poller;
