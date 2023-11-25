@@ -30,6 +30,7 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
     assert(s == sizeof(len));
     auto mes = NewHoldedMessage<TMessage>(type, len);
     char* p = mes->Value;
+    len -= sizeof(TMessage);
     while (len != 0) {
         s = co_await Socket.ReadSome(p, len);
         p += s;

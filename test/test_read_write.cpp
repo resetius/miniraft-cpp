@@ -47,11 +47,7 @@ void test_read_write(void**) {
     TTestTask h2 = [](TSocket& server, TMessageHolder<TMessage>& received) -> TTestTask
     {
         auto client = std::move(co_await server.Accept());
-        //uint32_t type, len;
-        //auto r = co_await client.ReadSome((char*)&type, sizeof(type));
-        //r = co_await client.ReadSome((char*)&len, sizeof(len));
-        //received = NewHoldedMessage<TMessage>(type, len);
-        //r = co_await client.ReadSome(received->Value, len - sizeof(TMessage));
+        received = co_await TReader(client).Read();
         co_return;
     }(socket, received);
 
@@ -59,10 +55,10 @@ void test_read_write(void**) {
         loop.Step();
     }
 
-    //auto maybeCasted = received.Maybe<TLogEntry>();
-    //assert_true(maybeCasted);
-    //auto casted = maybeCasted.Cast();
-    //assert_string_equal(mes->Data, casted->Data);
+    auto maybeCasted = received.Maybe<TLogEntry>();
+    assert_true(maybeCasted);
+    auto casted = maybeCasted.Cast();
+    assert_string_equal(mes->Data, casted->Data);
 
     h1.destroy(); h2.destroy();
 }
