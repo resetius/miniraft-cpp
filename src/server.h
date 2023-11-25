@@ -4,6 +4,8 @@
 #include <coroutine>
 
 #include <all.hpp>
+
+#include "timesource.h"
 #include "messages.h"
 #include "raft.h"
 #include "socket.hpp"
@@ -106,16 +108,25 @@ private:
 
 class TRaftServer {
 public:
-    TRaftServer(NNet::TPoll& poller, NNet::TAddress address, const std::shared_ptr<TRaft>& raft, const TNodeDict& nodes)
+    TRaftServer(
+        NNet::TPoll& poller,
+        NNet::TAddress address,
+        const std::shared_ptr<TRaft>& raft,
+        const TNodeDict& nodes,
+        const std::shared_ptr<ITimeSource>& ts)
         : Poller(poller)
         , Socket(std::move(address), Poller)
         , Raft(raft)
         , Nodes(nodes)
+        , TimeSource(ts)
     { }
 
-    NNet::TSimpleTask Serve();
+    void Serve();
 
 private:
+    NNet::TSimpleTask InboundServe();
+    NNet::TSimpleTask Idle();
+
     NNet::TSimpleTask InboundCounnection(NNet::TSocket socket);
     NNet::TTestTask Connector(std::shared_ptr<INode> node);
 
@@ -123,4 +134,5 @@ private:
     NNet::TPoll::TSocket Socket;
     std::shared_ptr<TRaft> Raft;
     TNodeDict Nodes;
+    std::shared_ptr<ITimeSource> TimeSource;
 };

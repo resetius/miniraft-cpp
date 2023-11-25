@@ -1,3 +1,4 @@
+#include <chrono>
 #include <coroutine>
 #include <exception>
 #include <iostream>
@@ -66,12 +67,32 @@ NNet::TSimpleTask TRaftServer::InboundCounnection(NNet::TSocket socket) {
     co_return;
 }
 
-NNet::TSimpleTask TRaftServer::Serve() {
+void TRaftServer::Serve() {
+    Idle();
+    InboundServe();
+}
+
+NNet::TSimpleTask TRaftServer::InboundServe() {
     Socket.Bind();
     Socket.Listen();
     while (true) {
         auto client = co_await Socket.Accept();
         InboundCounnection(std::move(client));
+    }
+    co_return;
+}
+
+NNet::TSimpleTask TRaftServer::Idle() {
+    auto t0 = TimeSource->Now();
+    auto dt = std::chrono::milliseconds(2000);
+    auto sleep = std::chrono::milliseconds(10);
+    while (true) {
+        Raft->Process(NewTimeout());
+        auto t1 = TimeSource->Now();
+        if (t1 > t0 + dt) {
+            t0 = t1;
+        }
+        Poller.Sleep(sleep);
     }
     co_return;
 }
