@@ -486,6 +486,58 @@ void test_candidate_vote_request_ok_term(void**) {
     assert_int_equal(raft->GetState()->CurrentTerm, 1);
 }
 
+void test_candidate_vote_request_big(void**) {
+    auto raft = MakeRaft();
+    raft->Become(EState::CANDIDATE);
+    auto req = NewHoldedMessage<TRequestVoteRequest>();
+    req->Src = 2;
+    req->Dst = 1;
+    req->Term = 3;
+    req->CandidateId = 2;
+    req->LastLogTerm = 1;
+    req->LastLogIndex = 1;
+    raft->Process(req);
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+}
+
+void test_candidate_vote_after_start(void**) {
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](const TMessageHolder<TMessage>& message) {
+        messages.push_back(message);
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3, ts);
+    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ts->Advance(std::chrono::milliseconds(10000));
+    raft->Become(EState::CANDIDATE);
+    assert_int_equal(raft->GetState()->VotedFor, 1);
+    assert_int_equal(raft->GetState()->CurrentTerm, 2);
+    auto req = NewHoldedMessage<TRequestVoteRequest>();
+    req->Src = 2;
+    req->Dst = 1;
+    req->Term = 2;
+    req->CandidateId = 2;
+    req->LastLogTerm = 1;
+    req->LastLogIndex = 1;
+    raft->Process(req);
+    auto last = messages.back().Cast<TRequestVoteResponse>();
+    assert_int_equal(last->VoteGranted, false);
+
+    // request with higher term => follower
+    req = NewHoldedMessage<TRequestVoteRequest>();
+    req->Src = 2;
+    req->Dst = 1;
+    req->Term = 3;
+    req->CandidateId = 3;
+    req->LastLogTerm = 1;
+    req->LastLogIndex = 1;
+    raft->Process(req);
+    last = messages.back().Cast<TRequestVoteResponse>();
+    assert_int_equal(raft->GetState()->VotedFor, 3);
+    assert_int_equal(last->VoteGranted, true);
+
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -508,6 +560,8 @@ int main() {
         cmocka_unit_test(test_candidate_initiate_election),
         cmocka_unit_test(test_candidate_vote_request_small_term),
         cmocka_unit_test(test_candidate_vote_request_ok_term),
+        cmocka_unit_test(test_candidate_vote_request_big),
+        cmocka_unit_test(test_candidate_vote_after_start),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
