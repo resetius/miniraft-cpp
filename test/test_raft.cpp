@@ -559,6 +559,42 @@ void test_election_5_nodes(void**) {
     assert_int_equal(raft->CurrentStateName(), EState::LEADER);
 }
 
+void test_commit_advance(void**) {
+    auto state = TState {
+        .CurrentTerm = 1,
+        .Log = MakeLog<TLogEntry>({1,1,1,1})
+    };
+
+    auto s = TVolatileState {
+        .MatchIndex = {{1, 1}}
+    };
+
+    auto s1 = TVolatileState(s).CommitAdvance(3, 1, state);
+    assert_int_equal(s1.CommitIndex, 1);
+    s1 = TVolatileState(s).CommitAdvance(5, 1, state);
+    assert_int_equal(s1.CommitIndex, 0);
+
+    s = TVolatileState {
+        .MatchIndex = {{1, 1}, {2, 2}}
+    };
+    s1 = TVolatileState(s).CommitAdvance(3, 2, state);
+    assert_int_equal(s1.CommitIndex, 2);
+    s1 = TVolatileState(s).CommitAdvance(5, 2, state);
+    assert_int_equal(s1.CommitIndex, 1);
+}
+
+void test_commit_advance_wrong_term(void**) {
+    auto state = TState {
+        .CurrentTerm = 2,
+        .Log = MakeLog<TLogEntry>({1,1,1,1})
+    };
+    auto s = TVolatileState {
+        .MatchIndex = {{1, 1}, {2, 2}}
+    };
+    auto s1 = TVolatileState(s).CommitAdvance(3, 2, state);
+    assert_int_equal(s1.CommitIndex, 0);
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -584,6 +620,8 @@ int main() {
         cmocka_unit_test(test_candidate_vote_request_big),
         cmocka_unit_test(test_candidate_vote_after_start),
         cmocka_unit_test(test_election_5_nodes),
+        cmocka_unit_test(test_commit_advance),
+        cmocka_unit_test(test_commit_advance_wrong_term),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
