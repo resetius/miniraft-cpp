@@ -14,12 +14,22 @@ add_subdirectory(coroio)
 add_library(miniraft
     src/messages.cpp
     src/raft.cpp
+    src/server.cpp
 )
 
 add_executable(test_raft test/test_raft.cpp)
+add_executable(test_read_write test/test_read_write.cpp)
 
-target_include_directories(test_raft PRIVATE ${CMOCKA_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/coroio/src)
+include_directories(${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/coroio/src)
+
+target_include_directories(test_raft PRIVATE ${CMOCKA_INCLUDE_DIRS})
 target_link_directories(test_raft PRIVATE ${CMOCKA_LIBRARY_DIRS})
 target_link_libraries(test_raft miniraft ${CMOCKA_LIBRARIES})
 
 add_test(NAME test_raft COMMAND ${CMAKE_BINARY_DIR}/test_raft)
+
+target_include_directories(test_read_write PRIVATE ${CMOCKA_INCLUDE_DIRS})
+target_link_directories(test_read_write PRIVATE ${CMOCKA_LIBRARY_DIRS})
+target_link_libraries(test_read_write miniraft ${CMOCKA_LIBRARIES})
+
+add_test(NAME test_read_write COMMAND ${CMAKE_BINARY_DIR}/test_read_write)
