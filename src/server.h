@@ -25,10 +25,7 @@ struct TPromise
         }
 
         T await_resume() {
-            T r (std::move(*this->promise().Value));
-            this->promise().Value.reset();
-            this->destroy();
-            return r;
+            return *this->promise().Value;
         }
     };
 
@@ -64,9 +61,7 @@ struct TPromise<void>
             this->promise().Caller = caller;
         }
 
-        void await_resume() {
-            this->destroy();
-        }
+        void await_resume() { }
     };
 
     TTask get_return_object() { return { TTask::from_promise(*this) }; }
