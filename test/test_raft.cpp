@@ -535,7 +535,28 @@ void test_candidate_vote_after_start(void**) {
     last = messages.back().Cast<TRequestVoteResponse>();
     assert_int_equal(raft->GetState()->VotedFor, 3);
     assert_int_equal(last->VoteGranted, true);
+}
 
+void test_election_5_nodes(void**) {
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft({}, 5, ts);
+    ts->Advance(std::chrono::milliseconds(10000));
+    raft->Become(EState::CANDIDATE);
+    auto req = NewHoldedMessage<TRequestVoteResponse>();
+    req->Src = 2;
+    req->Dst = 1;
+    req->Term = 2;
+    req->VoteGranted = true;
+    raft->Process(req);
+
+    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    req->Src = 3;
+    raft->Process(req);
+    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+
+    req->Src = 4;
+    raft->Process(req);
+    assert_int_equal(raft->CurrentStateName(), EState::LEADER);
 }
 
 int main() {
@@ -562,6 +583,7 @@ int main() {
         cmocka_unit_test(test_candidate_vote_request_ok_term),
         cmocka_unit_test(test_candidate_vote_request_big),
         cmocka_unit_test(test_candidate_vote_after_start),
+        cmocka_unit_test(test_election_5_nodes),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
