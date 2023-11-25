@@ -70,14 +70,31 @@ void TNode::Drain() {
 
 NNet::TTestTask TNode::DoDrain() {
     if (!Connected) {
+        Connect();
         co_return;
     }
     auto tosend = std::move(Messages);
-    for (auto&& m : tosend) {
-        co_await TWriter(Socket).Write(std::move(m));
+    try {
+        for (auto&& m : tosend) {
+            co_await TWriter(Socket).Write(std::move(m));
+        }
+    } catch (const std::exception& ex) {
+        std::cout << "Error on write: " << ex.what() << "\n";
+        Connect();
     }
     Messages.clear();
     co_return;
+}
+
+void TNode::Connect() {
+    if (!Connector || Connector.done()) {
+        if (Connector && Connector.done()) {
+            Connector.destroy();
+        }
+
+        Socket = NNet::TSocket(Address, Poller);
+        Connector = DoConnect();
+    }
 }
 
 NNet::TTestTask TNode::DoConnect() {

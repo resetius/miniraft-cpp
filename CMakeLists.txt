@@ -19,8 +19,11 @@ add_library(miniraft
 
 add_executable(test_raft test/test_raft.cpp)
 add_executable(test_read_write test/test_read_write.cpp)
+add_executable(server server/server.cpp)
 
 include_directories(${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/coroio/src)
+
+target_link_libraries(server miniraft)
 
 target_include_directories(test_raft PRIVATE ${CMOCKA_INCLUDE_DIRS})
 target_link_directories(test_raft PRIVATE ${CMOCKA_LIBRARY_DIRS})

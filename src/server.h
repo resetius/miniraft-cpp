@@ -120,6 +120,8 @@ public:
     void Drain() override;
 
 private:
+    void Connect();
+
     NNet::TTestTask DoDrain();
     NNet::TTestTask DoConnect();
 
@@ -131,6 +133,7 @@ private:
     bool Connected = false;
 
     std::coroutine_handle<> Drainer;
+    std::coroutine_handle<> Connector;
 
     std::vector<TMessageHolder<TMessage>> Messages;
 };
