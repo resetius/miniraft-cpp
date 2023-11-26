@@ -3,8 +3,23 @@
 #include <exception>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 #include "server.h"
 #include "messages.h"
+
+namespace {
+class TClientNode: public INode {
+public:
+    void Send(const TMessageHolder<TMessage>& mes) override {
+        Messages.push_back(mes);
+    }
+
+    void Drain() override { }
+
+    std::vector<TMessageHolder<TMessage>> Messages;
+};
+
+};
 
 TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
     auto payload = std::move(message.Payload);
@@ -128,10 +143,17 @@ NNet::TTestTask TNode::DoConnect() {
 
 NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     try {
+        TClientNode client;
         while (true) {
             auto mes = co_await TReader(socket).Read();
             std::cout << "Got message " << mes->Type << "\n";
-            Raft->Process(std::move(mes));
+            Raft->Process(std::move(mes), &client);
+            if (!client.Messages.empty()) {
+                auto tosend = std::move(client.Messages); client.Messages.clear();
+                for (auto&& mes : tosend) {
+                    co_await TWriter(socket).Write(std::move(mes));
+                }
+            }
             DrainNodes();
         }
     } catch (const std::exception & ex) {

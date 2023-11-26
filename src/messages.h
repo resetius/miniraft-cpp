@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 
+#include <assert.h>
 #include <stdint.h>
 #include <typeinfo>
 
@@ -191,6 +192,12 @@ TMessageHolder<T> NewHoldedMessage(uint32_t type, uint32_t len)
 template<typename T>
 TMessageHolder<T> NewHoldedMessage() {
     return NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), sizeof(T));
+}
+
+template<typename T>
+TMessageHolder<T> NewHoldedMessage(uint32_t size) {
+    assert(size >= sizeof(T));
+    return NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), size);
 }
 
 inline TMessageHolder<TTimeout> NewTimeout() {

@@ -3,6 +3,7 @@
 #include <exception>
 #include <memory>
 #include <coroutine>
+#include <string_view>
 
 #include <all.hpp>
 
@@ -124,6 +125,31 @@ public:
 
 private:
     NNet::TPoll::TSocket& Socket;
+};
+
+struct THost {
+    std::string Address;
+    int Port = 0;
+    uint32_t Id = 0;
+
+    THost() { }
+
+    THost(const std::string& str) {
+        std::string_view s(str);
+        auto p = s.find(':');
+        Address = s.substr(0, p);
+        s = s.substr(p + 1);
+        p = s.find(':');
+        std::from_chars(s.begin(), s.begin()+p, Port);
+        s = s.substr(p + 1);
+        std::from_chars(s.begin(), s.begin()+p, Id);
+    }
+
+    void DebugPrint() const {
+        std::cout << "Addr: '" << Address << "'\n";
+        std::cout << "Port: " << Port << "\n";
+        std::cout << "Id: " << Id << "\n";
+    }
 };
 
 class TNode: public INode {

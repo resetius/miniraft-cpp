@@ -1,33 +1,9 @@
 #include "socket.hpp"
-#include <charconv>
 #include <csignal>
 #include <poll.hpp>
 #include <timesource.h>
 #include <raft.h>
 #include <server.h>
-
-struct THost {
-    std::string Address;
-    int Port = 0;
-    uint32_t Id = 0;
-
-    THost() { }
-
-    THost(const std::string& str) {
-        std::string_view s(str);
-        auto p = s.find(':');
-        Address = s.substr(0, p);
-        s = s.substr(p + 1);
-        p = s.find(':');
-        std::from_chars(s.begin(), s.begin()+p, Port);
-        s = s.substr(p + 1);
-        std::from_chars(s.begin(), s.begin()+p, Id);
-
-        std::cout << "Addr: '" << Address << "'\n";
-        std::cout << "Port: " << Port << "\n";
-        std::cout << "Id: " << Id << "\n";
-    }
-};
 
 int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
