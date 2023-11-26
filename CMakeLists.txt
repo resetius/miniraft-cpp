@@ -32,9 +32,11 @@ target_link_directories(test_raft PRIVATE ${CMOCKA_LIBRARY_DIRS})
 target_link_libraries(test_raft miniraft ${CMOCKA_LIBRARIES})
 
 add_test(NAME test_raft COMMAND ${CMAKE_BINARY_DIR}/test_raft)
+set_tests_properties(test_raft PROPERTIES ENVIRONMENT "CMOCKA_MESSAGE_OUTPUT=xml;CMOCKA_XML_FILE=test_raft.xml")
 
 target_include_directories(test_read_write PRIVATE ${CMOCKA_INCLUDE_DIRS})
 target_link_directories(test_read_write PRIVATE ${CMOCKA_LIBRARY_DIRS})
 target_link_libraries(test_read_write miniraft ${CMOCKA_LIBRARIES})
 
 add_test(NAME test_read_write COMMAND ${CMAKE_BINARY_DIR}/test_read_write)
+set_tests_properties(test_read_write PROPERTIES ENVIRONMENT "CMOCKA_MESSAGE_OUTPUT=xml;CMOCKA_XML_FILE=test_read_write.xml")
