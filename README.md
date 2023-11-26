@@ -1,8 +1,4 @@
-Based on your specific requirements and details, here's an updated version of the `README.md` for your project:
-
----
-
-# Project Title: MiniRaft-CPP
+# MiniRaft-CPP
 
 ## Overview
 MiniRaft-CPP is an implementation of the Raft consensus algorithm using C++20. This project aims to provide a clear and efficient representation of the Raft protocol, ensuring consistency and reliability in distributed systems. The implementation includes leader election, log replication, and safety mechanisms as per the Raft specification.
