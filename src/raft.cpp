@@ -59,7 +59,7 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     : Id(node)
     , Nodes(nodes)
     , TimeSource(ts)
-    , MinVotes((nodes.size()+1/2))
+    , MinVotes((nodes.size()+2)/2)
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
     , State(std::make_unique<TState>())
@@ -428,14 +428,12 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
                     v->Send(messageEx);
                 }
             } else {
-                std::cout << "Send reply to " << messageEx->Dst << "\n";
                 Nodes[messageEx->Dst]->Send(std::move(messageEx));
             }
         }
     }
     if (!result->Messages.empty()) {
         for (auto&& m : result->Messages) {
-            std::cout << "Send append entries to " << m->Dst << "\n";
             Nodes[m->Dst]->Send(std::move(m));
         }
     }

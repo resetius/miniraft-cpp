@@ -552,7 +552,7 @@ void test_election_5_nodes(void**) {
     raft->Process(req);
 
     assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
-    req->Src = 3;
+    req->Src = 2;
     raft->Process(req);
     assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
 

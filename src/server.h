@@ -203,11 +203,9 @@ public:
 
 private:
     NNet::TSimpleTask InboundServe();
+    NNet::TSimpleTask InboundConnection(NNet::TSocket socket);
     NNet::TSimpleTask Idle();
     void DrainNodes();
-
-    NNet::TSimpleTask InboundConnection(NNet::TSocket socket);
-    NNet::TTestTask Connector(std::shared_ptr<INode> node);
 
     NNet::TPoll& Poller;
     NNet::TPoll::TSocket Socket;
