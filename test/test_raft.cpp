@@ -597,6 +597,8 @@ void test_commit_advance_wrong_term(void**) {
     assert_int_equal(s1.CommitIndex, 0);
 }
 
+// TODO: test leader hearbeat
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),

@@ -270,8 +270,7 @@ std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() 
             lastIndex = prevIndex;
         }
 
-        auto mes = NewHoldedMessage<TAppendEntriesRequest>(
-            static_cast<uint32_t>(EMessageType::APPEND_ENTRIES_REQUEST), sizeof(TAppendEntriesRequest));
+        auto mes = NewHoldedMessage<TAppendEntriesRequest>();
 
         mes->Src = Id;
         mes->Dst = nodeId;
@@ -287,6 +286,7 @@ std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() 
             payload.push_back(State->Log[i]);
         }
         mes.Payload = std::move(payload);
+        res.emplace_back(std::move(mes));
     }
     return res;
 }
@@ -428,13 +428,15 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
                     v->Send(messageEx);
                 }
             } else {
-                Nodes[messageEx->Dst]->Send(messageEx);
+                std::cout << "Send reply to " << messageEx->Dst << "\n";
+                Nodes[messageEx->Dst]->Send(std::move(messageEx));
             }
         }
     }
     if (!result->Messages.empty()) {
-        for (auto& m : result->Messages) {
-            Nodes[m->Dst]->Send(m);
+        for (auto&& m : result->Messages) {
+            std::cout << "Send append entries to " << m->Dst << "\n";
+            Nodes[m->Dst]->Send(std::move(m));
         }
     }
     if (result->NextStateName != EState::NONE) {

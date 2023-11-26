@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exception>
 #include <memory>
 #include <coroutine>
 
@@ -28,7 +29,11 @@ struct TPromise
         }
 
         T await_resume() {
-            return *this->promise().Value;
+            if (this->promise().Exception) {
+                std::rethrow_exception(this->promise().Exception);
+            } else {
+                return *this->promise().Value;
+            }
         }
     };
 
@@ -43,9 +48,15 @@ struct TPromise
         }
     }
 
-    void unhandled_exception() { }
+    void unhandled_exception() {
+        Exception = std::current_exception();
+        if (Caller) {
+            Caller.resume();
+        }
+    }
 
     std::shared_ptr<T> Value;
+    std::exception_ptr Exception;
     std::coroutine_handle<> Caller;
 };
 
@@ -64,7 +75,11 @@ struct TPromise<void>
             this->promise().Caller = caller;
         }
 
-        void await_resume() { }
+        void await_resume() {
+            if (this->promise().Exception) {
+                std::rethrow_exception(this->promise().Exception);
+            }
+        }
     };
 
     TTask get_return_object() { return { TTask::from_promise(*this) }; }
@@ -77,9 +92,13 @@ struct TPromise<void>
             Caller.resume();
         }
     }
-    void unhandled_exception() { }
+    void unhandled_exception() {
+        Exception = std::current_exception();
+        return_void();
+    }
 
     bool Ready = false;
+    std::exception_ptr Exception;
     std::coroutine_handle<> Caller;
 };
 

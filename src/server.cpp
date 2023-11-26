@@ -15,6 +15,9 @@ TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
         if (written == 0) {
             throw std::runtime_error("Connection closed");
         }
+        if (written < 0) {
+            continue; // retry;
+        }
         p += written;
         len -= written;
     }
@@ -30,9 +33,13 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
     decltype(TMessage::Type) type;
     decltype(TMessage::Len) len;
     auto s = co_await Socket.ReadSome((char*)&type, sizeof(type));
-    assert(s == sizeof(type));
+    if (s != sizeof(type)) {
+        throw std::runtime_error("Connection closed");
+    }
     s = co_await Socket.ReadSome((char*)&len, sizeof(len));
-    assert(s == sizeof(len));
+    if (s != sizeof(len)) {
+        throw std::runtime_error("Connection closed");
+    }
     auto mes = NewHoldedMessage<TMessage>(type, len);
     char* p = mes->Value;
     len -= sizeof(TMessage);
@@ -40,6 +47,9 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
         s = co_await Socket.ReadSome(p, len);
         if (s == 0) {
             throw std::runtime_error("Connection closed");
+        }
+        if (s < 0) {
+            continue; // retry
         }
         p += s;
         len -= s;
@@ -93,18 +103,24 @@ void TNode::Connect() {
         }
 
         Socket = NNet::TSocket(Address, Poller);
+        Connected = false;
         Connector = DoConnect();
     }
 }
 
 NNet::TTestTask TNode::DoConnect() {
+    std::cout << "Connecting " << Id << "\n";
     while (!Connected) {
         try {
-            auto deadline = TimeSource->Now() + std::chrono::milliseconds(15000);
+            auto deadline = NNet::TClock::now() + std::chrono::milliseconds(100); // TODO: broken timeout in coroio
             co_await Socket.Connect(deadline);
+            std::cout << "Connected " << Id << "\n";
             Connected = true;
         } catch (const std::exception& ex) {
-            std::cout << "Error on connect: " << ex.what() << "\n";
+            std::cout << "Error on connect: " << Id << " " << ex.what() << "\n";
+        }
+        if (!Connected) {
+            co_await Poller.Sleep(std::chrono::milliseconds(1000));
         }
     }
     co_return;
@@ -114,6 +130,7 @@ NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     try {
         while (true) {
             auto mes = co_await TReader(socket).Read();
+            std::cout << "Got message " << mes->Type << "\n";
             Raft->Process(std::move(mes));
             DrainNodes();
         }
@@ -129,16 +146,19 @@ void TRaftServer::Serve() {
 }
 
 void TRaftServer::DrainNodes() {
-    for (auto [_, node] : Nodes) {
+    for (auto [id, node] : Nodes) {
         node->Drain();
     }
 }
 
 NNet::TSimpleTask TRaftServer::InboundServe() {
+    std::cout << "Bind\n";
     Socket.Bind();
+    std::cout << "Listen\n";
     Socket.Listen();
     while (true) {
         auto client = co_await Socket.Accept();
+        std::cout << "Accepted\n";
         InboundConnection(std::move(client));
     }
     co_return;
@@ -147,15 +167,16 @@ NNet::TSimpleTask TRaftServer::InboundServe() {
 NNet::TSimpleTask TRaftServer::Idle() {
     auto t0 = TimeSource->Now();
     auto dt = std::chrono::milliseconds(2000);
-    auto sleep = std::chrono::milliseconds(10);
+    auto sleep = std::chrono::milliseconds(100);
     while (true) {
         Raft->Process(NewTimeout());
         DrainNodes();
         auto t1 = TimeSource->Now();
         if (t1 > t0 + dt) {
+            std::cout << "Idle " << (uint32_t)Raft->CurrentStateName() << "\n";
             t0 = t1;
         }
-        Poller.Sleep(sleep);
+        co_await Poller.Sleep(sleep);
     }
     co_return;
 }
