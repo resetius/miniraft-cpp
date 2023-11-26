@@ -70,7 +70,7 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
 
 std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest> message) {
     if (message->Term < State->CurrentTerm) {
-        auto reply = NewHoldedMessage<TRequestVoteResponse>(static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE), sizeof(TRequestVoteResponse));
+        auto reply = NewHoldedMessage<TRequestVoteResponse>();
         reply->Src = Id;
         reply->Dst = message->Src;
         reply->Term = State->CurrentTerm;
@@ -88,7 +88,7 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest
             accept = true;
         }
 
-        auto reply = NewHoldedMessage<TRequestVoteResponse>(static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE), sizeof(TRequestVoteResponse));
+        auto reply = NewHoldedMessage<TRequestVoteResponse>();
         reply->Src = Id;
         reply->Dst = message->Src;
         reply->Term = message->Term;
@@ -202,7 +202,7 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesReq
         commitIndex = std::max(commitIndex, message->LeaderCommit);
     }
 
-    auto reply = NewHoldedMessage<TAppendEntriesResponse>(static_cast<uint32_t>(EMessageType::APPEND_ENTRIES_RESPONSE), sizeof(TAppendEntriesResponse));
+    auto reply = NewHoldedMessage<TAppendEntriesResponse>();
     reply->Src = Id;
     reply->Dst = message->Src;
     reply->Term = State->CurrentTerm;
@@ -247,9 +247,7 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRes
 }
 
 TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
-    auto mes = NewHoldedMessage<TRequestVoteRequest>(
-        static_cast<uint32_t>(EMessageType::REQUEST_VOTE_REQUEST),
-        sizeof(TRequestVoteRequest));
+    auto mes = NewHoldedMessage<TRequestVoteRequest>();
     mes->Src = Id;
     mes->Dst = 0;
     mes->Term = State->CurrentTerm+1;
@@ -344,7 +342,7 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         auto command = maybeCommandRequest.Cast();
         auto log = State->Log;
         auto dataSize = command->Len - sizeof(TCommandRequest);
-        auto entry = NewHoldedMessage<TLogEntry>(static_cast<uint32_t>(EMessageType::LOG_ENTRY), sizeof(TLogEntry)+dataSize);
+        auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
         memcpy(entry->Data, command->Data, dataSize);
         log.push_back(entry);
         auto nextState = std::make_unique<TState>(TState {
@@ -354,10 +352,12 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         });
         auto nextVolatileState = *VolatileState;
         nextVolatileState.CommitAdvance(Nservers, log.size(),  *State);
+        // TODO: Should wait for CommitIndex
+        // TODO: Move LastApplied
         return std::make_unique<TResult>(TResult {
             .NextState = std::move(nextState),
             .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
-            .Message = NewHoldedMessage<TCommandResponse>(static_cast<uint32_t>(EMessageType::COMMAND_RESPONSE), sizeof(TCommandResponse)),
+            .Message = NewHoldedMessage<TCommandResponse>(),
         });
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         return OnRequestVote(std::move(maybeVoteRequest.Cast()));
