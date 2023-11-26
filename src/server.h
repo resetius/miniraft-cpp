@@ -195,9 +195,12 @@ public:
         : Poller(poller)
         , Socket(std::move(address), Poller)
         , Raft(raft)
-        , Nodes(nodes)
         , TimeSource(ts)
-    { }
+    {
+        for (const auto& [_, node] : nodes) {
+            Nodes.insert(node);
+        }
+    }
 
     void Serve();
 
@@ -210,6 +213,6 @@ private:
     NNet::TPoll& Poller;
     NNet::TPoll::TSocket Socket;
     std::shared_ptr<TRaft> Raft;
-    TNodeDict Nodes;
+    std::unordered_set<std::shared_ptr<INode>> Nodes;
     std::shared_ptr<ITimeSource> TimeSource;
 };

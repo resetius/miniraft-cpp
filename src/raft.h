@@ -69,8 +69,8 @@ class TRaft {
 public:
     TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource>& ts);
 
-    void Process(TMessageHolder<TMessage> message, INode* replyTo = nullptr);
-    void ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, INode* replyTo = nullptr);
+    void Process(TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
+    void ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, const std::shared_ptr<INode>& replyTo = {});
 
 // ut
     EState CurrentStateName() const {

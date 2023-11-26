@@ -85,6 +85,10 @@ void TNode::Send(const TMessageHolder<TMessage>& message) {
 }
 
 void TNode::Drain() {
+    if (!Connected) {
+        Connect();
+        return;
+    }
     if (!Drainer || Drainer.done()) {
         if (Drainer && Drainer.done()) {
             Drainer.destroy();
@@ -94,10 +98,6 @@ void TNode::Drain() {
 }
 
 NNet::TTestTask TNode::DoDrain() {
-    if (!Connected) {
-        Connect();
-        co_return;
-    }
     auto tosend = std::move(Messages);
     try {
         for (auto&& m : tosend) {
@@ -105,7 +105,6 @@ NNet::TTestTask TNode::DoDrain() {
         }
     } catch (const std::exception& ex) {
         std::cout << "Error on write: " << ex.what() << "\n";
-        Connect();
     }
     Messages.clear();
     co_return;
@@ -143,13 +142,14 @@ NNet::TTestTask TNode::DoConnect() {
 
 NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     try {
-        TClientNode client;
+        auto client = std::make_shared<TClientNode>();
+        Nodes.insert(client);
         while (true) {
             auto mes = co_await TReader(socket).Read();
             std::cout << "Got message " << mes->Type << "\n";
-            Raft->Process(std::move(mes), &client);
-            if (!client.Messages.empty()) {
-                auto tosend = std::move(client.Messages); client.Messages.clear();
+            Raft->Process(std::move(mes), client);
+            if (!client->Messages.empty()) {
+                auto tosend = std::move(client->Messages); client->Messages.clear();
                 for (auto&& mes : tosend) {
                     co_await TWriter(socket).Write(std::move(mes));
                 }
@@ -168,7 +168,7 @@ void TRaftServer::Serve() {
 }
 
 void TRaftServer::DrainNodes() {
-    for (auto [id, node] : Nodes) {
+    for (const auto& node : Nodes) {
         node->Drain();
     }
 }

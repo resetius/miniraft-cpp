@@ -375,7 +375,7 @@ void TRaft::Become(EState newStateName) {
     }
 }
 
-void TRaft::Process(TMessageHolder<TMessage> message, INode* replyTo) {
+void TRaft::Process(TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
     auto now = TimeSource->Now();
 
     if (message.IsEx()) {
@@ -404,7 +404,7 @@ void TRaft::Process(TMessageHolder<TMessage> message, INode* replyTo) {
     ApplyResult(now, std::move(result), replyTo);
 }
 
-void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, INode* replyTo) {
+void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, const std::shared_ptr<INode>& replyTo) {
     if (!result) {
         return;
     }
