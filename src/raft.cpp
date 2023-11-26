@@ -344,6 +344,7 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         auto dataSize = command->Len - sizeof(TCommandRequest);
         auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
         memcpy(entry->Data, command->Data, dataSize);
+        entry->Term = State->CurrentTerm;
         log.push_back(entry);
         auto nextState = std::make_unique<TState>(TState {
             .CurrentTerm = State->CurrentTerm,
