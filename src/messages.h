@@ -66,14 +66,19 @@ struct TAppendEntriesRequest: public TMessageEx {
     uint64_t PrevLogTerm;
     uint64_t LeaderCommit;
     uint32_t LeaderId;
-    int32_t Nentries;
+    uint32_t Nentries;
 };
+
+static_assert(sizeof(TAppendEntriesRequest) == sizeof(TMessageEx) + 32);
 
 struct TAppendEntriesResponse: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_RESPONSE;
     uint64_t MatchIndex;
     uint32_t Success;
+    uint32_t Padding = 0;
 };
+
+static_assert(sizeof(TAppendEntriesResponse) == sizeof(TMessageEx) + 16);
 
 struct TCommandRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
