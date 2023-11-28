@@ -346,6 +346,7 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         memcpy(entry->Data, command->Data, dataSize);
         entry->Term = State->CurrentTerm;
         log.push_back(entry);
+        auto index = log.size();
         auto nextState = std::make_unique<TState>(TState {
             .CurrentTerm = State->CurrentTerm,
             .VotedFor = State->VotedFor,
@@ -353,12 +354,12 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         });
         auto nextVolatileState = *VolatileState;
         nextVolatileState.CommitAdvance(Nservers, log.size(),  *State);
-        // TODO: Should wait for CommitIndex
-        // TODO: Move LastApplied
+        auto mes = NewHoldedMessage<TCommandResponse>();
+        mes->Index = index;
         return std::make_unique<TResult>(TResult {
             .NextState = std::move(nextState),
             .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
-            .Message = NewHoldedMessage<TCommandResponse>(),
+            .Message = mes,
         });
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         return OnRequestVote(std::move(maybeVoteRequest.Cast()));
@@ -418,9 +419,10 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
         VolatileState = std::move(result->NextVolatileState);
     }
     if (result->Message) {
-        if (result->Message.Maybe<TCommandResponse>()) {
+        if (auto reply = result->Message.Maybe<TCommandResponse>()) {
             if (replyTo) {
-                replyTo->Send(result->Message);
+                auto res = reply.Cast();
+                waiting.emplace(TWaiting{res->Index, res, replyTo});
             }
         } else {
             auto messageEx = result->Message.Cast<TMessageEx>();
@@ -440,5 +442,15 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
     }
     if (result->NextStateName != EState::NONE) {
         StateName = result->NextStateName;
+    }
+
+    ProcessWaiting();
+}
+
+void TRaft::ProcessWaiting() {
+    auto commitIndex = VolatileState->CommitIndex;
+    while (!waiting.empty() && waiting.top().Index <= commitIndex) {
+        auto&& w = std::move(waiting.top()); waiting.pop();
+        w.ReplyTo->Send(std::move(w.Message));
     }
 }

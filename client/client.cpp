@@ -18,7 +18,8 @@ NNet::TSimpleTask Client(Poller& poller, NNet::TAddress addr) {
         std::cout << "Sending\n";
         co_await TWriter(socket).Write(std::move(mes));
         auto response = co_await TReader(socket).Read();
-        std::cout << "Ok\n";
+        auto commandResponse = response.template Cast<TCommandResponse>();
+        std::cout << "Ok, commitIndex: " << commandResponse->Index << "\n";
     }
     co_return;
 }

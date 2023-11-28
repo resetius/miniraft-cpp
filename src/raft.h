@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <queue>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -111,6 +112,7 @@ private:
     std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
     TMessageHolder<TRequestVoteRequest> CreateVote();
     std::vector<TMessageHolder<TAppendEntriesRequest>> CreateAppendEntries();
+    void ProcessWaiting();
 
     uint32_t Id;
     TNodeDict Nodes;
@@ -120,6 +122,16 @@ private:
     int Nservers;
     std::unique_ptr<TState> State;
     std::unique_ptr<TVolatileState> VolatileState;
+
+    struct TWaiting {
+        uint64_t Index;
+        TMessageHolder<TMessage> Message;
+        std::shared_ptr<INode> ReplyTo;
+        bool operator< (const TWaiting& other) const {
+            return Index < other.Index;
+        }
+    };
+    std::priority_queue<TWaiting> waiting;
 
     EState StateName;
     ITimeSource::Time LastTime;

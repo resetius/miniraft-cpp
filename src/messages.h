@@ -82,6 +82,7 @@ struct TCommandRequest: public TMessage {
 
 struct TCommandResponse: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_RESPONSE;
+    uint64_t Index;
 };
 
 struct TTimeout: public TMessage {
