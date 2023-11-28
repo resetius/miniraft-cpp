@@ -2,6 +2,7 @@
 #include <memory>
 #include <stdexcept>
 #include <iostream>
+#include <algorithm>
 
 #include <string.h>
 #include <assert.h>

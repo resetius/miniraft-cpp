@@ -1,6 +1,4 @@
-#include "socket.hpp"
 #include <csignal>
-#include <poll.hpp>
 #include <timesource.h>
 #include <raft.h>
 #include <server.h>

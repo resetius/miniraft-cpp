@@ -22,7 +22,7 @@ add_executable(test_read_write test/test_read_write.cpp)
 add_executable(server server/server.cpp)
 add_executable(client client/client.cpp)
 
-include_directories(${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/coroio/src)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/coroio)
 
 target_link_libraries(server miniraft)
 target_link_libraries(client miniraft)
