@@ -85,26 +85,26 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest
         });
     } else if (message->Term == State->CurrentTerm) {
         bool accept = false;
-        if (State->VotedFor == 0) {
-            accept = true;
-        } else if (State->VotedFor == message->CandidateId && message->LastLogTerm > State->LogTerm()) {
-            accept = true;
-        } else if (State->VotedFor == message->CandidateId && message->LastLogTerm == State->LogTerm() && message->LastLogIndex >= State->Log.size()) {
-            accept = true;
+        if (State->VotedFor == 0 || State->VotedFor == message->CandidateId) {
+            if (message->LastLogTerm > State->LogTerm()) {
+                accept = true;
+            } else if (message->LastLogTerm == State->LogTerm() && message->LastLogIndex >= State->Log.size()) {
+                accept = true;
+            }
         }
 
         auto reply = NewHoldedMessage<TRequestVoteResponse>();
         reply->Src = Id;
         reply->Dst = message->Src;
-        reply->Term = message->Term;
+        reply->Term = State->CurrentTerm;
         reply->VoteGranted = accept;
 
         return std::make_unique<TResult>(TResult {
-            .NextState = std::make_unique<TState>(TState{
-                .CurrentTerm = message->Term,
+            .NextState = accept ? std::make_unique<TState>(TState{
+                .CurrentTerm = State->CurrentTerm,
                 .VotedFor = message->CandidateId,
                 .Log = State->Log
-            }),
+            }) : nullptr,
             .Message = reply,
         });
     }
