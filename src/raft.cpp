@@ -377,6 +377,7 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
 }
 
 void TRaft::Become(EState newStateName) {
+    // TODO: unused function
     if (StateName != newStateName) {
         StateName = newStateName;
         if (StateName == EState::LEADER) {
@@ -456,7 +457,9 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
         StateName = result->NextStateName;
     }
 
-    ProcessWaiting();
+    if (StateName == EState::LEADER) {
+        ProcessWaiting();
+    }
 }
 
 void TRaft::ProcessWaiting() {
