@@ -155,15 +155,26 @@ struct THost {
 
 class TNode: public INode {
 public:
-    TNode(NNet::TPoll& poller, uint32_t id, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
+    TNode(NNet::TPoll& poller, const std::string& name, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
         : Poller(poller)
-        , Id(id)
+        , Name(name)
         , Address(address)
+        , TimeSource(ts)
+    { }
+
+    TNode(NNet::TPoll& poller, const std::string& name, NNet::TSocket socket, const std::shared_ptr<ITimeSource>& ts)
+        : Poller(poller)
+        , Name(name)
+        , Socket(std::move(socket))
+        , Connected(true)
         , TimeSource(ts)
     { }
 
     void Send(const TMessageHolder<TMessage>& message) override;
     void Drain() override;
+    NNet::TSocket& Sock() {
+        return Socket;
+    }
 
 private:
     void Connect();
@@ -172,8 +183,8 @@ private:
     NNet::TTestTask DoConnect();
 
     NNet::TPoll& Poller;
-    uint32_t Id;
-    NNet::TAddress Address;
+    std::string Name;
+    std::optional<NNet::TAddress> Address;
     std::shared_ptr<ITimeSource> TimeSource;
     NNet::TPoll::TSocket Socket;
     bool Connected = false;

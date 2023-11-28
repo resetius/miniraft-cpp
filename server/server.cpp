@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
         } else {
             nodes[host.Id] = std::make_shared<TNode>(
                 loop.Poller(),
-                host.Id,
+                std::to_string(host.Id),
                 NNet::TAddress{host.Address, host.Port},
                 timeSource);
         }

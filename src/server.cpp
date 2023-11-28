@@ -7,20 +7,6 @@
 #include "server.h"
 #include "messages.h"
 
-namespace {
-class TClientNode: public INode {
-public:
-    void Send(const TMessageHolder<TMessage>& mes) override {
-        Messages.push_back(mes);
-    }
-
-    void Drain() override { }
-
-    std::vector<TMessageHolder<TMessage>> Messages;
-};
-
-};
-
 TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
     auto payload = std::move(message.Payload);
     char* p = (char*)message.Mes; // TODO: const char
@@ -105,33 +91,34 @@ NNet::TTestTask TNode::DoDrain() {
         }
     } catch (const std::exception& ex) {
         std::cout << "Error on write: " << ex.what() << "\n";
+        Connect();
     }
     Messages.clear();
     co_return;
 }
 
 void TNode::Connect() {
-    if (!Connector || Connector.done()) {
+    if (Address && (!Connector || Connector.done())) {
         if (Connector && Connector.done()) {
             Connector.destroy();
         }
 
-        Socket = NNet::TSocket(Address, Poller);
+        Socket = NNet::TSocket(*Address, Poller);
         Connected = false;
         Connector = DoConnect();
     }
 }
 
 NNet::TTestTask TNode::DoConnect() {
-    std::cout << "Connecting " << Id << "\n";
+    std::cout << "Connecting " << Name << "\n";
     while (!Connected) {
         try {
             auto deadline = NNet::TClock::now() + std::chrono::milliseconds(100); // TODO: broken timeout in coroio
             co_await Socket.Connect(deadline);
-            std::cout << "Connected " << Id << "\n";
+            std::cout << "Connected " << Name << "\n";
             Connected = true;
         } catch (const std::exception& ex) {
-            std::cout << "Error on connect: " << Id << " " << ex.what() << "\n";
+            std::cout << "Error on connect: " << Name << " " << ex.what() << "\n";
         }
         if (!Connected) {
             co_await Poller.Sleep(std::chrono::milliseconds(1000));
@@ -142,18 +129,14 @@ NNet::TTestTask TNode::DoConnect() {
 
 NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     try {
-        auto client = std::make_shared<TClientNode>();
+        auto client = std::make_shared<TNode>(
+            Poller, "client", std::move(socket), TimeSource
+        );
         Nodes.insert(client);
         while (true) {
-            auto mes = co_await TReader(socket).Read();
+            auto mes = co_await TReader(client->Sock()).Read();
             std::cout << "Got message " << mes->Type << "\n";
             Raft->Process(std::move(mes), client);
-            if (!client->Messages.empty()) {
-                auto tosend = std::move(client->Messages); client->Messages.clear();
-                for (auto&& mes : tosend) {
-                    co_await TWriter(socket).Write(std::move(mes));
-                }
-            }
             DrainNodes();
         }
     } catch (const std::exception & ex) {
