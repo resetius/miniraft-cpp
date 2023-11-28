@@ -264,10 +264,11 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
 }
 
 std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() {
+    static constexpr int batchSize = 128;
     std::vector<TMessageHolder<TAppendEntriesRequest>> res;
     for (auto [nodeId, _] : Nodes) {
         auto prevIndex = VolatileState->NextIndex[nodeId] - 1;
-        auto lastIndex = std::min(prevIndex+1, (uint64_t)State->Log.size());
+        auto lastIndex = std::min(prevIndex+batchSize, (uint64_t)State->Log.size());
         if (VolatileState->MatchIndex[nodeId]+1 < VolatileState->NextIndex[nodeId]) {
             lastIndex = prevIndex;
         }
@@ -378,6 +379,11 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
 void TRaft::Become(EState newStateName) {
     if (StateName != newStateName) {
         StateName = newStateName;
+        if (StateName == EState::LEADER) {
+            for (auto [id, _] : Nodes) {
+                VolatileState->NextIndex[id] = State->Log.size()+1;
+            }
+        }
         Process(NewTimeout());
     }
 }

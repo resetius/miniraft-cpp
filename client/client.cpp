@@ -4,7 +4,7 @@
 #include <server.h>
 
 uint64_t inflight = 0;
-uint64_t maxInflight = 1;
+uint64_t maxInflight = 128;
 
 struct TLineSplitter {
 public:
