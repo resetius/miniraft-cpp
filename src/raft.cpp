@@ -346,7 +346,7 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         memcpy(entry->Data, command->Data, dataSize);
         entry->Term = State->CurrentTerm;
         log.push_back(entry);
-        auto index = log.size();
+        auto index = log.size()-1;
         auto nextState = std::make_unique<TState>(TState {
             .CurrentTerm = State->CurrentTerm,
             .VotedFor = State->VotedFor,
@@ -360,6 +360,7 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
             .NextState = std::move(nextState),
             .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
             .Message = mes,
+            .Messages = CreateAppendEntries()
         });
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         return OnRequestVote(std::move(maybeVoteRequest.Cast()));
