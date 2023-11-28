@@ -352,13 +352,10 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
             .VotedFor = State->VotedFor,
             .Log = std::move(log),
         });
-        auto nextVolatileState = *VolatileState;
-        nextVolatileState.CommitAdvance(Nservers, log.size(),  *State);
         auto mes = NewHoldedMessage<TCommandResponse>();
         mes->Index = index;
         return std::make_unique<TResult>(TResult {
             .NextState = std::move(nextState),
-            .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
             .Message = mes,
             .Messages = CreateAppendEntries()
         });
