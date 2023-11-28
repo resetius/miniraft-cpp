@@ -3,24 +3,79 @@
 #include <vector>
 #include <server.h>
 
+uint64_t inflight = 0;
+uint64_t maxInflight = 1;
+
+struct TLineSplitter {
+public:
+    std::string Pop() {
+        size_t p = data.find('\n');
+        std::string line;
+        if (p != std::string::npos) {
+            line = data.substr(0, p+1);
+            data = data.substr(p+1);
+        }
+        return line;
+    }
+
+    void Push(const char* buf, ssize_t size) {
+        data += std::string_view(buf, size);
+    }
+
+private:
+    std::string data;
+};
+
+template<typename Poller>
+NNet::TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
+    try {
+        while (true) {
+            auto response = co_await TReader(socket).Read();
+            auto commandResponse = response.template Cast<TCommandResponse>();
+            std::cout << "Ok, commitIndex: " << commandResponse->Index << "\n";
+            inflight --;
+        }
+    } catch (const std::exception& ex) {
+        std::cout << "Exception: " << ex.what() << "\n";
+    }
+    co_return;
+}
+
 template<typename Poller>
 NNet::TSimpleTask Client(Poller& poller, NNet::TAddress addr) {
     typename Poller::TSocket socket(std::move(addr), poller);
+    NNet::TSocket input{NNet::TAddress{}, 0, poller}; // stdin
+    TLineSplitter splitter;
     co_await socket.Connect();
     std::cout << "Connected\n";
     char buf[1024];
-    while (fgets(buf, sizeof(buf), stdin)) {
-        auto len = strlen(buf);
-        auto mes = NewHoldedMessage<TCommandRequest>(
-            sizeof(TCommandRequest) + len
-        );
-        memcpy(mes->Data, buf, len);
-        std::cout << "Sending\n";
-        co_await TWriter(socket).Write(std::move(mes));
-        auto response = co_await TReader(socket).Read();
-        auto commandResponse = response.template Cast<TCommandResponse>();
-        std::cout << "Ok, commitIndex: " << commandResponse->Index << "\n";
+    std::string line;
+    ssize_t size = 1;
+
+    auto reader = ClientReader(poller, socket);
+
+    try {
+        while (size && (size = co_await input.ReadSome(buf, sizeof(buf)))) {
+            splitter.Push(buf, size);
+            auto line = splitter.Pop();
+            if (line.empty()) {
+                continue;
+            }
+            auto mes = NewHoldedMessage<TCommandRequest>(
+                sizeof(TCommandRequest) + line.size()
+            );
+            memcpy(mes->Data, line.c_str(), line.size());
+            std::cout << "Sending\n";
+            while (inflight >= maxInflight) {
+                co_await poller.Sleep(std::chrono::milliseconds(0));
+            }
+            inflight++;
+            co_await TWriter(socket).Write(std::move(mes));
+        }
+    } catch (const std::exception& ex) {
+        std::cout << "Exception: " << ex.what() << "\n";
     }
+    reader.destroy();
     co_return;
 }
 
