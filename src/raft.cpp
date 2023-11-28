@@ -450,7 +450,8 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
 void TRaft::ProcessWaiting() {
     auto commitIndex = VolatileState->CommitIndex;
     while (!waiting.empty() && waiting.top().Index <= commitIndex) {
-        auto&& w = std::move(waiting.top()); waiting.pop();
-        w.ReplyTo->Send(std::move(w.Message));
+        auto w = waiting.top(); waiting.pop();
+        w.ReplyTo->Send(w.Message);
     }
 }
+

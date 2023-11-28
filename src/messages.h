@@ -85,10 +85,14 @@ struct TCommandRequest: public TMessage {
     char Data[0];
 };
 
+static_assert(sizeof(TCommandRequest) == sizeof(TMessage));
+
 struct TCommandResponse: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_RESPONSE;
     uint64_t Index;
 };
+
+static_assert(sizeof(TCommandResponse) == sizeof(TMessage) + 8);
 
 struct TTimeout: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::TIMEOUT;
