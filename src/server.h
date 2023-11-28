@@ -5,6 +5,7 @@
 #include <coroutine>
 #include <string_view>
 #include <charconv>
+#include <optional>
 
 #include <all.hpp>
 
