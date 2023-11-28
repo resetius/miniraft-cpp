@@ -67,7 +67,7 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     , VolatileState(std::make_unique<TVolatileState>())
     , StateName(EState::FOLLOWER)
     , LastTime(TimeSource->Now())
-{ 
+{
     for (auto [id, _] : Nodes) {
         VolatileState->NextIndex[id] = 1;
     }
@@ -102,7 +102,8 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest
         return std::make_unique<TResult>(TResult {
             .NextState = std::make_unique<TState>(TState{
                 .CurrentTerm = message->Term,
-                .VotedFor = message->CandidateId
+                .VotedFor = message->CandidateId,
+                .Log = State->Log
             }),
             .Message = reply,
         });
@@ -114,10 +115,6 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest
 std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteResponse> message) {
     if (message->Term > State->CurrentTerm) {
         return std::make_unique<TResult>(TResult {
-            .NextState = std::make_unique<TState>(TState{
-                .CurrentTerm = State->CurrentTerm,
-                .VotedFor = State->VotedFor,
-            }),
             .NextStateName = EState::FOLLOWER,
             .UpdateLastTime = true
         });
@@ -136,10 +133,6 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRespons
             nextIndex.emplace(id, value);
         }
         return std::make_unique<TResult>(TResult {
-            .NextState = std::make_unique<TState>(TState{
-                .CurrentTerm = State->CurrentTerm,
-                .VotedFor = State->VotedFor,
-            }),
             .NextVolatileState = std::make_unique<TVolatileState>(TVolatileState {
                 .CommitIndex = VolatileState->CommitIndex,
                 .LastApplied = VolatileState->LastApplied,
@@ -153,10 +146,6 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRespons
     auto nextVolatileState = *VolatileState;
     nextVolatileState.SetVotes(votes);
     return std::make_unique<TResult>(TResult {
-        .NextState = std::make_unique<TState>(TState{
-            .CurrentTerm = State->CurrentTerm,
-            .VotedFor = State->VotedFor,
-        }),
         .NextVolatileState = std::make_unique<TVolatileState>(
             nextVolatileState
         ),
@@ -322,6 +311,7 @@ std::unique_ptr<TResult> TRaft::Candidate(ITimeSource::Time now, TMessageHolder<
                 .NextState = std::make_unique<TState>(TState {
                     .CurrentTerm = State->CurrentTerm+1,
                     .VotedFor = Id,
+                    .Log = State->Log
                 }),
                 .NextVolatileState = std::move(nextVolatileState),
                 .UpdateLastTime = true,
