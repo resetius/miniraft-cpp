@@ -175,6 +175,7 @@ struct TMessageHolder {
 template<typename T>
 requires std::derived_from<T, TMessage>
 T* NewMessage(uint32_t type, uint32_t len) {
+    assert(len >= sizeof(TMessage));
     char* data = new char[len];
     T* mes =  new (data) T;
     mes->Type = type;
