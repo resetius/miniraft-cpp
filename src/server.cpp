@@ -66,8 +66,8 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
     co_return mes;
 }
 
-void TNode::Send(const TMessageHolder<TMessage>& message) {
-    Messages.emplace_back(message);
+void TNode::Send(TMessageHolder<TMessage> message) {
+    Messages.emplace_back(std::move(message));
 }
 
 void TNode::Drain() {

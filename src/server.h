@@ -171,7 +171,7 @@ public:
         , TimeSource(ts)
     { }
 
-    void Send(const TMessageHolder<TMessage>& message) override;
+    void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
     NNet::TSocket& Sock() {
         return Socket;

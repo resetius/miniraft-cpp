@@ -22,7 +22,7 @@ using namespace NNet;
 
 namespace {
 
-using OnSendFunc = const std::function<void(const TMessageHolder<TMessage>&)>;
+using OnSendFunc = const std::function<void(TMessageHolder<TMessage>)>;
 
 class TFakeNode: public INode {
 public:
@@ -30,9 +30,9 @@ public:
         : SendFunc(sendFunc)
     { }
 
-    void Send(const TMessageHolder<TMessage>& message) override {
+    void Send(TMessageHolder<TMessage> message) override {
         if (SendFunc) {
-            SendFunc(message);
+            SendFunc(std::move(message));
         }
     }
 
@@ -395,8 +395,8 @@ void test_follower_append_entries_7f(void**) {
 
 void test_follower_append_entries_empty_to_empty_log(void**) {
     std::vector<TMessageHolder<TMessage>> messages;
-    auto onSend = [&](const TMessageHolder<TMessage>& message) {
-        messages.push_back(message);
+    auto onSend = [&](auto message) {
+        messages.emplace_back(std::move(message));
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3, ts);
@@ -419,8 +419,8 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
 
 void test_candidate_initiate_election(void**) {
     std::vector<TMessageHolder<TMessage>> messages;
-    auto onSend = [&](const TMessageHolder<TMessage>& message) {
-        messages.push_back(message);
+    auto onSend = [&](auto message) {
+        messages.emplace_back(std::move(message));
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3, ts);
@@ -504,8 +504,8 @@ void test_candidate_vote_request_big(void**) {
 
 void test_candidate_vote_after_start(void**) {
     std::vector<TMessageHolder<TMessage>> messages;
-    auto onSend = [&](const TMessageHolder<TMessage>& message) {
-        messages.push_back(message);
+    auto onSend = [&](auto message) {
+        messages.emplace_back(std::move(message));
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3, ts);

@@ -429,7 +429,7 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
             auto messageEx = result->Message.Cast<TMessageEx>();
             if (messageEx->Dst == 0) {
                 for (auto& [id, v] : Nodes) {
-                    v->Send(messageEx);
+                    v->Send(std::move(messageEx));
                 }
             } else {
                 Nodes[messageEx->Dst]->Send(std::move(messageEx));
@@ -452,7 +452,7 @@ void TRaft::ProcessWaiting() {
     auto commitIndex = VolatileState->CommitIndex;
     while (!waiting.empty() && waiting.top().Index <= commitIndex) {
         auto w = waiting.top(); waiting.pop();
-        w.ReplyTo->Send(w.Message);
+        w.ReplyTo->Send(std::move(w.Message));
     }
 }
 

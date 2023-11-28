@@ -12,7 +12,7 @@
 
 struct INode {
     virtual ~INode() = default;
-    virtual void Send(const TMessageHolder<TMessage>& message) = 0;
+    virtual void Send(TMessageHolder<TMessage> message) = 0;
     virtual void Drain() = 0;
 };
 
