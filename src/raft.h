@@ -128,7 +128,7 @@ private:
         TMessageHolder<TMessage> Message;
         std::shared_ptr<INode> ReplyTo;
         bool operator< (const TWaiting& other) const {
-            return Index < other.Index;
+            return Index > other.Index;
         }
     };
     std::priority_queue<TWaiting> waiting;
