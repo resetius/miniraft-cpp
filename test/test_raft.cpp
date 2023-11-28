@@ -111,13 +111,13 @@ void test_empty(void** state) {
 }
 
 void test_message_create(void** state) {
-    auto mes = NewHoldedMessage<TMessage>(0, 4);
-    assert_true(mes->Len == 4);
+    auto mes = NewHoldedMessage<TMessage>(0, 8);
+    assert_true(mes->Len == 8);
     assert_true(mes->Type == 0);
 }
 
 void test_message_cast(void** state) {
-    TMessageHolder<TMessage> mes = NewHoldedMessage<TLogEntry>(static_cast<uint32_t>(TLogEntry::MessageType), 4);
+    TMessageHolder<TMessage> mes = NewHoldedMessage<TLogEntry>(16);
     auto casted = mes.Cast<TLogEntry>();
     assert_true(mes.RawData == casted.RawData);
     assert_true(mes->Len == casted->Len);
