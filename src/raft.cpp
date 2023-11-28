@@ -66,7 +66,11 @@ TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource
     , VolatileState(std::make_unique<TVolatileState>())
     , StateName(EState::FOLLOWER)
     , LastTime(TimeSource->Now())
-{ }
+{ 
+    for (auto [id, _] : Nodes) {
+        VolatileState->NextIndex[id] = 1;
+    }
+}
 
 std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest> message) {
     if (message->Term < State->CurrentTerm) {
@@ -308,12 +312,16 @@ std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<T
 std::unique_ptr<TResult> TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeTimeout = message.Maybe<TTimeout>()) {
         if (now - LastTime > TTimeout::Election) {
+            auto nextVolatileState = std::make_unique<TVolatileState>();
+            for (auto [id, _] : Nodes) {
+                nextVolatileState->NextIndex[id] = 1;
+            }
             return std::make_unique<TResult>(TResult {
                 .NextState = std::make_unique<TState>(TState {
                     .CurrentTerm = State->CurrentTerm+1,
                     .VotedFor = Id,
                 }),
-                .NextVolatileState = std::make_unique<TVolatileState>(),
+                .NextVolatileState = std::move(nextVolatileState),
                 .UpdateLastTime = true,
                 .Message = CreateVote()
             });
