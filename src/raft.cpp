@@ -152,12 +152,16 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRespons
 
 std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message) {
     if (message->Term > State->CurrentTerm) {
-        auto reply = NewHoldedMessage<TAppendEntriesResponse>();
-        reply->Src = Id;
-        reply->Dst = message->Src;
-        reply->Term = State->CurrentTerm;
-        reply->Success = false;
-        reply->MatchIndex = 0;
+        auto reply = NewHoldedMessage(
+            TMessageEx {
+                .Src = Id,
+                .Dst = message->Src,
+                .Term = State->CurrentTerm,
+            },
+            TAppendEntriesResponse {
+                .MatchIndex = 0,
+                .Success = false,
+            });
         return std::make_unique<TResult>(TResult {
             .UpdateLastTime = true,
             .Message = reply,
