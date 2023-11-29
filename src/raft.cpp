@@ -151,7 +151,7 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRespons
 }
 
 std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message) {
-    if (message->Term < State->CurrentTerm) {
+    if (message->Term > State->CurrentTerm) {
         auto reply = NewHoldedMessage<TAppendEntriesResponse>();
         reply->Src = Id;
         reply->Dst = message->Src;
@@ -239,7 +239,7 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
     auto mes = NewHoldedMessage(
         TMessageEx {.Src = Id, .Dst = 0, .Term = State->CurrentTerm+1},
         TRequestVoteRequest {
-            .LastLogIndex = State->Log.size(),             
+            .LastLogIndex = State->Log.size(),
             .LastLogTerm = State->Log.empty() ? 0 : State->Log.back()->Term,
             .CandidateId = Id,
         });
