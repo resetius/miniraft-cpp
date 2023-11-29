@@ -214,10 +214,8 @@ TMessageHolder<T> NewHoldedMessage(uint32_t size) {
 
 template<typename T>
 TMessageHolder<T> NewHoldedMessage(T t) {
-    auto m = NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), sizeof(T));
-    t.Type = T::MessageType;
-    t.Len = sizeof(T);
-    memcpy(m->Mes, &t, sizeof(T));
+    auto m = NewHoldedMessage<T>();
+    memcpy((char*)m.Mes + sizeof(TMessage), (char*)&t + sizeof(TMessage), sizeof(T) - sizeof(TMessage));
     return m;
 }
 
