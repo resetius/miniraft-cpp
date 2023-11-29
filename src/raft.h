@@ -16,14 +16,14 @@ struct INode {
     virtual void Drain() = 0;
 };
 
-using TNodeDict = std::unordered_map<int, std::shared_ptr<INode>>;
+using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TState {
     uint64_t CurrentTerm = 1;
     uint32_t VotedFor = 0;
     std::vector<TMessageHolder<TLogEntry>> Log;
 
-    int LogTerm(int index = -1) const {
+    uint64_t LogTerm(int64_t index = -1) const {
         if (index < 0) {
             index = Log.size();
         }

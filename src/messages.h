@@ -5,6 +5,7 @@
 
 #include <assert.h>
 #include <stdint.h>
+#include <string.h>
 #include <typeinfo>
 
 enum class EMessageType : uint32_t {
@@ -209,6 +210,24 @@ template<typename T>
 TMessageHolder<T> NewHoldedMessage(uint32_t size) {
     assert(size >= sizeof(T));
     return NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), size);
+}
+
+template<typename T>
+TMessageHolder<T> NewHoldedMessage(T t) {
+    auto m = NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), sizeof(T));
+    t.Type = T::MessageType;
+    t.Len = sizeof(T);
+    memcpy(m->Mes, &t, sizeof(T));
+    return m;
+}
+
+template<typename T>
+requires std::derived_from<T, TMessageEx>
+TMessageHolder<T> NewHoldedMessage(TMessageEx h, T t) {
+    auto m = NewHoldedMessage<T>();
+    memcpy((char*)m.Mes + sizeof(TMessage), (char*)&h + sizeof(TMessage), sizeof(h) - sizeof(TMessage));
+    memcpy((char*)m.Mes + sizeof(TMessageEx), (char*)&t + sizeof(TMessageEx), sizeof(T) - sizeof(TMessageEx));
+    return m;
 }
 
 inline TMessageHolder<TTimeout> NewTimeout() {

@@ -93,11 +93,9 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteRequest
             }
         }
 
-        auto reply = NewHoldedMessage<TRequestVoteResponse>();
-        reply->Src = Id;
-        reply->Dst = message->Src;
-        reply->Term = State->CurrentTerm;
-        reply->VoteGranted = accept;
+        auto reply = NewHoldedMessage(
+            TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm},
+            TRequestVoteResponse {.VoteGranted = accept});
 
         return std::make_unique<TResult>(TResult {
             .NextState = accept ? std::make_unique<TState>(TState{
@@ -196,12 +194,9 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesReq
         commitIndex = std::max(commitIndex, message->LeaderCommit);
     }
 
-    auto reply = NewHoldedMessage<TAppendEntriesResponse>();
-    reply->Src = Id;
-    reply->Dst = message->Src;
-    reply->Term = State->CurrentTerm;
-    reply->Success = success;
-    reply->MatchIndex = matchIndex;
+    auto reply = NewHoldedMessage(
+        TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm},
+        TAppendEntriesResponse {.MatchIndex = matchIndex, .Success = success});
 
     auto nextVolatileState = *VolatileState;
     nextVolatileState.SetCommitIndex(commitIndex);
@@ -241,15 +236,13 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRes
 }
 
 TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
-    auto mes = NewHoldedMessage<TRequestVoteRequest>();
-    mes->Src = Id;
-    mes->Dst = 0;
-    mes->Term = State->CurrentTerm+1;
-    mes->CandidateId = Id;
-    mes->LastLogIndex = State->Log.size();
-    mes->LastLogTerm = State->Log.empty()
-        ? 0
-        : State->Log.back()->Term;
+    auto mes = NewHoldedMessage(
+        TMessageEx {.Src = Id, .Dst = 0, .Term = State->CurrentTerm+1},
+        TRequestVoteRequest {
+            .LastLogIndex = State->Log.size(),             
+            .LastLogTerm = State->Log.empty() ? 0 : State->Log.back()->Term,
+            .CandidateId = Id,
+        });
     return mes;
 }
 
@@ -263,16 +256,15 @@ std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() 
             lastIndex = prevIndex;
         }
 
-        auto mes = NewHoldedMessage<TAppendEntriesRequest>();
-
-        mes->Src = Id;
-        mes->Dst = nodeId;
-        mes->Term = State->CurrentTerm;
-        mes->LeaderId = Id;
-        mes->PrevLogIndex = prevIndex;
-        mes->PrevLogTerm = State->LogTerm(prevIndex);
-        mes->LeaderCommit = std::min(VolatileState->CommitIndex, lastIndex);
-        mes->Nentries = lastIndex - prevIndex;
+        auto mes = NewHoldedMessage(
+            TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm},
+            TAppendEntriesRequest {
+                .PrevLogIndex = prevIndex,
+                .PrevLogTerm = State->LogTerm(prevIndex),
+                .LeaderCommit = std::min(VolatileState->CommitIndex, lastIndex),
+                .LeaderId = Id,
+                .Nentries = static_cast<uint32_t>(lastIndex - prevIndex),
+            });
         std::vector<TMessageHolder<TMessage>> payload;
         payload.reserve(lastIndex - prevIndex);
         for (auto i = prevIndex; i < lastIndex; i++) {
