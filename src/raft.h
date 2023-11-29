@@ -38,16 +38,21 @@ struct TState {
 struct TVolatileState {
     uint64_t CommitIndex = 0;
     uint64_t LastApplied = 0;
-    std::unordered_map<int, uint64_t> NextIndex;
-    std::unordered_map<int, uint64_t> MatchIndex;
-    std::unordered_set<int> Votes;
+    std::unordered_map<uint32_t, uint64_t> NextIndex;
+    std::unordered_map<uint32_t, uint64_t> MatchIndex;
+    std::unordered_set<uint32_t> Votes;
+    std::unordered_map<uint32_t, ITimeSource::Time> HeartbeatDue;
+    std::unordered_map<uint32_t, ITimeSource::Time> RpcDue;
+    ITimeSource::Time ElectionDue;
 
-    TVolatileState& SetVotes(std::unordered_set<int>& votes);
+    TVolatileState& SetVotes(std::unordered_set<uint32_t>& votes);
     TVolatileState& SetLastApplied(int index);
     TVolatileState& CommitAdvance(int nservers, int lastIndex, const TState& state);
     TVolatileState& SetCommitIndex(int index);
     TVolatileState& MergeNextIndex(const std::unordered_map<int, uint64_t>& nextIndex);
     TVolatileState& MergeMatchIndex(const std::unordered_map<int, uint64_t>& matchIndex);
+    TVolatileState& MergeHearbeatDue(const std::unordered_map<int, ITimeSource::Time>& heartbeatDue);
+    TVolatileState& MergeRpcDue(const std::unordered_map<int, ITimeSource::Time>& rpcDue);
 };
 
 enum class EState: int {
@@ -61,7 +66,6 @@ struct TResult {
     std::unique_ptr<TState> NextState;
     std::unique_ptr<TVolatileState> NextVolatileState;
     EState NextStateName = EState::NONE;
-    bool UpdateLastTime = false;
     TMessageHolder<TMessage> Message;
     std::vector<TMessageHolder<TAppendEntriesRequest>> Messages;
 };
@@ -72,6 +76,7 @@ public:
 
     void Process(TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, const std::shared_ptr<INode>& replyTo = {});
+    void ProcessTimeout(ITimeSource::Time now);
 
 // ut
     EState CurrentStateName() const {
@@ -92,10 +97,6 @@ public:
         return VolatileState.get();
     }
 
-    const auto GetLastTime() const {
-        return LastTime;
-    }
-
     const uint32_t GetId() const {
         return Id;
     }
@@ -106,13 +107,20 @@ private:
     std::unique_ptr<TResult> Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
     std::unique_ptr<TResult> Leader(ITimeSource::Time now, TMessageHolder<TMessage> message);
 
-    std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteRequest> message);
+    std::unique_ptr<TResult> OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message);
     std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
-    std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesRequest> message);
+    std::unique_ptr<TResult> OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
     std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
+
+    void LeaderTimeout(ITimeSource::Time now);
+    void CandidateTimeout(ITimeSource::Time now);
+    void FollowerTimeout(ITimeSource::Time now);
+
     TMessageHolder<TRequestVoteRequest> CreateVote();
     std::vector<TMessageHolder<TAppendEntriesRequest>> CreateAppendEntries();
+    TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
     void ProcessWaiting();
+    ITimeSource::Time MakeElection(ITimeSource::Time now);
 
     uint32_t Id;
     TNodeDict Nodes;
@@ -134,5 +142,5 @@ private:
     std::priority_queue<TWaiting> waiting;
 
     EState StateName;
-    ITimeSource::Time LastTime;
+    uint32_t Seed = 31337;
 };

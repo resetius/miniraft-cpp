@@ -224,24 +224,12 @@ void test_apply_state_func_change_result(void**) {
     assert_true(volatileState == raft->GetVolatileState());
 }
 
-void test_apply_time_change_result(void**) {
-    auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3, ts);
-    auto n = ts->Now();
-    raft->ApplyResult(n, std::make_unique<TResult>(TResult {
-        .UpdateLastTime = true
-    }));
-    assert_true(raft->GetLastTime() == n);
-}
-
 void test_follower_to_candidate_on_timeout(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft({}, 3, ts);
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
-    raft->Process(NewTimeout());
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
-    raft->Process(NewTimeout());
+    raft->ProcessTimeout(ts->Now());
     assert_true(raft->CurrentStateName() == EState::CANDIDATE);
 }
 
@@ -426,8 +414,8 @@ void test_candidate_initiate_election(void**) {
     ts->Advance(std::chrono::milliseconds(10000));
     auto term = raft->GetState()->CurrentTerm;
     raft->Become(EState::CANDIDATE);
+    raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->GetState()->CurrentTerm, term+1);
-    assert_true(ts->Now() == raft->GetLastTime());
     assert_int_equal(messages.size(), 2);
     TRequestVoteRequest r;
     r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_REQUEST);
@@ -511,6 +499,7 @@ void test_candidate_vote_after_start(void**) {
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::CANDIDATE);
+    raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->GetState()->VotedFor, 1);
     assert_int_equal(raft->GetState()->CurrentTerm, 2);
     auto req = NewHoldedMessage<TRequestVoteRequest>();
@@ -548,15 +537,20 @@ void test_election_5_nodes(void**) {
     req->Dst = 1;
     req->Term = 2;
     req->VoteGranted = true;
+    ts->Advance(std::chrono::milliseconds(10000));
+    raft->ProcessTimeout(ts->Now());
+
     raft->Process(req);
 
     assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
     req->Src = 2;
     raft->Process(req);
+    raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
 
     req->Src = 4;
     raft->Process(req);
+    raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->CurrentStateName(), EState::LEADER);
 }
 
@@ -609,7 +603,6 @@ int main() {
         cmocka_unit_test(test_become_same_func),
         cmocka_unit_test(test_apply_empty_result),
         cmocka_unit_test(test_apply_state_func_change_result),
-        cmocka_unit_test(test_apply_time_change_result),
         cmocka_unit_test(test_follower_to_candidate_on_timeout),
         cmocka_unit_test(test_follower_append_entries_small_term),
         cmocka_unit_test(test_follower_append_entries_7a),

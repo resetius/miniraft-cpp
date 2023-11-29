@@ -95,10 +95,10 @@ struct TCommandResponse: public TMessage {
 
 static_assert(sizeof(TCommandResponse) == sizeof(TMessage) + 8);
 
-struct TTimeout: public TMessage {
-    static constexpr EMessageType MessageType = EMessageType::TIMEOUT;
+struct TTimeout {
     static constexpr std::chrono::milliseconds Election = std::chrono::milliseconds(5000);
     static constexpr std::chrono::milliseconds Heartbeat = std::chrono::milliseconds(2000);
+    static constexpr std::chrono::milliseconds Rpc = std::chrono::milliseconds(10000);
 };
 
 template<typename T>
@@ -226,8 +226,4 @@ TMessageHolder<T> NewHoldedMessage(TMessageEx h, T t) {
     memcpy((char*)m.Mes + sizeof(TMessage), (char*)&h + sizeof(TMessage), sizeof(h) - sizeof(TMessage));
     memcpy((char*)m.Mes + sizeof(TMessageEx), (char*)&t + sizeof(TMessageEx), sizeof(T) - sizeof(TMessageEx));
     return m;
-}
-
-inline TMessageHolder<TTimeout> NewTimeout() {
-    return NewHoldedMessage<TTimeout>(static_cast<uint32_t>(EMessageType::TIMEOUT), sizeof(TTimeout));
 }

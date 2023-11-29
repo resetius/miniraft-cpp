@@ -137,6 +137,7 @@ NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
             auto mes = co_await TReader(client->Sock()).Read();
             std::cout << "Got message " << mes->Type << "\n";
             Raft->Process(std::move(mes), client);
+            Raft->ProcessTimeout(TimeSource->Now());
             DrainNodes();
         }
     } catch (const std::exception & ex) {
@@ -174,7 +175,7 @@ NNet::TSimpleTask TRaftServer::Idle() {
     auto dt = std::chrono::milliseconds(2000);
     auto sleep = std::chrono::milliseconds(100);
     while (true) {
-        Raft->Process(NewTimeout());
+        Raft->ProcessTimeout(TimeSource->Now());
         DrainNodes();
         auto t1 = TimeSource->Now();
         if (t1 > t0 + dt) {
