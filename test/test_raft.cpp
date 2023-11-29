@@ -62,14 +62,13 @@ private:
 
 std::shared_ptr<TRaft> MakeRaft(
     const OnSendFunc& sendFunc = {},
-    int count = 3,
-    const std::shared_ptr<ITimeSource>& timeSource = std::make_shared<TFakeTimeSource>())
+    int count = 3)
 {
     TNodeDict nodes;
     for (int i = 2; i <= count; i++) {
         nodes[i] = std::make_shared<TFakeNode>(sendFunc);
     }
-    return std::make_shared<TRaft>(1, nodes, timeSource);
+    return std::make_shared<TRaft>(1, nodes);
 }
 
 template<typename T=TMessage>
@@ -191,7 +190,7 @@ void test_become(void**) {
 
 void test_become_same_func(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3, ts);
+    auto raft = MakeRaft({}, 3);
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::FOLLOWER);
@@ -200,7 +199,7 @@ void test_become_same_func(void**) {
 
 void test_apply_empty_result(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3, ts);
+    auto raft = MakeRaft({}, 3);
     auto state = raft->GetState();
     auto volatileState = raft->GetVolatileState();
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
@@ -212,7 +211,7 @@ void test_apply_empty_result(void**) {
 
 void test_apply_state_func_change_result(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3, ts);
+    auto raft = MakeRaft({}, 3);
     auto state = raft->GetState();
     auto volatileState = raft->GetVolatileState();
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
@@ -226,7 +225,7 @@ void test_apply_state_func_change_result(void**) {
 
 void test_follower_to_candidate_on_timeout(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3, ts);
+    auto raft = MakeRaft({}, 3);
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->ProcessTimeout(ts->Now());
@@ -239,7 +238,7 @@ void test_follower_append_entries_small_term(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     auto mes = NewHoldedMessage<TAppendEntriesRequest>();
     mes->Src = 2;
     mes->Dst = 1;
@@ -249,7 +248,7 @@ void test_follower_append_entries_small_term(void**) {
     mes->PrevLogTerm = 0;
     mes->LeaderCommit = 0;
     mes->Nentries = 0;
-    raft->Process(mes);
+    raft->Process(ts->Now(), mes);
 
     assert_true(messages.size() == 1);
     auto maybeReply = messages[0].Maybe<TAppendEntriesResponse>();
@@ -266,7 +265,7 @@ void test_follower_append_entries_7a(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     raft->SetState(TState{
         .CurrentTerm = 1,
         .VotedFor = 2,
@@ -282,7 +281,7 @@ void test_follower_append_entries_7a(void**) {
     mes->LeaderCommit = 9;
     mes->Nentries = 1;
     mes.Payload = MakeLog({6});
-    raft->Process(mes);
+    raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -296,7 +295,7 @@ void test_follower_append_entries_7b(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     raft->SetState(TState{
         .CurrentTerm = 1,
         .VotedFor = 2,
@@ -312,7 +311,7 @@ void test_follower_append_entries_7b(void**) {
     mes->LeaderCommit = 9;
     mes->Nentries = 6;
     mes.Payload = MakeLog({4,5,5,6,6,6});
-    raft->Process(mes);
+    raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -326,7 +325,7 @@ void test_follower_append_entries_7c(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     raft->SetState(TState{
         .CurrentTerm = 1,
         .VotedFor = 2,
@@ -342,7 +341,7 @@ void test_follower_append_entries_7c(void**) {
     mes->LeaderCommit = 9;
     mes->Nentries = 1;
     mes.Payload = MakeLog({6});
-    raft->Process(mes);
+    raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -356,7 +355,7 @@ void test_follower_append_entries_7f(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     raft->SetState(TState{
         .CurrentTerm = 1,
         .VotedFor = 2,
@@ -372,7 +371,7 @@ void test_follower_append_entries_7f(void**) {
     mes->LeaderCommit = 9;
     mes->Nentries = 7;
     mes.Payload = MakeLog({4,4,5,5,6,6,6});
-    raft->Process(mes);
+    raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -386,7 +385,7 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
         messages.emplace_back(std::move(message));
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     auto mes = NewHoldedMessage<TAppendEntriesRequest>();
     mes->Src = 2;
     mes->Dst = 1;
@@ -396,7 +395,7 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
     mes->PrevLogTerm = 0;
     mes->LeaderCommit = 0;
     mes->Nentries = 0;
-    raft->Process(mes);
+    raft->Process(ts->Now(), mes);
     assert_true(!messages.empty());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_int_equal(last->Dst, 2);
@@ -410,7 +409,7 @@ void test_candidate_initiate_election(void**) {
         messages.emplace_back(std::move(message));
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     ts->Advance(std::chrono::milliseconds(10000));
     auto term = raft->GetState()->CurrentTerm;
     raft->Become(EState::CANDIDATE);
@@ -433,7 +432,7 @@ void test_candidate_initiate_election(void**) {
 
 void test_candidate_vote_request_small_term(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3, ts);
+    auto raft = MakeRaft({}, 3);
     auto req = NewHoldedMessage<TRequestVoteRequest>();
     req->Src = 2;
     req->Dst = 1;
@@ -455,7 +454,7 @@ void test_candidate_vote_request_small_term(void**) {
 
 void test_candidate_vote_request_ok_term(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3, ts);
+    auto raft = MakeRaft({}, 3);
     auto req = NewHoldedMessage<TRequestVoteRequest>();
     req->Src = 2;
     req->Dst = 1;
@@ -477,6 +476,7 @@ void test_candidate_vote_request_ok_term(void**) {
 
 void test_candidate_vote_request_big(void**) {
     auto raft = MakeRaft();
+    auto ts = std::make_shared<TFakeTimeSource>();
     raft->Become(EState::CANDIDATE);
     auto req = NewHoldedMessage<TRequestVoteRequest>();
     req->Src = 2;
@@ -485,7 +485,7 @@ void test_candidate_vote_request_big(void**) {
     req->CandidateId = 2;
     req->LastLogTerm = 1;
     req->LastLogIndex = 1;
-    raft->Process(req);
+    raft->Process(ts->Now(), req);
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
@@ -495,7 +495,7 @@ void test_candidate_vote_after_start(void**) {
         messages.emplace_back(std::move(message));
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3, ts);
+    auto raft = MakeRaft(onSend, 3);
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::CANDIDATE);
@@ -509,7 +509,7 @@ void test_candidate_vote_after_start(void**) {
     req->CandidateId = 2;
     req->LastLogTerm = 1;
     req->LastLogIndex = 1;
-    raft->Process(req);
+    raft->Process(ts->Now(), req);
     auto last = messages.back().Cast<TRequestVoteResponse>();
     assert_int_equal(last->VoteGranted, false);
 
@@ -521,7 +521,7 @@ void test_candidate_vote_after_start(void**) {
     req->CandidateId = 3;
     req->LastLogTerm = 1;
     req->LastLogIndex = 1;
-    raft->Process(req);
+    raft->Process(ts->Now(), req);
     last = messages.back().Cast<TRequestVoteResponse>();
     assert_int_equal(raft->GetState()->VotedFor, 3);
     assert_int_equal(last->VoteGranted, true);
@@ -529,7 +529,7 @@ void test_candidate_vote_after_start(void**) {
 
 void test_election_5_nodes(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 5, ts);
+    auto raft = MakeRaft({}, 5);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::CANDIDATE);
     auto req = NewHoldedMessage<TRequestVoteResponse>();
@@ -540,16 +540,16 @@ void test_election_5_nodes(void**) {
     ts->Advance(std::chrono::milliseconds(10000));
     raft->ProcessTimeout(ts->Now());
 
-    raft->Process(req);
+    raft->Process(ts->Now(), req);
 
     assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
     req->Src = 2;
-    raft->Process(req);
+    raft->Process(ts->Now(), req);
     raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
 
     req->Src = 4;
-    raft->Process(req);
+    raft->Process(ts->Now(), req);
     raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->CurrentStateName(), EState::LEADER);
 }

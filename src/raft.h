@@ -72,9 +72,9 @@ struct TResult {
 
 class TRaft {
 public:
-    TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource>& ts);
+    TRaft(int node, const TNodeDict& nodes);
 
-    void Process(TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
+    void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
 
@@ -124,7 +124,6 @@ private:
 
     uint32_t Id;
     TNodeDict Nodes;
-    std::shared_ptr<ITimeSource> TimeSource;
     int MinVotes;
     int Npeers;
     int Nservers;

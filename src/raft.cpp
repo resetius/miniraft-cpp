@@ -86,10 +86,9 @@ TVolatileState& TVolatileState::SetCommitIndex(int index)
     return *this;
 }
 
-TRaft::TRaft(int node, const TNodeDict& nodes, const std::shared_ptr<ITimeSource>& ts)
+TRaft::TRaft(int node, const TNodeDict& nodes)
     : Id(node)
     , Nodes(nodes)
-    , TimeSource(ts)
     , MinVotes((nodes.size()+2)/2)
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
@@ -366,9 +365,7 @@ void TRaft::Become(EState newStateName) {
     }
 }
 
-void TRaft::Process(TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
-    auto now = TimeSource->Now();
-
+void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
     if (message.IsEx()) {
         auto messageEx = message.Cast<TMessageEx>();
         if (messageEx->Term > State->CurrentTerm) {

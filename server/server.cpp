@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    auto raft = std::make_shared<TRaft>(myHost.Id, nodes, timeSource);
+    auto raft = std::make_shared<TRaft>(myHost.Id, nodes);
     TRaftServer server(loop.Poller(), NNet::TAddress{myHost.Address, myHost.Port}, raft, nodes, timeSource);
     server.Serve();
     loop.Loop();
