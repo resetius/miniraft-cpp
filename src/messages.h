@@ -17,7 +17,6 @@ enum class EMessageType : uint32_t {
     APPEND_ENTRIES_RESPONSE = 5,
     COMMAND_REQUEST = 6,
     COMMAND_RESPONSE = 7,
-    TIMEOUT = 8,
 };
 
 struct TMessage {
@@ -97,7 +96,7 @@ static_assert(sizeof(TCommandResponse) == sizeof(TMessage) + 8);
 
 struct TTimeout {
     static constexpr std::chrono::milliseconds Election = std::chrono::milliseconds(5000);
-    static constexpr std::chrono::milliseconds Heartbeat = std::chrono::milliseconds(2000);
+    static constexpr std::chrono::milliseconds Heartbeat = std::chrono::milliseconds(1000);
     static constexpr std::chrono::milliseconds Rpc = std::chrono::milliseconds(10000);
 };
 

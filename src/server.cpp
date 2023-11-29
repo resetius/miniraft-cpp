@@ -135,7 +135,7 @@ NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
         Nodes.insert(client);
         while (true) {
             auto mes = co_await TReader(client->Sock()).Read();
-            std::cout << "Got message " << mes->Type << "\n";
+//            std::cout << "Got message " << mes->Type << "\n";
             Raft->Process(std::move(mes), client);
             Raft->ProcessTimeout(TimeSource->Now());
             DrainNodes();
