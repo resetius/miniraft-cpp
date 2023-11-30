@@ -234,7 +234,7 @@ public:
 
 private:
     NNet::TSimpleTask InboundServe();
-    NNet::TSimpleTask InboundConnection(NNet::TSocket socket);
+    NNet::TSimpleTask InboundConnection(typename TPoller::TSocket socket);
     NNet::TSimpleTask Idle();
     void DrainNodes();
 

@@ -109,7 +109,7 @@ void TNode<TPoller>::Connect() {
             Connector.destroy();
         }
 
-        Socket = NNet::TSocket(*Address, Poller);
+        Socket = typename TPoller::TSocket(*Address, Poller);
         Connected = false;
         Connector = DoConnect();
     }
@@ -135,7 +135,7 @@ NNet::TTestTask TNode<TPoller>::DoConnect() {
 }
 
 template<typename TPoller>
-NNet::TSimpleTask TRaftServer<TPoller>::InboundConnection(NNet::TSocket socket) {
+NNet::TSimpleTask TRaftServer<TPoller>::InboundConnection(typename TPoller::TSocket socket) {
     try {
         auto client = std::make_shared<TNode<TPoller>>(
             Poller, "client", std::move(socket), TimeSource
