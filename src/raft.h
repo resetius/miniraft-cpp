@@ -67,7 +67,6 @@ struct TResult {
     std::unique_ptr<TVolatileState> NextVolatileState;
     EState NextStateName = EState::NONE;
     TMessageHolder<TMessage> Message;
-    std::vector<TMessageHolder<TAppendEntriesRequest>> Messages;
 };
 
 class TRaft {

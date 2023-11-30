@@ -343,8 +343,7 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         auto mes = NewHoldedMessage(TCommandResponse {.Index = index});
         return std::make_unique<TResult>(TResult {
             .NextState = std::move(nextState),
-            .Message = mes,
-            .Messages = CreateAppendEntries()
+            .Message = mes
         });
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         return OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
@@ -418,11 +417,6 @@ void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, 
             } else {
                 Nodes[messageEx->Dst]->Send(std::move(messageEx));
             }
-        }
-    }
-    if (!result->Messages.empty()) {
-        for (auto&& m : result->Messages) {
-            Nodes[m->Dst]->Send(std::move(m));
         }
     }
     if (result->NextStateName != EState::NONE) {
