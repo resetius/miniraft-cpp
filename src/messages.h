@@ -105,7 +105,9 @@ requires std::derived_from<T, TMessage>
 struct TMessageHolder {
     T* Mes;
     std::shared_ptr<char[]> RawData;
-    std::vector<TMessageHolder<TMessage>> Payload;
+
+    uint32_t PayloadSize;
+    std::shared_ptr<TMessageHolder<TMessage>[]> Payload;
 
     TMessageHolder()
         : Mes(nullptr)
@@ -113,9 +115,13 @@ struct TMessageHolder {
 
     template<typename U>
     requires std::derived_from<U, T>
-    TMessageHolder(U* u, const std::shared_ptr<char[]>& rawData, const std::vector<TMessageHolder<TMessage>>& payload = {})
+    TMessageHolder(U* u,
+        const std::shared_ptr<char[]>& rawData,
+        uint32_t payloadSize = 0,
+        const std::shared_ptr<TMessageHolder<TMessage>[]>& payload = {})
         : Mes(u)
         , RawData(rawData)
+        , PayloadSize(payloadSize)
         , Payload(payload)
     { }
 
@@ -124,8 +130,14 @@ struct TMessageHolder {
     TMessageHolder(const TMessageHolder<U>& other)
         : Mes(other.Mes)
         , RawData(other.RawData)
+        , PayloadSize(other.PayloadSize)
         , Payload(other.Payload)
     { }
+
+    void InitPayload(uint32_t size) {
+        PayloadSize = size;
+        Payload = std::shared_ptr<TMessageHolder<TMessage>[]>(new TMessageHolder<TMessage>[size]);
+    }
 
     T* operator->() {
         return Mes;
@@ -135,7 +147,7 @@ struct TMessageHolder {
         return Mes;
     }
 
-    operator bool() {
+    operator bool() const {
         return !!Mes;
     }
 
@@ -146,38 +158,30 @@ struct TMessageHolder {
     template<typename U>
     requires std::derived_from<U, T>
     TMessageHolder<U> Cast() {
-        return TMessageHolder<U>(static_cast<U*>(Mes), RawData, Payload);
+        return TMessageHolder<U>(static_cast<U*>(Mes), RawData, PayloadSize, Payload);
     }
 
     template<typename U>
     requires std::derived_from<U, T>
     auto Maybe() {
         struct Maybe {
-            U* Mes;
-            std::shared_ptr<char[]> RawData;
-            std::vector<TMessageHolder<TMessage>> Payload;
+            TMessageHolder<TMessage> Mes;
 
             operator bool() const {
-                return Mes != nullptr;
+                return Mes;
             }
 
             TMessageHolder<U> Cast() {
-                if (Mes) {
-                    return TMessageHolder<U>(Mes, RawData, Payload);
+                if (*this) {
+                    return Mes.Cast<U>();
                 }
                 throw std::bad_cast();
             }
         };
 
-        U* dst = Mes->Type == static_cast<uint32_t>(U::MessageType)
-            ? static_cast<U*>(Mes)
-            : nullptr;
-
-        return Maybe {
-            .Mes = dst,
-            .RawData = RawData,
-            .Payload = Payload,
-        };
+        return Mes->Type == static_cast<uint32_t>(U::MessageType)
+            ? Maybe { *this }
+            : Maybe { };
     }
 };
 

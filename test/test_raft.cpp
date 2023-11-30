@@ -82,6 +82,14 @@ std::vector<TMessageHolder<T>> MakeLog(const std::vector<uint64_t>& terms) {
     return entries;
 }
 
+template<typename T>
+void SetPayload(TMessageHolder<T>& dst, const std::vector<TMessageHolder<TMessage>>& payload) {
+    dst.InitPayload(payload.size());
+    for (uint32_t i = 0; i < payload.size(); ++i) {
+        dst.Payload[i] = payload[i];
+    }
+}
+
 void assert_terms(const std::vector<TMessageHolder<TLogEntry>>& log, const std::vector<uint64_t>& terms)
 {
     assert_int_equal(log.size(), terms.size());
@@ -254,7 +262,7 @@ void test_follower_append_entries_7a(void**) {
     mes->PrevLogTerm = 6;
     mes->LeaderCommit = 9;
     mes->Nentries = 1;
-    mes.Payload = MakeLog({6});
+    SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
@@ -284,7 +292,7 @@ void test_follower_append_entries_7b(void**) {
     mes->PrevLogTerm = 4;
     mes->LeaderCommit = 9;
     mes->Nentries = 6;
-    mes.Payload = MakeLog({4,5,5,6,6,6});
+    SetPayload(mes, MakeLog({4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
@@ -314,7 +322,7 @@ void test_follower_append_entries_7c(void**) {
     mes->PrevLogTerm = 6;
     mes->LeaderCommit = 9;
     mes->Nentries = 1;
-    mes.Payload = MakeLog({6});
+    SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
@@ -344,7 +352,7 @@ void test_follower_append_entries_7f(void**) {
     mes->PrevLogTerm = 1;
     mes->LeaderCommit = 9;
     mes->Nentries = 7;
-    mes.Payload = MakeLog({4,4,5,5,6,6,6});
+    SetPayload(mes, MakeLog({4,4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
@@ -411,7 +419,7 @@ void test_candidate_vote_request_small_term(void**) {
     auto onSend = [&](auto message) {
         messages.emplace_back(std::move(message));
     };
- 
+
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
     auto req = NewHoldedMessage<TRequestVoteRequest>();
@@ -439,7 +447,7 @@ void test_candidate_vote_request_ok_term(void**) {
     auto onSend = [&](auto message) {
         messages.emplace_back(std::move(message));
     };
- 
+
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
     auto req = NewHoldedMessage<TRequestVoteRequest>();

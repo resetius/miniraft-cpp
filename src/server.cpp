@@ -24,8 +24,8 @@ NNet::TValueTask<void> TWriter<TSocket>::Write(TMessageHolder<TMessage> message)
         len -= written;
     }
 
-    for (auto&& m : payload) {
-        co_await TWriter(Socket).Write(std::move(m));
+    for (uint32_t i = 0; i < message.PayloadSize; ++i) {
+        co_await TWriter(Socket).Write(std::move(payload[i]));
     }
 
     co_return;
@@ -60,9 +60,10 @@ NNet::TValueTask<TMessageHolder<TMessage>> TReader<TSocket>::Read() {
     auto maybeAppendEntries = mes.Maybe<TAppendEntriesRequest>();
     if (maybeAppendEntries) {
         auto appendEntries = maybeAppendEntries.Cast();
-        mes.Payload.resize(appendEntries->Nentries);
-        for (auto& m : mes.Payload) {
-            m = co_await TReader(Socket).Read();
+        auto nentries = appendEntries->Nentries;
+        mes.InitPayload(nentries);
+        for (uint32_t i = 0; i < nentries; i++) {
+            mes.Payload[i] = co_await TReader(Socket).Read();
         }
     }
     co_return mes;

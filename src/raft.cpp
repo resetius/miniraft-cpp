@@ -171,7 +171,8 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
         success = true;
         auto index = message->PrevLogIndex;
         auto& log = State->Log;
-        for (auto& data : message.Payload) {
+        for (uint32_t i = 0 ; i < message.PayloadSize; i++) {
+            auto& data = message.Payload[i];
             auto entry = data.Cast<TLogEntry>();
             index++;
             // replace or append log entries
@@ -246,15 +247,15 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
             .LeaderId = Id,
             .Nentries = static_cast<uint32_t>(lastIndex - prevIndex),
         });
-    std::vector<TMessageHolder<TMessage>> payload;
-    payload.reserve(lastIndex - prevIndex);
-    for (auto i = prevIndex; i < lastIndex; i++) {
-        payload.push_back(State->Log[i]);
+
+    if (lastIndex - prevIndex > 0) {
+        mes.InitPayload(lastIndex - prevIndex);
+        uint32_t j = 0;
+        for (auto i = prevIndex; i < lastIndex; i++) {
+            mes.Payload[j++] = State->Log[i];
+        }
+        std::cout << "Send " << j << " entries to " << nodeId << "\n";
     }
-    if (!payload.empty()) {
-        std::cout << "Send " << payload.size() << " entries to " << nodeId << "\n";
-    }
-    mes.Payload = std::move(payload);
     return mes;
 }
 

@@ -71,11 +71,12 @@ void test_read_write(void**) {
 void test_read_write_payload(void**) {
     auto mes = NewHoldedMessage<TAppendEntriesRequest>();
     char buf[1024];
+    mes.InitPayload(1337);
     for (int i = 0; i < 1337; i++) {
         snprintf(buf, sizeof(buf), "message_%d_data", i);
-        mes.Payload.push_back(MakeEntry(buf));
+        mes.Payload[i] = MakeEntry(buf);
     }
-    mes->Nentries = mes.Payload.size();
+    mes->Nentries = mes.PayloadSize;
 
     NNet::TLoop<NNet::TPoll> loop;
     NNet::TSocket socket(NNet::TAddress{"127.0.0.1", 8889}, loop.Poller());
