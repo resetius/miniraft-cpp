@@ -21,6 +21,8 @@ struct TPromise
     {
         using promise_type = TPromise<T>;
 
+        ~TTask() { this->destroy(); /*TODO:*/ }
+
         bool await_ready() {
             return this->promise().Value != nullptr;
         }
@@ -40,33 +42,38 @@ struct TPromise
 
     TTask get_return_object() { return { TTask::from_promise(*this) }; }
     std::suspend_never initial_suspend() { return {}; }
-    std::suspend_always final_suspend() noexcept { return {}; }
+    auto final_suspend() noexcept { 
+        struct TAwaitable {
+            bool await_ready() noexcept { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<TPromise<T>> h) noexcept {
+                return h.promise().Caller;
+            }
+            void await_resume() noexcept { }
+        };
+        return TAwaitable {};
+    }
 
     void return_value(const T& t) {
         Value = std::make_shared<T>(t);
-        if (Caller) {
-            Caller.resume();
-        }
     }
 
     void unhandled_exception() {
         Exception = std::current_exception();
-        if (Caller) {
-            Caller.resume();
-        }
     }
 
     std::shared_ptr<T> Value;
     std::exception_ptr Exception;
-    std::coroutine_handle<> Caller;
+    std::coroutine_handle<> Caller = std::noop_coroutine();
 };
 
 template<>
 struct TPromise<void>
 {
-    struct TTask : std::coroutine_handle<TPromise<void>>
+    struct TTask  : std::coroutine_handle<TPromise<void>>
     {
         using promise_type = TPromise<void>;
+
+        ~TTask() { destroy(); /* TODO: */ }
 
         bool await_ready() {
             return this->promise().Ready;
@@ -85,22 +92,29 @@ struct TPromise<void>
 
     TTask get_return_object() { return { TTask::from_promise(*this) }; }
     std::suspend_never initial_suspend() { return {}; }
-    std::suspend_always final_suspend() noexcept { return {}; }
+    auto final_suspend() noexcept { 
+        struct TAwaitable {
+            bool await_ready() noexcept { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<TPromise<void>> h) noexcept {
+                return h.promise().Caller;
+            }
+            void await_resume() noexcept { }
+        };
+        return TAwaitable {};
+    }
+
 
     void return_void() {
         Ready = true;
-        if (Caller) {
-            Caller.resume();
-        }
     }
     void unhandled_exception() {
         Exception = std::current_exception();
-        return_void();
+        Ready = true;
     }
 
     bool Ready = false;
     std::exception_ptr Exception;
-    std::coroutine_handle<> Caller;
+    std::coroutine_handle<> Caller = std::noop_coroutine();
 };
 
 class TReader {

@@ -355,7 +355,10 @@ std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMe
         return OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
     } else if (auto maybeVoteResponse = message.Maybe<TRequestVoteResponse>()) {
         // skip additional votes
+    } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
+        return OnAppendEntries(now, maybeAppendEntries.Cast());
     }
+
     return nullptr;
 }
 
