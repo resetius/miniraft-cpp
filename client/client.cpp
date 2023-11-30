@@ -1,3 +1,4 @@
+#include "coroio/all.hpp"
 #include <messages.h>
 #include <coroio/socket.hpp>
 #include <vector>
@@ -90,11 +91,7 @@ int main(int argc, char** argv) {
 
         }
     }
-#ifdef __linux__
-    using TPoller = NNet::TEPoll;
-#else
-    using TPoller = NNet::TPoll;
-#endif
+    using TPoller = NNet::TDefaultPoller;
     std::shared_ptr<ITimeSource> timeSource = std::make_shared<TTimeSource>();
     NNet::TLoop<TPoller> loop;
     Client(loop.Poller(), NNet::TAddress{hosts[0].Address, hosts[0].Port});

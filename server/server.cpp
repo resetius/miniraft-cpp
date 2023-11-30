@@ -1,3 +1,4 @@
+#include "coroio/all.hpp"
 #include <csignal>
 #include <timesource.h>
 #include <raft.h>
@@ -20,11 +21,7 @@ int main(int argc, char** argv) {
         }
     }
 
-#ifdef __linux__
-    using TPoller = NNet::TEPoll;
-#else
-    using TPoller = NNet::TPoll;
-#endif
+    using TPoller = NNet::TDefaultPoller;
 
     std::shared_ptr<ITimeSource> timeSource = std::make_shared<TTimeSource>();
     NNet::TLoop<TPoller> loop;

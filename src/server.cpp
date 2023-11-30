@@ -199,7 +199,5 @@ NNet::TSimpleTask TRaftServer<TPoller>::Idle() {
     co_return;
 }
 
+template class TRaftServer<NNet::TDefaultPoller>;
 template class TRaftServer<NNet::TPoll>;
-#ifdef __linux__
-template class TRaftServer<NNet::TEPoll>;
-#endif
