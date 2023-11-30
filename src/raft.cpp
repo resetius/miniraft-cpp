@@ -101,16 +101,12 @@ TRaft::TRaft(int node, const TNodeDict& nodes)
     }
 }
 
-std::unique_ptr<TResult> TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message) {
+void TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message) {
     if (message->Term < State->CurrentTerm) {
-        auto reply = NewHoldedMessage<TRequestVoteResponse>();
-        reply->Src = Id;
-        reply->Dst = message->Src;
-        reply->Term = State->CurrentTerm;
-        reply->VoteGranted = false;
-        return std::make_unique<TResult>(TResult {
-            .Message = reply
-        });
+        auto reply = NewHoldedMessage(
+            TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm},
+            TRequestVoteResponse {.VoteGranted = false});
+        Nodes[reply->Dst]->Send(std::move(reply));
     } else if (message->Term == State->CurrentTerm) {
         bool accept = false;
         if (State->VotedFor == 0 || State->VotedFor == message->CandidateId) {
@@ -125,49 +121,29 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(ITimeSource::Time now, TMessageHol
             TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm},
             TRequestVoteResponse {.VoteGranted = accept});
 
-        decltype(VolatileState) nextVolatileState = nullptr;
         if (accept) {
-            nextVolatileState = std::make_unique<TVolatileState>(*VolatileState);
-            nextVolatileState->ElectionDue = MakeElection(now);
+            VolatileState->ElectionDue = MakeElection(now);
+            State->VotedFor = message->CandidateId;
         }
 
-        return std::make_unique<TResult>(TResult {
-            .NextState = accept ? std::make_unique<TState>(TState{
-                .CurrentTerm = State->CurrentTerm,
-                .VotedFor = message->CandidateId,
-                .Log = State->Log
-            }) : nullptr,
-            .NextVolatileState = std::move(nextVolatileState),
-            .Message = reply,
-        });
+        Nodes[reply->Dst]->Send(std::move(reply));
     }
-
-    return nullptr;
 }
 
-std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteResponse> message) {
+void TRaft::OnRequestVote(TMessageHolder<TRequestVoteResponse> message) {
     if (message->VoteGranted && message->Term == State->CurrentTerm) {
         auto votes = VolatileState->Votes;
         votes.insert(message->Src);
 
-        auto nextVolatileState = *VolatileState;
-        nextVolatileState
+        (*VolatileState)
             .SetVotes(votes)
             .MergeRpcDue({{message->Src, ITimeSource::Max}});
-        return std::make_unique<TResult>(TResult {
-            .NextVolatileState = std::make_unique<TVolatileState>(
-                nextVolatileState
-            ),
-        });
     }
-
-    return {};
 }
 
-std::unique_ptr<TResult> TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message) {
+void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message) {
     if (message->Term < State->CurrentTerm) {
-        auto nextVolatileState = *VolatileState;
-        nextVolatileState.ElectionDue = MakeElection(now);
+        VolatileState->ElectionDue = MakeElection(now);
 
         auto reply = NewHoldedMessage(
             TMessageEx {
@@ -179,10 +155,8 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(ITimeSource::Time now, TMessageH
                 .MatchIndex = 0,
                 .Success = false,
             });
-        return std::make_unique<TResult>(TResult {
-            .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
-            .Message = reply,
-        });
+        Nodes[reply->Dst]->Send(std::move(reply));
+        return;
     }
 
     assert(message->Term == State->CurrentTerm);
@@ -190,20 +164,18 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(ITimeSource::Time now, TMessageH
     uint64_t matchIndex = 0;
     uint64_t commitIndex = VolatileState->CommitIndex;
     bool success = false;
-    std::unique_ptr<TState> state;
     if (message->PrevLogIndex == 0 ||
         (message->PrevLogIndex <= State->Log.size()
             && State->LogTerm(message->PrevLogIndex) == message->PrevLogTerm))
     {
         success = true;
         auto index = message->PrevLogIndex;
-        state = std::make_unique<TState>(*State);
-        auto& log = state->Log;
+        auto& log = State->Log;
         for (auto& data : message.Payload) {
             auto entry = data.Cast<TLogEntry>();
             index++;
             // replace or append log entries
-            if (state->LogTerm(index) != entry->Term) {
+            if (State->LogTerm(index) != entry->Term) {
                 while (log.size() > index-1) {
                     log.pop_back();
                 }
@@ -219,42 +191,30 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(ITimeSource::Time now, TMessageH
         TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm},
         TAppendEntriesResponse {.MatchIndex = matchIndex, .Success = success});
 
-    auto nextVolatileState = *VolatileState;
-    nextVolatileState.SetCommitIndex(commitIndex);
-    nextVolatileState.ElectionDue = MakeElection(now);
-    return std::make_unique<TResult>(TResult {
-        .NextState = std::move(state),
-        .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState),
-        .NextStateName = EState::FOLLOWER,
-        .Message = reply,
-    });
+    VolatileState->SetCommitIndex(commitIndex);
+    VolatileState->ElectionDue = MakeElection(now);
+    Become(EState::FOLLOWER);
+    Nodes[reply->Dst]->Send(std::move(reply));
 }
 
-std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
+void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     if (message->Term != State->CurrentTerm) {
-        return nullptr;
+        return;
     }
 
     auto nodeId = message->Src;
     if (message->Success) {
         auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], message->MatchIndex);
-        auto nextVolatileState = *VolatileState;
-        nextVolatileState
+        (*VolatileState)
             .MergeMatchIndex({{nodeId, matchIndex}})
             .MergeNextIndex({{nodeId, message->MatchIndex+1}})
             .CommitAdvance(Nservers, State->Log.size(), *State)
             .MergeRpcDue({{nodeId, ITimeSource::Time{}}});
-        return std::make_unique<TResult>(TResult {
-            .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState)
-        });
     } else {
-        auto nextVolatileState = *VolatileState;
-        nextVolatileState
+        (*VolatileState)
             .MergeNextIndex({{nodeId, std::max((uint64_t)1, VolatileState->NextIndex[nodeId]-1)}})
+            //.MergeNextIndex({{nodeId, 1}})
             .MergeRpcDue({{nodeId, ITimeSource::Time{}}});
-        return std::make_unique<TResult>(TResult {
-            .NextVolatileState = std::make_unique<TVolatileState>(nextVolatileState)
-        });
     }
 }
 
@@ -291,6 +251,9 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     for (auto i = prevIndex; i < lastIndex; i++) {
         payload.push_back(State->Log[i]);
     }
+    if (!payload.empty()) {
+        std::cout << "Send " << payload.size() << " entries to " << nodeId << "\n";
+    }
     mes.Payload = std::move(payload);
     return mes;
 }
@@ -303,57 +266,47 @@ std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() 
     return res;
 }
 
-std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
+void TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
-        return OnRequestVote(now, std::move(maybeRequestVote.Cast()));
+        OnRequestVote(now, std::move(maybeRequestVote.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
-        return OnAppendEntries(now, maybeAppendEntries.Cast());
+        OnAppendEntries(now, maybeAppendEntries.Cast());
     }
-    return nullptr;
 }
 
-std::unique_ptr<TResult> TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
+void TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeResponseVote = message.Maybe<TRequestVoteResponse>()) {
-        return OnRequestVote(std::move(maybeResponseVote.Cast()));
+        OnRequestVote(std::move(maybeResponseVote.Cast()));
     } else if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
-        return OnRequestVote(now, std::move(maybeRequestVote.Cast()));
+        OnRequestVote(now, std::move(maybeRequestVote.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
-        return OnAppendEntries(now, maybeAppendEntries.Cast());
+        OnAppendEntries(now, maybeAppendEntries.Cast());
     }
-    return nullptr;
 }
 
-std::unique_ptr<TResult> TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
+void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
     if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
-        return OnAppendEntries(maybeAppendEntries.Cast());
+        OnAppendEntries(maybeAppendEntries.Cast());
     } else if (auto maybeCommandRequest = message.Maybe<TCommandRequest>()) {
         auto command = maybeCommandRequest.Cast();
-        auto log = State->Log;
+        auto& log = State->Log;
         auto dataSize = command->Len - sizeof(TCommandRequest);
         auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
         memcpy(entry->Data, command->Data, dataSize);
         entry->Term = State->CurrentTerm;
         log.push_back(entry);
         auto index = log.size()-1;
-        auto nextState = std::make_unique<TState>(TState {
-            .CurrentTerm = State->CurrentTerm,
-            .VotedFor = State->VotedFor,
-            .Log = std::move(log),
-        });
-        auto mes = NewHoldedMessage(TCommandResponse {.Index = index});
-        return std::make_unique<TResult>(TResult {
-            .NextState = std::move(nextState),
-            .Message = mes
-        });
+        if (replyTo) {
+            auto mes = NewHoldedMessage(TCommandResponse {.Index = index});
+            waiting.emplace(TWaiting{mes->Index, mes, replyTo});
+        }
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
-        return OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
+        OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
     } else if (auto maybeVoteResponse = message.Maybe<TRequestVoteResponse>()) {
         // skip additional votes
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
-        return OnAppendEntries(now, maybeAppendEntries.Cast());
+        OnAppendEntries(now, maybeAppendEntries.Cast());
     }
-
-    return nullptr;
 }
 
 void TRaft::Become(EState newStateName) {
@@ -374,53 +327,18 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
             }
         }
     }
-    std::unique_ptr<TResult> result;
     switch (StateName) {
     case EState::FOLLOWER:
-        result = Follower(now, std::move(message));
+        Follower(now, std::move(message));
         break;
     case EState::CANDIDATE:
-        result = Candidate(now, std::move(message));
+        Candidate(now, std::move(message));
         break;
     case EState::LEADER:
-        result = Leader(now, std::move(message));
+        Leader(now, std::move(message), replyTo);
         break;
     default:
         throw std::logic_error("Unknown state");
-    }
-
-    ApplyResult(now, std::move(result), replyTo);
-}
-
-void TRaft::ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, const std::shared_ptr<INode>& replyTo) {
-    if (!result) {
-        return;
-    }
-    if (result->NextState) {
-        State = std::move(result->NextState);
-    }
-    if (result->NextVolatileState) {
-        VolatileState = std::move(result->NextVolatileState);
-    }
-    if (result->Message) {
-        if (auto reply = result->Message.Maybe<TCommandResponse>()) {
-            if (replyTo) {
-                auto res = reply.Cast();
-                waiting.emplace(TWaiting{res->Index, res, replyTo});
-            }
-        } else {
-            auto messageEx = result->Message.Cast<TMessageEx>();
-            if (messageEx->Dst == 0) {
-                for (auto& [id, v] : Nodes) {
-                    v->Send(std::move(messageEx));
-                }
-            } else {
-                Nodes[messageEx->Dst]->Send(std::move(messageEx));
-            }
-        }
-    }
-    if (result->NextStateName != EState::NONE) {
-        StateName = result->NextStateName;
     }
 }
 

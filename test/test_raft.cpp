@@ -197,32 +197,6 @@ void test_become_same_func(void**) {
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
-void test_apply_empty_result(void**) {
-    auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3);
-    auto state = raft->GetState();
-    auto volatileState = raft->GetVolatileState();
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
-    raft->ApplyResult(ts->Now(), {});
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
-    assert_true(state == raft->GetState());
-    assert_true(volatileState == raft->GetVolatileState());
-}
-
-void test_apply_state_func_change_result(void**) {
-    auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3);
-    auto state = raft->GetState();
-    auto volatileState = raft->GetVolatileState();
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
-    raft->ApplyResult(ts->Now(), std::make_unique<TResult>(TResult {
-        .NextStateName = EState::CANDIDATE
-    }));
-    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
-    assert_true(state == raft->GetState());
-    assert_true(volatileState == raft->GetVolatileState());
-}
-
 void test_follower_to_candidate_on_timeout(void**) {
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft({}, 3);
@@ -433,8 +407,13 @@ void test_candidate_initiate_election(void**) {
 }
 
 void test_candidate_vote_request_small_term(void**) {
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](auto message) {
+        messages.emplace_back(std::move(message));
+    };
+ 
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3);
+    auto raft = MakeRaft(onSend, 3);
     auto req = NewHoldedMessage<TRequestVoteRequest>();
     req->Src = 2;
     req->Dst = 1;
@@ -442,7 +421,7 @@ void test_candidate_vote_request_small_term(void**) {
     req->CandidateId = 2;
     req->LastLogTerm = 1;
     req->LastLogIndex = 1;
-    auto result = raft->Candidate(ts->Now(), std::move(req));
+    raft->Process(ts->Now(), std::move(req));
     TRequestVoteResponse r;
     r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE);
     r.Len = sizeof(r);
@@ -450,13 +429,19 @@ void test_candidate_vote_request_small_term(void**) {
     r.Dst = 2;
     r.Term = raft->GetState()->CurrentTerm;
     r.VoteGranted = false;
-    assert_message_equal(result->Message, r);
+    assert_int_equal(messages.size(), 1);
+    assert_message_equal(messages[0], r);
     assert_int_equal(raft->GetState()->CurrentTerm, 1);
 }
 
 void test_candidate_vote_request_ok_term(void**) {
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](auto message) {
+        messages.emplace_back(std::move(message));
+    };
+ 
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft({}, 3);
+    auto raft = MakeRaft(onSend, 3);
     auto req = NewHoldedMessage<TRequestVoteRequest>();
     req->Src = 2;
     req->Dst = 1;
@@ -464,7 +449,7 @@ void test_candidate_vote_request_ok_term(void**) {
     req->CandidateId = 2;
     req->LastLogTerm = 1;
     req->LastLogIndex = 1;
-    auto result = raft->Candidate(ts->Now(), std::move(req));
+    raft->Process(ts->Now(), std::move(req));
     TRequestVoteResponse r;
     r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE);
     r.Len = sizeof(r);
@@ -472,7 +457,8 @@ void test_candidate_vote_request_ok_term(void**) {
     r.Dst = 2;
     r.Term = raft->GetState()->CurrentTerm;
     r.VoteGranted = true;
-    assert_message_equal(result->Message, r);
+    assert_int_equal(messages.size(), 1);
+    assert_message_equal(messages[0], r);
     assert_int_equal(raft->GetState()->CurrentTerm, 1);
 }
 
@@ -603,8 +589,6 @@ int main() {
         cmocka_unit_test(test_initial),
         cmocka_unit_test(test_become),
         cmocka_unit_test(test_become_same_func),
-        cmocka_unit_test(test_apply_empty_result),
-        cmocka_unit_test(test_apply_state_func_change_result),
         cmocka_unit_test(test_follower_to_candidate_on_timeout),
         cmocka_unit_test(test_follower_append_entries_small_term),
         cmocka_unit_test(test_follower_append_entries_7a),

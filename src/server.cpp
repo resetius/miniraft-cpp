@@ -179,7 +179,7 @@ NNet::TSimpleTask TRaftServer::Idle() {
         DrainNodes();
         auto t1 = TimeSource->Now();
         if (t1 > t0 + dt) {
-            std::cout << "Idle " << (uint32_t)Raft->CurrentStateName() << "\n";
+            std::cout << "Idle " << (uint32_t)Raft->CurrentStateName() << " " << Raft->GetState()->Log.size() << "\n";
             t0 = t1;
         }
         co_await Poller.Sleep(sleep);

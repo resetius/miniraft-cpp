@@ -62,19 +62,11 @@ enum class EState: int {
     LEADER = 3,
 };
 
-struct TResult {
-    std::unique_ptr<TState> NextState;
-    std::unique_ptr<TVolatileState> NextVolatileState;
-    EState NextStateName = EState::NONE;
-    TMessageHolder<TMessage> Message;
-};
-
 class TRaft {
 public:
     TRaft(int node, const TNodeDict& nodes);
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
-    void ApplyResult(ITimeSource::Time now, std::unique_ptr<TResult> result, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
 
 // ut
@@ -100,16 +92,15 @@ public:
         return Id;
     }
 
-    std::unique_ptr<TResult> Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
-
 private:
-    std::unique_ptr<TResult> Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
-    std::unique_ptr<TResult> Leader(ITimeSource::Time now, TMessageHolder<TMessage> message);
+    void Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
+    void Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
+    void Leader(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo);
 
-    std::unique_ptr<TResult> OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message);
-    std::unique_ptr<TResult> OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
-    std::unique_ptr<TResult> OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
-    std::unique_ptr<TResult> OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
+    void OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message);
+    void OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
+    void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
+    void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
 
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
