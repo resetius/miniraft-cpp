@@ -146,25 +146,22 @@ std::unique_ptr<TResult> TRaft::OnRequestVote(ITimeSource::Time now, TMessageHol
 }
 
 std::unique_ptr<TResult> TRaft::OnRequestVote(TMessageHolder<TRequestVoteResponse> message) {
-    if (message->Term > State->CurrentTerm) {
+    if (message->VoteGranted && message->Term == State->CurrentTerm) {
+        auto votes = VolatileState->Votes;
+        votes.insert(message->Src);
+
+        auto nextVolatileState = *VolatileState;
+        nextVolatileState
+            .SetVotes(votes)
+            .MergeRpcDue({{message->Src, ITimeSource::Max}});
         return std::make_unique<TResult>(TResult {
-            .NextStateName = EState::FOLLOWER
+            .NextVolatileState = std::make_unique<TVolatileState>(
+                nextVolatileState
+            ),
         });
     }
-    auto votes = VolatileState->Votes;
-    if (message->VoteGranted && message->Term == State->CurrentTerm) {
-        votes.insert(message->Src);
-    }
 
-    auto nextVolatileState = *VolatileState;
-    nextVolatileState
-        .SetVotes(votes)
-        .MergeRpcDue({{message->Src, ITimeSource::Max}});
-    return std::make_unique<TResult>(TResult {
-        .NextVolatileState = std::make_unique<TVolatileState>(
-            nextVolatileState
-        ),
-    });
+    return {};
 }
 
 std::unique_ptr<TResult> TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message) {
@@ -261,9 +258,9 @@ std::unique_ptr<TResult> TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesRes
     }
 }
 
-TMessageHolder<TRequestVoteRequest> TRaft::CreateVote() {
+TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
     auto mes = NewHoldedMessage(
-        TMessageEx {.Src = Id, .Dst = 0, .Term = State->CurrentTerm+1},
+        TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm},
         TRequestVoteRequest {
             .LastLogIndex = State->Log.size(),
             .LastLogTerm = State->Log.empty() ? 0 : State->Log.back()->Term,
@@ -307,9 +304,7 @@ std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() 
 }
 
 std::unique_ptr<TResult> TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
-    if (auto maybeResponseVote = message.Maybe<TRequestVoteResponse>()) {
-        return OnRequestVote(std::move(maybeResponseVote.Cast()));
-    } else if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
+    if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
         return OnRequestVote(now, std::move(maybeRequestVote.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
         return OnAppendEntries(now, maybeAppendEntries.Cast());
@@ -453,18 +448,8 @@ void TRaft::CandidateTimeout(ITimeSource::Time now) {
     for (auto& [id, node] : Nodes) {
         if (VolatileState->RpcDue[id] <= now) {
             VolatileState->RpcDue[id] = now + TTimeout::Rpc;
-            node->Send(CreateVote());
+            node->Send(CreateVote(id));
         }
-    }
-    if (VolatileState->ElectionDue <= now) {
-        auto nextVolatileState = std::make_unique<TVolatileState>();
-        for (auto [id, _] : Nodes) {
-            nextVolatileState->NextIndex[id] = 1;
-        }
-        nextVolatileState->ElectionDue = MakeElection(now);
-        VolatileState = std::move(nextVolatileState);
-        State->VotedFor = Id;
-        State->CurrentTerm ++;
     }
 }
 
@@ -484,6 +469,20 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
 }
 
 void TRaft::ProcessTimeout(ITimeSource::Time now) {
+    if (StateName == EState::CANDIDATE || StateName == EState::FOLLOWER) {
+        if (VolatileState->ElectionDue <= now) {
+            auto nextVolatileState = std::make_unique<TVolatileState>();
+            for (auto [id, _] : Nodes) {
+                nextVolatileState->NextIndex[id] = 1;
+            }
+            nextVolatileState->ElectionDue = MakeElection(now);
+            VolatileState = std::move(nextVolatileState);
+            State->VotedFor = Id;
+            State->CurrentTerm ++;
+            Become(EState::CANDIDATE);
+        }
+    }
+
     if (StateName == EState::CANDIDATE) {
         int nvotes = VolatileState->Votes.size()+1;
         std::cout << "Need/total: " << MinVotes << "/" << nvotes << "\n";

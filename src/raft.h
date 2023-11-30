@@ -116,7 +116,7 @@ private:
     void CandidateTimeout(ITimeSource::Time now);
     void FollowerTimeout(ITimeSource::Time now);
 
-    TMessageHolder<TRequestVoteRequest> CreateVote();
+    TMessageHolder<TRequestVoteRequest> CreateVote(uint32_t nodeId);
     std::vector<TMessageHolder<TAppendEntriesRequest>> CreateAppendEntries();
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
     void ProcessWaiting();

@@ -404,9 +404,9 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
 }
 
 void test_candidate_initiate_election(void**) {
-    std::vector<TMessageHolder<TMessage>> messages;
+    std::vector<TMessageHolder<TRequestVoteResponse>> messages;
     auto onSend = [&](auto message) {
-        messages.emplace_back(std::move(message));
+        messages.emplace_back(message.template Cast<TRequestVoteResponse>());
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
@@ -426,7 +426,9 @@ void test_candidate_initiate_election(void**) {
     r.LastLogTerm = 0;
     r.LastLogIndex = 0;
 
+    messages[0]->Dst = 0;
     assert_message_equal(messages[0], r);
+    messages[1]->Dst = 0;
     assert_message_equal(messages[1], r);
 }
 
