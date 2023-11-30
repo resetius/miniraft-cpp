@@ -8,7 +8,7 @@
 #include "messages.h"
 
 template<typename TSocket>
-TPromise<void>::TTask TWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
+NNet::TValueTask<void> TWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
     auto payload = std::move(message.Payload);
     char* p = (char*)message.Mes; // TODO: const char
     uint32_t len = message->Len;
@@ -32,7 +32,7 @@ TPromise<void>::TTask TWriter<TSocket>::Write(TMessageHolder<TMessage> message) 
 }
 
 template<typename TSocket>
-TPromise<TMessageHolder<TMessage>>::TTask TReader<TSocket>::Read() {
+NNet::TValueTask<TMessageHolder<TMessage>> TReader<TSocket>::Read() {
     decltype(TMessage::Type) type;
     decltype(TMessage::Len) len;
     auto s = co_await Socket.ReadSome((char*)&type, sizeof(type));

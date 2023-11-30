@@ -13,110 +13,6 @@
 #include "messages.h"
 #include "raft.h"
 
-
-template<typename T>
-struct TPromise
-{
-    struct TTask : std::coroutine_handle<TPromise<T>>
-    {
-        using promise_type = TPromise<T>;
-
-        ~TTask() { this->destroy(); /*TODO:*/ }
-
-        bool await_ready() {
-            return this->promise().Value != nullptr;
-        }
-
-        void await_suspend(std::coroutine_handle<> caller) {
-            this->promise().Caller = caller;
-        }
-
-        T await_resume() {
-            if (this->promise().Exception) {
-                std::rethrow_exception(this->promise().Exception);
-            } else {
-                return *this->promise().Value;
-            }
-        }
-    };
-
-    TTask get_return_object() { return { TTask::from_promise(*this) }; }
-    std::suspend_never initial_suspend() { return {}; }
-    auto final_suspend() noexcept { 
-        struct TAwaitable {
-            bool await_ready() noexcept { return false; }
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<TPromise<T>> h) noexcept {
-                return h.promise().Caller;
-            }
-            void await_resume() noexcept { }
-        };
-        return TAwaitable {};
-    }
-
-    void return_value(const T& t) {
-        Value = std::make_shared<T>(t);
-    }
-
-    void unhandled_exception() {
-        Exception = std::current_exception();
-    }
-
-    std::shared_ptr<T> Value;
-    std::exception_ptr Exception;
-    std::coroutine_handle<> Caller = std::noop_coroutine();
-};
-
-template<>
-struct TPromise<void>
-{
-    struct TTask  : std::coroutine_handle<TPromise<void>>
-    {
-        using promise_type = TPromise<void>;
-
-        ~TTask() { destroy(); /* TODO: */ }
-
-        bool await_ready() {
-            return this->promise().Ready;
-        }
-
-        void await_suspend(std::coroutine_handle<> caller) {
-            this->promise().Caller = caller;
-        }
-
-        void await_resume() {
-            if (this->promise().Exception) {
-                std::rethrow_exception(this->promise().Exception);
-            }
-        }
-    };
-
-    TTask get_return_object() { return { TTask::from_promise(*this) }; }
-    std::suspend_never initial_suspend() { return {}; }
-    auto final_suspend() noexcept { 
-        struct TAwaitable {
-            bool await_ready() noexcept { return false; }
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<TPromise<void>> h) noexcept {
-                return h.promise().Caller;
-            }
-            void await_resume() noexcept { }
-        };
-        return TAwaitable {};
-    }
-
-
-    void return_void() {
-        Ready = true;
-    }
-    void unhandled_exception() {
-        Exception = std::current_exception();
-        Ready = true;
-    }
-
-    bool Ready = false;
-    std::exception_ptr Exception;
-    std::coroutine_handle<> Caller = std::noop_coroutine();
-};
-
 template<typename TSocket>
 class TReader {
 public:
@@ -124,7 +20,7 @@ public:
         : Socket(socket)
     { }
 
-    TPromise<TMessageHolder<TMessage>>::TTask Read();
+    NNet::TValueTask<TMessageHolder<TMessage>> Read();
 
 private:
     TSocket& Socket;
@@ -137,7 +33,7 @@ public:
         : Socket(socket)
     { }
 
-    TPromise<void>::TTask Write(TMessageHolder<TMessage> message);
+    NNet::TValueTask<void> Write(TMessageHolder<TMessage> message);
 
 private:
     TSocket& Socket;

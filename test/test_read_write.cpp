@@ -18,8 +18,6 @@ extern "C" {
 #include <cmocka.h>
 }
 
-using namespace NNet;
-
 namespace {
 
 TMessageHolder<TLogEntry> MakeEntry(const char* text) {
@@ -36,14 +34,14 @@ TMessageHolder<TLogEntry> MakeEntry(const char* text) {
 void test_read_write(void**) {
     auto mes = MakeEntry("MESSAGE");
 
-    TLoop<TPoll> loop;
-    TSocket socket(TAddress{"127.0.0.1", 8888}, loop.Poller());
+    NNet::TLoop<NNet::TPoll> loop;
+    NNet::TSocket socket(NNet::TAddress{"127.0.0.1", 8888}, loop.Poller());
     socket.Bind();
     socket.Listen();
 
-    TSocket client(TAddress{"127.0.0.1", 8888}, loop.Poller());
+    NNet::TSocket client(NNet::TAddress{"127.0.0.1", 8888}, loop.Poller());
 
-    TTestTask h1 = [](TSocket& client, TMessageHolder<TLogEntry> mes) -> TTestTask
+    NNet::TTestTask h1 = [](NNet::TSocket& client, TMessageHolder<TLogEntry> mes) -> NNet::TTestTask
     {
         co_await client.Connect();
         co_await TWriter(client).Write(std::move(mes));
@@ -51,7 +49,7 @@ void test_read_write(void**) {
     }(client, mes);
 
     TMessageHolder<TMessage> received;
-    TTestTask h2 = [](TSocket& server, TMessageHolder<TMessage>& received) -> TTestTask
+    NNet::TTestTask h2 = [](NNet::TSocket& server, TMessageHolder<TMessage>& received) -> NNet::TTestTask
     {
         auto client = std::move(co_await server.Accept());
         received = co_await TReader(client).Read();
@@ -79,14 +77,14 @@ void test_read_write_payload(void**) {
     }
     mes->Nentries = mes.Payload.size();
 
-    TLoop<TPoll> loop;
-    TSocket socket(TAddress{"127.0.0.1", 8889}, loop.Poller());
+    NNet::TLoop<NNet::TPoll> loop;
+    NNet::TSocket socket(NNet::TAddress{"127.0.0.1", 8889}, loop.Poller());
     socket.Bind();
     socket.Listen();
 
-    TSocket client(TAddress{"127.0.0.1", 8889}, loop.Poller());
+    NNet::TSocket client(NNet::TAddress{"127.0.0.1", 8889}, loop.Poller());
 
-    TTestTask h1 = [](TSocket& client, TMessageHolder<TMessage> mes) -> TTestTask
+    NNet::TTestTask h1 = [](NNet::TSocket& client, TMessageHolder<TMessage> mes) -> NNet::TTestTask
     {
         co_await client.Connect();
         co_await TWriter(client).Write(std::move(mes));
@@ -94,7 +92,7 @@ void test_read_write_payload(void**) {
     }(client, mes);
 
     TMessageHolder<TMessage> received;
-    TTestTask h2 = [](TSocket& server, TMessageHolder<TMessage>& received) -> TTestTask
+    NNet::TTestTask h2 = [](NNet::TSocket& server, TMessageHolder<TMessage>& received) -> NNet::TTestTask
     {
         auto client = std::move(co_await server.Accept());
         received = co_await TReader(client).Read();
