@@ -20,14 +20,20 @@ int main(int argc, char** argv) {
         }
     }
 
+#ifdef __linux__
+    using TPoller = NNet::TEPoll;
+#else
+    using TPoller = NNet::TPoll;
+#endif
+
     std::shared_ptr<ITimeSource> timeSource = std::make_shared<TTimeSource>();
-    NNet::TLoop<NNet::TPoll> loop;
+    NNet::TLoop<TPoller> loop;
 
     for (auto& host : hosts) {
         if (host.Id == id) {
             myHost = host;
         } else {
-            nodes[host.Id] = std::make_shared<TNode>(
+            nodes[host.Id] = std::make_shared<TNode<TPoller>>(
                 loop.Poller(),
                 std::to_string(host.Id),
                 NNet::TAddress{host.Address, host.Port},

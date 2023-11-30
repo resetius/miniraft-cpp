@@ -117,28 +117,30 @@ struct TPromise<void>
     std::coroutine_handle<> Caller = std::noop_coroutine();
 };
 
+template<typename TSocket>
 class TReader {
 public:
-    TReader(NNet::TPoll::TSocket& socket)
+    TReader(TSocket& socket)
         : Socket(socket)
     { }
 
     TPromise<TMessageHolder<TMessage>>::TTask Read();
 
 private:
-    NNet::TPoll::TSocket& Socket;
+    TSocket& Socket;
 };
 
+template<typename TSocket>
 class TWriter {
 public:
-    TWriter(NNet::TPoll::TSocket& socket)
+    TWriter(TSocket& socket)
         : Socket(socket)
     { }
 
     TPromise<void>::TTask Write(TMessageHolder<TMessage> message);
 
 private:
-    NNet::TPoll::TSocket& Socket;
+    TSocket& Socket;
 };
 
 struct THost {
@@ -166,16 +168,17 @@ struct THost {
     }
 };
 
+template<typename TPoller>
 class TNode: public INode {
 public:
-    TNode(NNet::TPoll& poller, const std::string& name, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
+    TNode(TPoller& poller, const std::string& name, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
         : Poller(poller)
         , Name(name)
         , Address(address)
         , TimeSource(ts)
     { }
 
-    TNode(NNet::TPoll& poller, const std::string& name, NNet::TSocket socket, const std::shared_ptr<ITimeSource>& ts)
+    TNode(TPoller& poller, const std::string& name, typename TPoller::TSocket socket, const std::shared_ptr<ITimeSource>& ts)
         : Poller(poller)
         , Name(name)
         , Socket(std::move(socket))
@@ -185,7 +188,7 @@ public:
 
     void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
-    NNet::TSocket& Sock() {
+    typename TPoller::TSocket& Sock() {
         return Socket;
     }
 
@@ -195,11 +198,11 @@ private:
     NNet::TTestTask DoDrain();
     NNet::TTestTask DoConnect();
 
-    NNet::TPoll& Poller;
+    TPoller& Poller;
     std::string Name;
     std::optional<NNet::TAddress> Address;
     std::shared_ptr<ITimeSource> TimeSource;
-    NNet::TPoll::TSocket Socket;
+    typename TPoller::TSocket Socket;
     bool Connected = false;
 
     std::coroutine_handle<> Drainer;
@@ -208,10 +211,11 @@ private:
     std::vector<TMessageHolder<TMessage>> Messages;
 };
 
+template<typename TPoller>
 class TRaftServer {
 public:
     TRaftServer(
-        NNet::TPoll& poller,
+        TPoller& poller,
         NNet::TAddress address,
         const std::shared_ptr<TRaft>& raft,
         const TNodeDict& nodes,
@@ -234,8 +238,8 @@ private:
     NNet::TSimpleTask Idle();
     void DrainNodes();
 
-    NNet::TPoll& Poller;
-    NNet::TPoll::TSocket Socket;
+    TPoller& Poller;
+    typename TPoller::TSocket Socket;
     std::shared_ptr<TRaft> Raft;
     std::unordered_set<std::shared_ptr<INode>> Nodes;
     std::shared_ptr<ITimeSource> TimeSource;

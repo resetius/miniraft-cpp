@@ -7,7 +7,8 @@
 #include "server.h"
 #include "messages.h"
 
-TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
+template<typename TSocket>
+TPromise<void>::TTask TWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
     auto payload = std::move(message.Payload);
     char* p = (char*)message.Mes; // TODO: const char
     uint32_t len = message->Len;
@@ -30,7 +31,8 @@ TPromise<void>::TTask TWriter::Write(TMessageHolder<TMessage> message) {
     co_return;
 }
 
-TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
+template<typename TSocket>
+TPromise<TMessageHolder<TMessage>>::TTask TReader<TSocket>::Read() {
     decltype(TMessage::Type) type;
     decltype(TMessage::Len) len;
     auto s = co_await Socket.ReadSome((char*)&type, sizeof(type));
@@ -66,11 +68,13 @@ TPromise<TMessageHolder<TMessage>>::TTask TReader::Read() {
     co_return mes;
 }
 
-void TNode::Send(TMessageHolder<TMessage> message) {
+template<typename TPoller>
+void TNode<TPoller>::Send(TMessageHolder<TMessage> message) {
     Messages.emplace_back(std::move(message));
 }
 
-void TNode::Drain() {
+template<typename TPoller>
+void TNode<TPoller>::Drain() {
     if (!Connected) {
         Connect();
         return;
@@ -83,7 +87,8 @@ void TNode::Drain() {
     }
 }
 
-NNet::TTestTask TNode::DoDrain() {
+template<typename TPoller>
+NNet::TTestTask TNode<TPoller>::DoDrain() {
     auto tosend = std::move(Messages);
     try {
         for (auto&& m : tosend) {
@@ -97,7 +102,8 @@ NNet::TTestTask TNode::DoDrain() {
     co_return;
 }
 
-void TNode::Connect() {
+template<typename TPoller>
+void TNode<TPoller>::Connect() {
     if (Address && (!Connector || Connector.done())) {
         if (Connector && Connector.done()) {
             Connector.destroy();
@@ -109,7 +115,8 @@ void TNode::Connect() {
     }
 }
 
-NNet::TTestTask TNode::DoConnect() {
+template<typename TPoller>
+NNet::TTestTask TNode<TPoller>::DoConnect() {
     std::cout << "Connecting " << Name << "\n";
     while (!Connected) {
         try {
@@ -127,9 +134,10 @@ NNet::TTestTask TNode::DoConnect() {
     co_return;
 }
 
-NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
+template<typename TPoller>
+NNet::TSimpleTask TRaftServer<TPoller>::InboundConnection(NNet::TSocket socket) {
     try {
-        auto client = std::make_shared<TNode>(
+        auto client = std::make_shared<TNode<TPoller>>(
             Poller, "client", std::move(socket), TimeSource
         );
         Nodes.insert(client);
@@ -146,18 +154,21 @@ NNet::TSimpleTask TRaftServer::InboundConnection(NNet::TSocket socket) {
     co_return;
 }
 
-void TRaftServer::Serve() {
+template<typename TPoller>
+void TRaftServer<TPoller>::Serve() {
     Idle();
     InboundServe();
 }
 
-void TRaftServer::DrainNodes() {
+template<typename TPoller>
+void TRaftServer<TPoller>::DrainNodes() {
     for (const auto& node : Nodes) {
         node->Drain();
     }
 }
 
-NNet::TSimpleTask TRaftServer::InboundServe() {
+template<typename TPoller>
+NNet::TSimpleTask TRaftServer<TPoller>::InboundServe() {
     std::cout << "Bind\n";
     Socket.Bind();
     std::cout << "Listen\n";
@@ -170,7 +181,8 @@ NNet::TSimpleTask TRaftServer::InboundServe() {
     co_return;
 }
 
-NNet::TSimpleTask TRaftServer::Idle() {
+template<typename TPoller>
+NNet::TSimpleTask TRaftServer<TPoller>::Idle() {
     auto t0 = TimeSource->Now();
     auto dt = std::chrono::milliseconds(2000);
     auto sleep = std::chrono::milliseconds(100);
@@ -186,3 +198,8 @@ NNet::TSimpleTask TRaftServer::Idle() {
     }
     co_return;
 }
+
+template class TRaftServer<NNet::TPoll>;
+#ifdef __linux__
+template class TRaftServer<NNet::TEPoll>;
+#endif

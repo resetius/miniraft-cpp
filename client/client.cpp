@@ -90,8 +90,13 @@ int main(int argc, char** argv) {
 
         }
     }
+#ifdef __linux__
+    using TPoller = NNet::TEPoll;
+#else
+    using TPoller = NNet::TPoll;
+#endif
     std::shared_ptr<ITimeSource> timeSource = std::make_shared<TTimeSource>();
-    NNet::TLoop<NNet::TPoll> loop;
+    NNet::TLoop<TPoller> loop;
     Client(loop.Poller(), NNet::TAddress{hosts[0].Address, hosts[0].Port});
     loop.Loop();
     return 0;
