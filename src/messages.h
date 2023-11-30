@@ -35,9 +35,9 @@ struct TLogEntry: public TMessage {
 };
 
 struct TMessageEx: public TMessage {
-    uint32_t Src;
-    uint32_t Dst;
-    uint64_t Term;
+    uint32_t Src = 0;
+    uint32_t Dst = 0;
+    uint64_t Term = 0;
 };
 
 static_assert(sizeof(TMessageEx) == sizeof(TMessage)+16);
@@ -62,11 +62,11 @@ static_assert(sizeof(TRequestVoteResponse) == sizeof(TMessageEx)+8);
 
 struct TAppendEntriesRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::APPEND_ENTRIES_REQUEST;
-    uint64_t PrevLogIndex;
-    uint64_t PrevLogTerm;
-    uint64_t LeaderCommit;
-    uint32_t LeaderId;
-    uint32_t Nentries;
+    uint64_t PrevLogIndex = 0;
+    uint64_t PrevLogTerm = 0;
+    uint64_t LeaderCommit = 0;
+    uint32_t LeaderId = 0;
+    uint32_t Nentries = 0;
 };
 
 static_assert(sizeof(TAppendEntriesRequest) == sizeof(TMessageEx) + 32);
