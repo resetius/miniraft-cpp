@@ -261,14 +261,6 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     return mes;
 }
 
-std::vector<TMessageHolder<TAppendEntriesRequest>> TRaft::CreateAppendEntries() {
-    std::vector<TMessageHolder<TAppendEntriesRequest>> res;
-    for (auto [nodeId, _] : Nodes) {
-        res.emplace_back(CreateAppendEntries(nodeId));
-    }
-    return res;
-}
-
 void TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeRequestVote.Cast()));

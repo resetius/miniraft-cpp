@@ -108,7 +108,6 @@ private:
     void FollowerTimeout(ITimeSource::Time now);
 
     TMessageHolder<TRequestVoteRequest> CreateVote(uint32_t nodeId);
-    std::vector<TMessageHolder<TAppendEntriesRequest>> CreateAppendEntries();
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
     void ProcessWaiting();
     ITimeSource::Time MakeElection(ITimeSource::Time now);
