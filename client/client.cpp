@@ -73,6 +73,65 @@ private:
     std::string_view View;
 };
 
+struct TZeroCopyLineSplitter {
+public:
+    TZeroCopyLineSplitter(int maxLen)
+        : WPos(0)
+        , RPos(0)
+        , Size(0)
+        , Cap(maxLen * 2)
+        , Data(Cap, 0)
+        , View(Data)
+    { }
+
+    TLine Pop() {
+        auto end = View.substr(RPos, Size);
+        auto begin = View.substr(0, Size - end.size());
+
+        auto p1 = end.find('\n');
+        if (p1 == std::string_view::npos) {
+            auto p2 = begin.find('\n');
+            if (p2 == std::string_view::npos) {
+                return {};
+            }
+
+            RPos = p2 + 1;
+            Size -= end.size() + p2 + 1;
+            return TLine { end, begin.substr(0, p2 + 1) };
+        } else {
+            RPos += p1 + 1;
+            Size -= p1 + 1;
+            return TLine { end.substr(0, p1 + 1), {} };
+        }
+    }
+
+    std::string_view Acquire(size_t size) {
+        size = std::min(size, Cap - Size);
+        if (size == 0) {
+            throw std::runtime_error("Overflow");
+        }
+        auto first = std::min(size, Cap - WPos);
+        if (first) {
+            return {&Data[WPos], first};
+        } else {
+            return {&Data[0], size};
+        }
+    }
+
+    void Commit(size_t size) {
+        WPos = (WPos + size) % Cap;
+        Size += size;
+    }
+
+private:
+    size_t WPos;
+    size_t RPos;
+    size_t Size;
+    size_t Cap;
+    std::string Data;
+    std::string_view View;
+};
+
 template<typename Poller>
 NNet::TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
     try {
@@ -92,7 +151,7 @@ template<typename Poller>
 NNet::TSimpleTask Client(Poller& poller, NNet::TAddress addr) {
     typename Poller::TSocket socket(std::move(addr), poller);
     NNet::TSocket input{NNet::TAddress{}, 0, poller}; // stdin
-    TLineSplitter splitter(2 * 1024);
+    TZeroCopyLineSplitter splitter(2 * 1024);
     co_await socket.Connect();
     std::cout << "Connected\n";
     char buf[1024];
@@ -100,13 +159,14 @@ NNet::TSimpleTask Client(Poller& poller, NNet::TAddress addr) {
 
     auto reader = ClientReader(poller, socket);
 
+    std::string_view buffer;
     TLine line;
     TCommandRequest header;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
 
     try {
-        while (size && (size = co_await input.ReadSome(buf, sizeof(buf)))) {
-            splitter.Push(buf, size);
+        while (buffer = splitter.Acquire(1024), (size && (size = co_await input.ReadSome((char*)&buffer[0], buffer.size())))) {
+            splitter.Commit(size);
 
             while ((line = splitter.Pop())) {
                 while (inflight >= maxInflight) {
