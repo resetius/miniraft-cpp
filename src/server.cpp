@@ -90,16 +90,17 @@ void TNode<TPoller>::Drain() {
 
 template<typename TPoller>
 NNet::TTestTask TNode<TPoller>::DoDrain() {
-    auto tosend = std::move(Messages);
     try {
-        for (auto&& m : tosend) {
-            co_await TWriter(Socket).Write(std::move(m));
+        while (!Messages.empty()) {
+            auto tosend = std::move(Messages); Messages.clear();
+            for (auto&& m : tosend) {
+                co_await TWriter(Socket).Write(std::move(m));
+            }
         }
     } catch (const std::exception& ex) {
         std::cout << "Error on write: " << ex.what() << "\n";
         Connect();
     }
-    Messages.clear();
     co_return;
 }
 
