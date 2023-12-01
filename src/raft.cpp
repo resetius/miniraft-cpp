@@ -211,11 +211,13 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             .MergeNextIndex({{nodeId, message->MatchIndex+1}})
             .CommitAdvance(Nservers, State->Log.size(), *State)
             .MergeRpcDue({{nodeId, ITimeSource::Time{}}});
+        VolatileState->BatchSize[nodeId] = 1024;
     } else {
         (*VolatileState)
             .MergeNextIndex({{nodeId, std::max((uint64_t)1, VolatileState->NextIndex[nodeId]-1)}})
             //.MergeNextIndex({{nodeId, 1}})
             .MergeRpcDue({{nodeId, ITimeSource::Time{}}});
+        VolatileState->BatchSize[nodeId] = 1;
     }
 }
 
@@ -231,7 +233,7 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
 }
 
 TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId) {
-    static constexpr int batchSize = 128;
+    int batchSize = std::max(1, VolatileState->BatchSize[nodeId]);
     auto prevIndex = VolatileState->NextIndex[nodeId] - 1;
     auto lastIndex = std::min(prevIndex+batchSize, (uint64_t)State->Log.size());
     if (VolatileState->MatchIndex[nodeId]+1 < VolatileState->NextIndex[nodeId]) {

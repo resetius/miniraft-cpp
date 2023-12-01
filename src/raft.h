@@ -43,6 +43,7 @@ struct TVolatileState {
     std::unordered_set<uint32_t> Votes;
     std::unordered_map<uint32_t, ITimeSource::Time> HeartbeatDue;
     std::unordered_map<uint32_t, ITimeSource::Time> RpcDue;
+    std::unordered_map<uint32_t, int> BatchSize;
     ITimeSource::Time ElectionDue;
 
     TVolatileState& SetVotes(std::unordered_set<uint32_t>& votes);
