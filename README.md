@@ -43,11 +43,13 @@ MiniRaft-CPP is an implementation of the Raft consensus algorithm using C++20. T
    ```
 
 ### Running the Application
-- Start the server: 
+- Start the servers: 
   ```
-  ./server [options]
+  ./server --id 1 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
+  ./server --id 2 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
+  ./server --id 3 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
   ```
-- Run the client: 
+- Run the client (the client can now only work with the leader): 
   ```
-  ./client [options]
+  ./client --node 127.0.0.1:8001:1
   ```
