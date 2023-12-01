@@ -7,24 +7,68 @@
 uint64_t inflight = 0;
 uint64_t maxInflight = 128;
 
-struct TLineSplitter {
-public:
-    std::string Pop() {
-        size_t p = data.find('\n');
-        std::string line;
-        if (p != std::string::npos) {
-            line = data.substr(0, p+1);
-            data = data.substr(p+1);
-        }
-        return line;
+struct TLine {
+    std::string_view Part1;
+    std::string_view Part2;
+
+    size_t Size() const {
+        return Part1.size() + Part2.size();
     }
 
-    void Push(const char* buf, ssize_t size) {
-        data += std::string_view(buf, size);
+    operator bool() const {
+        return !Part1.empty();
+    }
+};
+
+struct TLineSplitter {
+public:
+    TLineSplitter(int maxLen)
+        : WPos(0)
+        , RPos(0)
+        , Size(0)
+        , Cap(maxLen * 2)
+        , Data(Cap, 0)
+        , View(Data)
+    { }
+
+    TLine Pop() {
+        auto end = View.substr(RPos, Size);
+        auto begin = View.substr(0, Size - end.size());
+
+        auto p1 = end.find('\n');
+        if (p1 == std::string_view::npos) {
+            auto p2 = begin.find('\n');
+            if (p2 == std::string_view::npos) {
+                return {};
+            }
+
+            RPos = p2 + 1;
+            return TLine { end, begin.substr(0, p2 + 1) };
+        } else {
+            RPos += p1 + 1;
+            return TLine { end.substr(0, p1 + 1), {} };
+        }
+    }
+
+    void Push(const char* buf, size_t size) {
+        if (Size + size > Data.size()) {
+            throw std::runtime_error("Overflow");
+        }
+
+        auto first = std::min(size, Cap - WPos);
+        memcpy(&Data[WPos], buf, first);
+        memcpy(&Data[0], buf + first, std::max<size_t>(0, size - first));
+        WPos = (WPos + size) % Cap;
+        Size = Size + size;
     }
 
 private:
-    std::string data;
+    size_t WPos;
+    size_t RPos;
+    size_t Size;
+    size_t Cap;
+    std::string Data;
+    std::string_view View;
 };
 
 template<typename Poller>
@@ -46,32 +90,36 @@ template<typename Poller>
 NNet::TSimpleTask Client(Poller& poller, NNet::TAddress addr) {
     typename Poller::TSocket socket(std::move(addr), poller);
     NNet::TSocket input{NNet::TAddress{}, 0, poller}; // stdin
-    TLineSplitter splitter;
+    TLineSplitter splitter(2 * 1024);
     co_await socket.Connect();
     std::cout << "Connected\n";
     char buf[1024];
-    std::string line;
     ssize_t size = 1;
 
     auto reader = ClientReader(poller, socket);
 
+    TLine line;
+    TCommandRequest header;
+    header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
+
     try {
         while (size && (size = co_await input.ReadSome(buf, sizeof(buf)))) {
             splitter.Push(buf, size);
-            auto line = splitter.Pop();
-            if (line.empty()) {
-                continue;
+
+            while ((line = splitter.Pop())) {
+                while (inflight >= maxInflight) {
+                    co_await poller.Sleep(std::chrono::milliseconds(0));
+                }
+
+                inflight++;
+
+                //std::cout << "Sending " << line.Size() << " bytes: '" << line.Part1 << line.Part2 << "'\n";
+                std::cout << "Sending\n";
+                header.Len = sizeof(header) + line.Size();
+                co_await NNet::TByteWriter(socket).Write(&header, sizeof(header));
+                co_await NNet::TByteWriter(socket).Write(line.Part1.data(), line.Part1.size());
+                co_await NNet::TByteWriter(socket).Write(line.Part2.data(), line.Part2.size());
             }
-            auto mes = NewHoldedMessage<TCommandRequest>(
-                sizeof(TCommandRequest) + line.size()
-            );
-            memcpy(mes->Data, line.c_str(), line.size());
-            std::cout << "Sending\n";
-            while (inflight >= maxInflight) {
-                co_await poller.Sleep(std::chrono::milliseconds(0));
-            }
-            inflight++;
-            co_await TWriter(socket).Write(std::move(mes));
         }
     } catch (const std::exception& ex) {
         std::cout << "Exception: " << ex.what() << "\n";
