@@ -46,14 +46,16 @@ struct TVolatileState {
     std::unordered_map<uint32_t, int> BatchSize;
     ITimeSource::Time ElectionDue;
 
-    TVolatileState& SetVotes(std::unordered_set<uint32_t>& votes);
+    TVolatileState& Vote(uint32_t id);
     TVolatileState& SetLastApplied(int index);
     TVolatileState& CommitAdvance(int nservers, int lastIndex, const TState& state);
     TVolatileState& SetCommitIndex(int index);
-    TVolatileState& MergeNextIndex(const std::unordered_map<int, uint64_t>& nextIndex);
-    TVolatileState& MergeMatchIndex(const std::unordered_map<int, uint64_t>& matchIndex);
-    TVolatileState& MergeHearbeatDue(const std::unordered_map<int, ITimeSource::Time>& heartbeatDue);
-    TVolatileState& MergeRpcDue(const std::unordered_map<int, ITimeSource::Time>& rpcDue);
+    TVolatileState& SetElectionDue(ITimeSource::Time);
+    TVolatileState& SetNextIndex(uint32_t id, uint64_t nextIndex);
+    TVolatileState& SetMatchIndex(uint32_t id, uint64_t matchIndex);
+    TVolatileState& SetHearbeatDue(uint32_t id, ITimeSource::Time heartbeatDue);
+    TVolatileState& SetRpcDue(uint32_t id, ITimeSource::Time rpcDue);
+    TVolatileState& SetBatchSize(uint32_t id, int size);
 };
 
 enum class EState: int {

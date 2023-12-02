@@ -24,9 +24,14 @@ static uint32_t rand_(uint32_t* seed) {
 
 } // namespace
 
-TVolatileState& TVolatileState::SetVotes(std::unordered_set<uint32_t>& votes)
+TVolatileState& TVolatileState::SetElectionDue(ITimeSource::Time due) {
+    ElectionDue = due;
+    return *this;
+}
+
+TVolatileState& TVolatileState::Vote(uint32_t nodeId)
 {
-    Votes = votes;
+    Votes.insert(nodeId);
     return *this;
 }
 
@@ -48,35 +53,33 @@ TVolatileState& TVolatileState::CommitAdvance(int nservers, int lastIndex, const
     return *this;
 }
 
-TVolatileState& TVolatileState::MergeNextIndex(const std::unordered_map<int, uint64_t>& nextIndex)
+TVolatileState& TVolatileState::SetNextIndex(uint32_t id, uint64_t nextIndex)
 {
-    for (const auto& [k, v] : nextIndex) {
-        NextIndex[k] = v;
-    }
+    NextIndex[id] = nextIndex;
     return *this;
 }
 
-TVolatileState& TVolatileState::MergeMatchIndex(const std::unordered_map<int, uint64_t>& matchIndex)
+TVolatileState& TVolatileState::SetMatchIndex(uint32_t id, uint64_t matchIndex)
 {
-    for (const auto& [k, v] : matchIndex) {
-        MatchIndex[k] = v;
-    }
+    MatchIndex[id] = matchIndex;
     return *this;
 }
 
-TVolatileState& TVolatileState::MergeHearbeatDue(const std::unordered_map<int, ITimeSource::Time>& heartbeatDue)
+TVolatileState& TVolatileState::SetHearbeatDue(uint32_t id, ITimeSource::Time heartbeatDue)
 {
-    for (const auto& [k, v] : heartbeatDue) {
-        HeartbeatDue[k] = v;
-    }
+    HeartbeatDue[id] = heartbeatDue;
     return *this;
 }
 
-TVolatileState& TVolatileState::MergeRpcDue(const std::unordered_map<int, ITimeSource::Time>& rpcDue)
+TVolatileState& TVolatileState::SetRpcDue(uint32_t id, ITimeSource::Time rpcDue)
 {
-    for (const auto& [k, v] : rpcDue) {
-        RpcDue[k] = v;
-    }
+    RpcDue[id] = rpcDue;
+    return *this;
+}
+
+TVolatileState& TVolatileState::SetBatchSize(uint32_t id, int size)
+{
+    BatchSize[id] = size;
     return *this;
 }
 
@@ -132,12 +135,9 @@ void TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequ
 
 void TRaft::OnRequestVote(TMessageHolder<TRequestVoteResponse> message) {
     if (message->VoteGranted && message->Term == State->CurrentTerm) {
-        auto votes = VolatileState->Votes;
-        votes.insert(message->Src);
-
         (*VolatileState)
-            .SetVotes(votes)
-            .MergeRpcDue({{message->Src, ITimeSource::Max}});
+            .Vote(message->Src)
+            .SetRpcDue(message->Src, ITimeSource::Max);
     }
 }
 
@@ -192,8 +192,9 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
         TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm},
         TAppendEntriesResponse {.MatchIndex = matchIndex, .Success = success});
 
-    VolatileState->SetCommitIndex(commitIndex);
-    VolatileState->ElectionDue = MakeElection(now);
+    (*VolatileState)
+        .SetCommitIndex(commitIndex)
+        .SetElectionDue(MakeElection(now));
     Become(EState::FOLLOWER);
     Nodes[reply->Dst]->Send(std::move(reply));
 }
@@ -207,17 +208,16 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     if (message->Success) {
         auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], message->MatchIndex);
         (*VolatileState)
-            .MergeMatchIndex({{nodeId, matchIndex}})
-            .MergeNextIndex({{nodeId, message->MatchIndex+1}})
             .CommitAdvance(Nservers, State->Log.size(), *State)
-            .MergeRpcDue({{nodeId, ITimeSource::Time{}}});
-        VolatileState->BatchSize[nodeId] = 1024;
+            .SetMatchIndex(nodeId, matchIndex)
+            .SetNextIndex(nodeId, message->MatchIndex+1)
+            .SetRpcDue(nodeId, ITimeSource::Time{})
+            .SetBatchSize(nodeId, 1024);
     } else {
         (*VolatileState)
-            .MergeNextIndex({{nodeId, std::max((uint64_t)1, VolatileState->NextIndex[nodeId]-1)}})
-            //.MergeNextIndex({{nodeId, 1}})
-            .MergeRpcDue({{nodeId, ITimeSource::Time{}}});
-        VolatileState->BatchSize[nodeId] = 1;
+            .SetNextIndex(nodeId, std::max((uint64_t)1, VolatileState->NextIndex[nodeId]-1))
+            .SetRpcDue(nodeId, ITimeSource::Time{})
+            .SetBatchSize(nodeId, 1);
     }
 }
 
