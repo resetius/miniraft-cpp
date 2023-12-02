@@ -26,9 +26,9 @@ TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
 
 template<typename Poller>
 TSimpleTask Client(Poller& poller, TAddress addr) {
-    typename Poller::TSocket socket(std::move(addr), poller);
+    using TSocket = typename Poller::TSocket;
+    TSocket socket(std::move(addr), poller);
     TSocket input{TAddress{}, 0, poller}; // stdin
-    TZeroCopyLineSplitter splitter(2 * 1024);
     co_await socket.Connect();
     std::cout << "Connected\n";
     char buf[1024];
@@ -36,29 +36,25 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
 
     auto reader = ClientReader(poller, socket);
 
-    std::span<char> buffer;
     TLine line;
     TCommandRequest header;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
+    auto lineReader = TLineReader<TSocket>(input, 1024, 1024);
 
     try {
-        while (buffer = splitter.Acquire(1024), (size && (size = co_await input.ReadSome(buffer.data(), buffer.size())))) {
-            splitter.Commit(size);
-
-            while ((line = splitter.Pop())) {
-                while (inflight >= maxInflight) {
-                    co_await poller.Sleep(std::chrono::milliseconds(0));
-                }
-
-                inflight++;
-
-                //std::cout << "Sending " << line.Size() << " bytes: '" << line.Part1 << line.Part2 << "'\n";
-                std::cout << "Sending\n";
-                header.Len = sizeof(header) + line.Size();
-                co_await TByteWriter(socket).Write(&header, sizeof(header));
-                co_await TByteWriter(socket).Write(line.Part1.data(), line.Part1.size());
-                co_await TByteWriter(socket).Write(line.Part2.data(), line.Part2.size());
+        while (line = co_await lineReader.Read()) {
+            while (inflight >= maxInflight) {
+                co_await poller.Sleep(std::chrono::milliseconds(0));
             }
+
+            inflight++;
+
+            //std::cout << "Sending " << line.Size() << " bytes: '" << line.Part1 << line.Part2 << "'\n";
+            std::cout << "Sending\n";
+            header.Len = sizeof(header) + line.Size();
+            co_await TByteWriter(socket).Write(&header, sizeof(header));
+            co_await TByteWriter(socket).Write(line.Part1.data(), line.Part1.size());
+            co_await TByteWriter(socket).Write(line.Part2.data(), line.Part2.size());
         }
     } catch (const std::exception& ex) {
         std::cout << "Exception: " << ex.what() << "\n";
