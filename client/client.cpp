@@ -36,13 +36,13 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
 
     auto reader = ClientReader(poller, socket);
 
-    std::string_view buffer;
+    std::span<char> buffer;
     TLine line;
     TCommandRequest header;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
 
     try {
-        while (buffer = splitter.Acquire(1024), (size && (size = co_await input.ReadSome((char*)&buffer[0], buffer.size())))) {
+        while (buffer = splitter.Acquire(1024), (size && (size = co_await input.ReadSome(buffer.data(), buffer.size())))) {
             splitter.Commit(size);
 
             while ((line = splitter.Pop())) {
