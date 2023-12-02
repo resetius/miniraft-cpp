@@ -55,9 +55,9 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
                 //std::cout << "Sending " << line.Size() << " bytes: '" << line.Part1 << line.Part2 << "'\n";
                 std::cout << "Sending\n";
                 header.Len = sizeof(header) + line.Size();
-                co_await NNet::TByteWriter(socket).Write(&header, sizeof(header));
-                co_await NNet::TByteWriter(socket).Write(line.Part1.data(), line.Part1.size());
-                co_await NNet::TByteWriter(socket).Write(line.Part2.data(), line.Part2.size());
+                co_await TByteWriter(socket).Write(&header, sizeof(header));
+                co_await TByteWriter(socket).Write(line.Part1.data(), line.Part1.size());
+                co_await TByteWriter(socket).Write(line.Part2.data(), line.Part2.size());
             }
         }
     } catch (const std::exception& ex) {
