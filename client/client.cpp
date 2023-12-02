@@ -44,6 +44,7 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
     TCommandRequest header;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
     auto lineReader = TLineReader<TSocket>(input, 1024, 1024);
+    auto byteWriter = TByteWriter(socket);
 
     try {
         while ((line = co_await lineReader.Read())) {
@@ -57,9 +58,9 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
             //std::cout << "Sending\n";
             header.Len = sizeof(header) + line.Size();
             times.push(timeSource.Now());
-            co_await TByteWriter(socket).Write(&header, sizeof(header));
-            co_await TByteWriter(socket).Write(line.Part1.data(), line.Part1.size());
-            co_await TByteWriter(socket).Write(line.Part2.data(), line.Part2.size());
+            co_await byteWriter.Write(&header, sizeof(header));
+            co_await byteWriter.Write(line.Part1.data(), line.Part1.size());
+            co_await byteWriter.Write(line.Part2.data(), line.Part2.size());
         }
     } catch (const std::exception& ex) {
         std::cout << "Exception: " << ex.what() << "\n";
