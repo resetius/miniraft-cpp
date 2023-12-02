@@ -1,11 +1,13 @@
-#include "coroio/all.hpp"
 #include <messages.h>
 #include <coroio/socket.hpp>
 #include <vector>
+#include <queue>
 #include <server.h>
 
 uint64_t inflight = 0;
 uint64_t maxInflight = 128;
+std::queue<ITimeSource::Time> times;
+TTimeSource timeSource;
 
 using namespace NNet;
 
@@ -14,8 +16,10 @@ TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
     try {
         while (true) {
             auto response = co_await TReader(socket).Read();
+            auto t = times.front(); times.pop();
+            auto dt = timeSource.Now() - t;
             auto commandResponse = response.template Cast<TCommandResponse>();
-            std::cout << "Ok, commitIndex: " << commandResponse->Index << "\n";
+            std::cout << "Ok, commitIndex: " << commandResponse->Index << " " << dt << "\n";
             inflight --;
         }
     } catch (const std::exception& ex) {
@@ -50,8 +54,9 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
             inflight++;
 
             //std::cout << "Sending " << line.Size() << " bytes: '" << line.Part1 << line.Part2 << "'\n";
-            std::cout << "Sending\n";
+            //std::cout << "Sending\n";
             header.Len = sizeof(header) + line.Size();
+            times.push(timeSource.Now());
             co_await TByteWriter(socket).Write(&header, sizeof(header));
             co_await TByteWriter(socket).Write(line.Part1.data(), line.Part1.size());
             co_await TByteWriter(socket).Write(line.Part2.data(), line.Part2.size());
