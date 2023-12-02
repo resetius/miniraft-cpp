@@ -38,7 +38,7 @@ TVolatileState& TVolatileState::Vote(uint32_t nodeId)
 TVolatileState& TVolatileState::CommitAdvance(int nservers, const TState& state)
 {
     auto lastIndex = state.Log.size();
-    std::vector<uint64_t> indices; indices.reserve(MatchIndex.size()+1+nservers);
+    std::vector<uint64_t> indices; indices.reserve(nservers);
     for (auto [_, index] : MatchIndex) {
         indices.push_back(index);
     }
@@ -209,11 +209,11 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     if (message->Success) {
         auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], message->MatchIndex);
         (*VolatileState)
-            .CommitAdvance(Nservers, *State)
             .SetMatchIndex(nodeId, matchIndex)
             .SetNextIndex(nodeId, message->MatchIndex+1)
             .SetRpcDue(nodeId, ITimeSource::Time{})
-            .SetBatchSize(nodeId, 1024);
+            .SetBatchSize(nodeId, 1024)
+            .CommitAdvance(Nservers, *State);
     } else {
         (*VolatileState)
             .SetNextIndex(nodeId, std::max((uint64_t)1, VolatileState->NextIndex[nodeId]-1))
@@ -384,6 +384,7 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
                 nextVolatileState->NextIndex[id] = 1;
             }
             nextVolatileState->ElectionDue = MakeElection(now);
+            nextVolatileState->CommitIndex = VolatileState->CommitIndex;
             VolatileState = std::move(nextVolatileState);
             State->VotedFor = Id;
             State->CurrentTerm ++;
