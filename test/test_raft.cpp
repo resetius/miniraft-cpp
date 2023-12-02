@@ -553,36 +553,38 @@ void test_election_5_nodes(void**) {
 void test_commit_advance(void**) {
     auto state = TState {
         .CurrentTerm = 1,
-        .Log = MakeLog<TLogEntry>({1,1,1,1})
+        .Log = MakeLog<TLogEntry>({1})
     };
 
     auto s = TVolatileState {
         .MatchIndex = {{1, 1}}
     };
 
-    auto s1 = TVolatileState(s).CommitAdvance(3, 1, state);
+    auto s1 = TVolatileState(s).CommitAdvance(3, state);
     assert_int_equal(s1.CommitIndex, 1);
-    s1 = TVolatileState(s).CommitAdvance(5, 1, state);
+    s1 = TVolatileState(s).CommitAdvance(5, state);
     assert_int_equal(s1.CommitIndex, 0);
 
     s = TVolatileState {
         .MatchIndex = {{1, 1}, {2, 2}}
     };
-    s1 = TVolatileState(s).CommitAdvance(3, 2, state);
+    auto add = MakeLog<TLogEntry>({1});
+    state.Log.insert(state.Log.end(), add.begin(), add.end());
+    s1 = TVolatileState(s).CommitAdvance(3, state);
     assert_int_equal(s1.CommitIndex, 2);
-    s1 = TVolatileState(s).CommitAdvance(5, 2, state);
+    s1 = TVolatileState(s).CommitAdvance(5, state);
     assert_int_equal(s1.CommitIndex, 1);
 }
 
 void test_commit_advance_wrong_term(void**) {
     auto state = TState {
         .CurrentTerm = 2,
-        .Log = MakeLog<TLogEntry>({1,1,1,1})
+        .Log = MakeLog<TLogEntry>({1,1})
     };
     auto s = TVolatileState {
         .MatchIndex = {{1, 1}, {2, 2}}
     };
-    auto s1 = TVolatileState(s).CommitAdvance(3, 2, state);
+    auto s1 = TVolatileState(s).CommitAdvance(3, state);
     assert_int_equal(s1.CommitIndex, 0);
 }
 

@@ -48,7 +48,7 @@ struct TVolatileState {
 
     TVolatileState& Vote(uint32_t id);
     TVolatileState& SetLastApplied(int index);
-    TVolatileState& CommitAdvance(int nservers, int lastIndex, const TState& state);
+    TVolatileState& CommitAdvance(int nservers, const TState& state);
     TVolatileState& SetCommitIndex(int index);
     TVolatileState& SetElectionDue(ITimeSource::Time);
     TVolatileState& SetNextIndex(uint32_t id, uint64_t nextIndex);

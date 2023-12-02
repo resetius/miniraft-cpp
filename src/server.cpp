@@ -210,11 +210,13 @@ void TRaftServer<TPoller>::DebugPrint() {
         std::cout << "Candidate, "
             << "Term: " << state->CurrentTerm << ", "
             << "Index: " << state->Log.size() << ", "
+            << "CommitIndex: " << volatileState->CommitIndex << ", "
             << "\n";
     } else if (Raft->CurrentStateName() == EState::FOLLOWER) {
         std::cout << "Follower, "
             << "Term: " << state->CurrentTerm << ", "
             << "Index: " << state->Log.size() << ", "
+            << "CommitIndex: " << volatileState->CommitIndex << ", "
             << "\n";
     }
 }
