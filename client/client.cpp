@@ -63,6 +63,11 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
     co_return;
 }
 
+void usage(const char* prog) {
+    std::cerr << prog << " --node ip:port:id\n";
+    exit(0);
+}
+
 int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
     std::vector<THost> hosts;
@@ -71,8 +76,12 @@ int main(int argc, char** argv) {
             // address:port:id
             hosts.push_back(THost{argv[++i]});
         } else if (!strcmp(argv[i], "--help")) {
-
+            usage(argv[0]);
         }
+    }
+
+    if (hosts.empty() || !hosts[0]) {
+        std::cerr << "At least one node must be set\n"; return 1;
     }
     using TPoller = NNet::TDefaultPoller;
     std::shared_ptr<ITimeSource> timeSource = std::make_shared<TTimeSource>();

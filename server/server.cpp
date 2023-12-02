@@ -4,6 +4,11 @@
 #include <raft.h>
 #include <server.h>
 
+void usage(const char* prog) {
+    std::cerr << prog << " --id myid --node ip:port:id [--node ip:port:id ...]" << "\n";
+    exit(0);
+}
+
 int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
     std::vector<THost> hosts;
@@ -17,7 +22,7 @@ int main(int argc, char** argv) {
         } else if (!strcmp(argv[i], "--id") && i < argc - 1) {
             id = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--help")) {
-
+            usage(argv[0]);
         }
     }
 
@@ -27,6 +32,9 @@ int main(int argc, char** argv) {
     NNet::TLoop<TPoller> loop;
 
     for (auto& host : hosts) {
+        if (!host) {
+            std::cerr << "Empty host\n"; return 1;
+        }
         if (host.Id == id) {
             myHost = host;
         } else {
@@ -36,6 +44,10 @@ int main(int argc, char** argv) {
                 NNet::TAddress{host.Address, host.Port},
                 timeSource);
         }
+    }
+
+    if (!myHost) {
+        std::cerr << "Host not found\n"; return 1;
     }
 
     auto raft = std::make_shared<TRaft>(myHost.Id, nodes);

@@ -46,6 +46,10 @@ struct THost {
 
     THost() { }
 
+    operator bool() const {
+        return !!Id;
+    }
+
     THost(const std::string& str) {
         std::string_view s(str);
         auto p = s.find(':');
