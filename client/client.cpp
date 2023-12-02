@@ -19,7 +19,7 @@ TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
             auto t = times.front(); times.pop();
             auto dt = timeSource.Now() - t;
             auto commandResponse = response.template Cast<TCommandResponse>();
-            std::cout << "Ok, commitIndex: " << commandResponse->Index << " " << dt << "\n";
+            std::cout << "Ok, commitIndex: " << commandResponse->Index << " " << dt.count() << "\n";
             inflight --;
         }
     } catch (const std::exception& ex) {
