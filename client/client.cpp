@@ -43,7 +43,7 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
     TLine line;
     TCommandRequest header;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
-    auto lineReader = TLineReader<TSocket>(input, 1024, 1024);
+    auto lineReader = TLineReader<TSocket>(input, 2*1024, 1024);
     auto byteWriter = TByteWriter(socket);
 
     try {
