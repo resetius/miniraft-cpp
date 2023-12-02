@@ -42,7 +42,7 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
     auto lineReader = TLineReader<TSocket>(input, 1024, 1024);
 
     try {
-        while (line = co_await lineReader.Read()) {
+        while ((line = co_await lineReader.Read())) {
             while (inflight >= maxInflight) {
                 co_await poller.Sleep(std::chrono::milliseconds(0));
             }
