@@ -256,7 +256,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
         for (auto i = prevIndex; i < lastIndex; i++) {
             mes.Payload[j++] = State->Log[i];
         }
-        std::cout << "Send " << j << " entries to " << nodeId << "\n";
+        // std::cout << "Send " << j << " entries to " << nodeId << "\n";
     }
     return mes;
 }
@@ -392,7 +392,6 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
 
     if (StateName == EState::CANDIDATE) {
         int nvotes = VolatileState->Votes.size()+1;
-        std::cout << "Need/total: " << MinVotes << "/" << nvotes << "\n";
         if (nvotes >= MinVotes) {
             auto value = State->Log.size()+1;
             decltype(VolatileState->NextIndex) nextIndex;

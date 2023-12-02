@@ -4,6 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include "raft.h"
 #include "server.h"
 #include "messages.h"
 
@@ -184,6 +185,41 @@ NNet::TSimpleTask TRaftServer<TPoller>::InboundServe() {
 }
 
 template<typename TPoller>
+void TRaftServer<TPoller>::DebugPrint() {
+    auto* state = Raft->GetState();
+    auto* volatileState = Raft->GetVolatileState();
+    if (Raft->CurrentStateName() == EState::LEADER) {
+        std::cout << "Leader, "
+            << "Term: " << state->CurrentTerm << ", "
+            << "Index: " << state->Log.size() << ", "
+            << "CommitIndex: " << volatileState->CommitIndex << ", ";
+        std::cout << "Delay: ";
+        for (auto [id, index] : volatileState->MatchIndex) {
+            std::cout << id << ":" << (state->Log.size() - index) << " ";
+        }
+        std::cout << "MatchIndex: ";
+        for (auto [id, index] : volatileState->MatchIndex) {
+            std::cout << id << ":" << index << " ";
+        }
+        std::cout << "NextIndex: ";
+        for (auto [id, index] : volatileState->NextIndex) {
+            std::cout << id << ":" << index << " ";
+        }
+        std::cout << "\n";
+    } else if (Raft->CurrentStateName() == EState::CANDIDATE) {
+        std::cout << "Candidate, "
+            << "Term: " << state->CurrentTerm << ", "
+            << "Index: " << state->Log.size() << ", "
+            << "\n";
+    } else if (Raft->CurrentStateName() == EState::FOLLOWER) {
+        std::cout << "Follower, "
+            << "Term: " << state->CurrentTerm << ", "
+            << "Index: " << state->Log.size() << ", "
+            << "\n";
+    }
+}
+
+template<typename TPoller>
 NNet::TSimpleTask TRaftServer<TPoller>::Idle() {
     auto t0 = TimeSource->Now();
     auto dt = std::chrono::milliseconds(2000);
@@ -193,7 +229,7 @@ NNet::TSimpleTask TRaftServer<TPoller>::Idle() {
         DrainNodes();
         auto t1 = TimeSource->Now();
         if (t1 > t0 + dt) {
-            std::cout << "Idle " << (uint32_t)Raft->CurrentStateName() << " " << Raft->GetState()->Log.size() << "\n";
+            DebugPrint();
             t0 = t1;
         }
         co_await Poller.Sleep(sleep);

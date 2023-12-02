@@ -137,6 +137,7 @@ private:
     NNet::TSimpleTask InboundConnection(typename TPoller::TSocket socket);
     NNet::TSimpleTask Idle();
     void DrainNodes();
+    void DebugPrint();
 
     TPoller& Poller;
     typename TPoller::TSocket Socket;
