@@ -44,6 +44,7 @@ struct TVolatileState {
     std::unordered_map<uint32_t, ITimeSource::Time> HeartbeatDue;
     std::unordered_map<uint32_t, ITimeSource::Time> RpcDue;
     std::unordered_map<uint32_t, int> BatchSize;
+    std::unordered_map<uint32_t, int> BackOff;
     ITimeSource::Time ElectionDue;
 
     TVolatileState& Vote(uint32_t id);
@@ -56,6 +57,7 @@ struct TVolatileState {
     TVolatileState& SetHearbeatDue(uint32_t id, ITimeSource::Time heartbeatDue);
     TVolatileState& SetRpcDue(uint32_t id, ITimeSource::Time rpcDue);
     TVolatileState& SetBatchSize(uint32_t id, int size);
+    TVolatileState& SetBackOff(uint32_t id, int size);
 };
 
 enum class EState: int {

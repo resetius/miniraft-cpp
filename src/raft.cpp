@@ -84,6 +84,11 @@ TVolatileState& TVolatileState::SetBatchSize(uint32_t id, int size)
     return *this;
 }
 
+TVolatileState& TVolatileState::SetBackOff(uint32_t id, int size) {
+    BackOff[id] = size;
+    return *this;
+}
+
 TVolatileState& TVolatileState::SetCommitIndex(int index)
 {
     CommitIndex = index;
@@ -213,12 +218,18 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             .SetNextIndex(nodeId, message->MatchIndex+1)
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
+            .SetBackOff(nodeId, 1)
             .CommitAdvance(Nservers, *State);
     } else {
+        auto backOff = std::max(VolatileState->BackOff[nodeId], 1);
+        auto nextIndex = VolatileState->NextIndex[nodeId] > backOff
+            ? VolatileState->NextIndex[nodeId] - backOff
+            : 0;
         (*VolatileState)
-            .SetNextIndex(nodeId, std::max((uint64_t)1, VolatileState->NextIndex[nodeId]-1))
+            .SetNextIndex(nodeId, std::max((uint64_t)1, nextIndex))
             .SetRpcDue(nodeId, ITimeSource::Time{})
-            .SetBatchSize(nodeId, 1);
+            .SetBatchSize(nodeId, 1)
+            .SetBackOff(nodeId, std::min(32768, backOff << 1));
     }
 }
 
