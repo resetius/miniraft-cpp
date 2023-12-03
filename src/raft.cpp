@@ -38,16 +38,16 @@ TVolatileState& TVolatileState::Vote(uint32_t nodeId)
 TVolatileState& TVolatileState::CommitAdvance(int nservers, const TState& state)
 {
     auto lastIndex = state.Log.size();
-    std::vector<uint64_t> indices; indices.reserve(nservers);
+    Indices.clear(); Indices.reserve(nservers);
     for (auto [_, index] : MatchIndex) {
-        indices.push_back(index);
+        Indices.push_back(index);
     }
-    indices.push_back(lastIndex);
-    while (indices.size() < nservers) {
-        indices.push_back(0);
+    Indices.push_back(lastIndex);
+    while (Indices.size() < nservers) {
+        Indices.push_back(0);
     }
-    std::sort(indices.begin(), indices.end());
-    auto commitIndex = std::max(CommitIndex, indices[nservers / 2]);
+    std::sort(Indices.begin(), Indices.end());
+    auto commitIndex = std::max(CommitIndex, Indices[nservers / 2]);
     if (state.LogTerm(commitIndex) == state.CurrentTerm) {
         CommitIndex = commitIndex;
     }

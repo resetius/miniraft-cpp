@@ -47,6 +47,8 @@ struct TVolatileState {
     std::unordered_map<uint32_t, int> BackOff;
     ITimeSource::Time ElectionDue;
 
+    std::vector<uint64_t> Indices;
+
     TVolatileState& Vote(uint32_t id);
     TVolatileState& SetLastApplied(int index);
     TVolatileState& CommitAdvance(int nservers, const TState& state);
