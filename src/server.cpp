@@ -234,7 +234,7 @@ NNet::TSimpleTask TRaftServer<TPoller>::Idle() {
             DebugPrint();
             t0 = t1;
         }
-        co_await Poller.Sleep(sleep);
+        co_await Poller.Sleep(t1 + sleep);
     }
     co_return;
 }
