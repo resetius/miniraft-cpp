@@ -165,8 +165,8 @@ void test_message_send_recv(void** state) {
     {
         auto client = std::move(co_await server.Accept());
         uint32_t type, len;
-        auto r = co_await client.ReadSome((char*)&type, sizeof(type));
-        r = co_await client.ReadSome((char*)&len, sizeof(len));
+        auto r = co_await client.ReadSome(&type, sizeof(type));
+        r = co_await client.ReadSome(&len, sizeof(len));
         received = NewHoldedMessage<TMessage>(type, len);
         r = co_await client.ReadSome(received->Value, len - sizeof(TMessage));
         co_return;

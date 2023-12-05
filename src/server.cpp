@@ -11,7 +11,7 @@
 template<typename TSocket>
 NNet::TValueTask<void> TWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
     auto payload = std::move(message.Payload);
-    char* p = (char*)message.Mes; // TODO: const char
+    const char* p = (const char*)message.Mes;
     uint32_t len = message->Len;
     while (len != 0) {
         auto written = co_await Socket.WriteSome(p, len);
@@ -36,11 +36,11 @@ template<typename TSocket>
 NNet::TValueTask<TMessageHolder<TMessage>> TReader<TSocket>::Read() {
     decltype(TMessage::Type) type;
     decltype(TMessage::Len) len;
-    auto s = co_await Socket.ReadSome((char*)&type, sizeof(type));
+    auto s = co_await Socket.ReadSome(&type, sizeof(type));
     if (s != sizeof(type)) {
         throw std::runtime_error("Connection closed");
     }
-    s = co_await Socket.ReadSome((char*)&len, sizeof(len));
+    s = co_await Socket.ReadSome(&len, sizeof(len));
     if (s != sizeof(len)) {
         throw std::runtime_error("Connection closed");
     }
