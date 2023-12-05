@@ -31,8 +31,9 @@ TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
 template<typename Poller>
 TSimpleTask Client(Poller& poller, TAddress addr) {
     using TSocket = typename Poller::TSocket;
+    using TFileHandle = typename Poller::TFileHandle;
     TSocket socket(std::move(addr), poller);
-    TSocket input{TAddress{}, 0, poller}; // stdin
+    TFileHandle input{0, poller}; // stdin
     co_await socket.Connect();
     std::cout << "Connected\n";
     char buf[1024];
@@ -43,7 +44,7 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
     TLine line;
     TCommandRequest header;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
-    auto lineReader = TLineReader<TSocket>(input, 2*1024, 1024);
+    auto lineReader = TLineReader(input, 2*1024, 1024);
     auto byteWriter = TByteWriter(socket);
 
     try {
