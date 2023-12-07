@@ -50,7 +50,7 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
     try {
         while ((line = co_await lineReader.Read())) {
             while (inflight >= maxInflight) {
-                co_await poller.Sleep(std::chrono::milliseconds(0));
+                co_await poller.Yield();
             }
 
             inflight++;
