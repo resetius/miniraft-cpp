@@ -12,7 +12,7 @@ TTimeSource timeSource;
 using namespace NNet;
 
 template<typename Poller>
-TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
+TVoidSuspendedTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
     try {
         while (true) {
             auto response = co_await TReader(socket).Read();
@@ -29,7 +29,7 @@ TTestTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
 }
 
 template<typename Poller>
-TSimpleTask Client(Poller& poller, TAddress addr) {
+TVoidTask Client(Poller& poller, TAddress addr) {
     using TSocket = typename Poller::TSocket;
     using TFileHandle = typename Poller::TFileHandle;
     TSocket socket(std::move(addr), poller);
@@ -44,7 +44,7 @@ TSimpleTask Client(Poller& poller, TAddress addr) {
     TLine line;
     TCommandRequest header;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
-    auto lineReader = TLineReader(input, 2*1024, 1024);
+    auto lineReader = TLineReader(input, 2*1024);
     auto byteWriter = TByteWriter(socket);
 
     try {

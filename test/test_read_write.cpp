@@ -41,7 +41,7 @@ void test_read_write(void**) {
 
     NNet::TSocket client(NNet::TAddress{"127.0.0.1", 8888}, loop.Poller());
 
-    NNet::TTestTask h1 = [](NNet::TSocket& client, TMessageHolder<TLogEntry> mes) -> NNet::TTestTask
+    NNet::TVoidSuspendedTask h1 = [](NNet::TSocket& client, TMessageHolder<TLogEntry> mes) -> NNet::TVoidSuspendedTask
     {
         co_await client.Connect();
         co_await TWriter(client).Write(std::move(mes));
@@ -49,7 +49,7 @@ void test_read_write(void**) {
     }(client, mes);
 
     TMessageHolder<TMessage> received;
-    NNet::TTestTask h2 = [](NNet::TSocket& server, TMessageHolder<TMessage>& received) -> NNet::TTestTask
+    NNet::TVoidSuspendedTask h2 = [](NNet::TSocket& server, TMessageHolder<TMessage>& received) -> NNet::TVoidSuspendedTask
     {
         auto client = std::move(co_await server.Accept());
         received = co_await TReader(client).Read();
@@ -85,7 +85,7 @@ void test_read_write_payload(void**) {
 
     NNet::TSocket client(NNet::TAddress{"127.0.0.1", 8889}, loop.Poller());
 
-    NNet::TTestTask h1 = [](NNet::TSocket& client, TMessageHolder<TMessage> mes) -> NNet::TTestTask
+    NNet::TVoidSuspendedTask h1 = [](NNet::TSocket& client, TMessageHolder<TMessage> mes) -> NNet::TVoidSuspendedTask
     {
         co_await client.Connect();
         co_await TWriter(client).Write(std::move(mes));
@@ -93,7 +93,7 @@ void test_read_write_payload(void**) {
     }(client, mes);
 
     TMessageHolder<TMessage> received;
-    NNet::TTestTask h2 = [](NNet::TSocket& server, TMessageHolder<TMessage>& received) -> NNet::TTestTask
+    NNet::TVoidSuspendedTask h2 = [](NNet::TSocket& server, TMessageHolder<TMessage>& received) -> NNet::TVoidSuspendedTask
     {
         auto client = std::move(co_await server.Accept());
         received = co_await TReader(client).Read();

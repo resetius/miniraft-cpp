@@ -90,7 +90,7 @@ void TNode<TPoller>::Drain() {
 }
 
 template<typename TPoller>
-NNet::TTestTask TNode<TPoller>::DoDrain() {
+NNet::TVoidSuspendedTask TNode<TPoller>::DoDrain() {
     try {
         while (!Messages.empty()) {
             auto tosend = std::move(Messages); Messages.clear();
@@ -119,7 +119,7 @@ void TNode<TPoller>::Connect() {
 }
 
 template<typename TPoller>
-NNet::TTestTask TNode<TPoller>::DoConnect() {
+NNet::TVoidSuspendedTask TNode<TPoller>::DoConnect() {
     std::cout << "Connecting " << Name << "\n";
     while (!Connected) {
         try {
@@ -138,7 +138,7 @@ NNet::TTestTask TNode<TPoller>::DoConnect() {
 }
 
 template<typename TPoller>
-NNet::TSimpleTask TRaftServer<TPoller>::InboundConnection(typename TPoller::TSocket socket) {
+NNet::TVoidTask TRaftServer<TPoller>::InboundConnection(typename TPoller::TSocket socket) {
     try {
         auto client = std::make_shared<TNode<TPoller>>(
             Poller, "client", std::move(socket), TimeSource
@@ -171,7 +171,7 @@ void TRaftServer<TPoller>::DrainNodes() {
 }
 
 template<typename TPoller>
-NNet::TSimpleTask TRaftServer<TPoller>::InboundServe() {
+NNet::TVoidTask TRaftServer<TPoller>::InboundServe() {
     std::cout << "Bind\n";
     Socket.Bind();
     std::cout << "Listen\n";
@@ -222,7 +222,7 @@ void TRaftServer<TPoller>::DebugPrint() {
 }
 
 template<typename TPoller>
-NNet::TSimpleTask TRaftServer<TPoller>::Idle() {
+NNet::TVoidTask TRaftServer<TPoller>::Idle() {
     auto t0 = TimeSource->Now();
     auto dt = std::chrono::milliseconds(2000);
     auto sleep = std::chrono::milliseconds(100);

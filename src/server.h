@@ -95,8 +95,8 @@ public:
 private:
     void Connect();
 
-    NNet::TTestTask DoDrain();
-    NNet::TTestTask DoConnect();
+    NNet::TVoidSuspendedTask DoDrain();
+    NNet::TVoidSuspendedTask DoConnect();
 
     TPoller& Poller;
     std::string Name;
@@ -133,9 +133,9 @@ public:
     void Serve();
 
 private:
-    NNet::TSimpleTask InboundServe();
-    NNet::TSimpleTask InboundConnection(typename TPoller::TSocket socket);
-    NNet::TSimpleTask Idle();
+    NNet::TVoidTask InboundServe();
+    NNet::TVoidTask InboundConnection(typename TPoller::TSocket socket);
+    NNet::TVoidTask Idle();
     void DrainNodes();
     void DebugPrint();
 

@@ -153,7 +153,7 @@ void test_message_send_recv(void** state) {
 
     TSocket client(TAddress{"127.0.0.1", 8888}, loop.Poller());
 
-    TTestTask h1 = [](TSocket& client, TMessageHolder<TLogEntry> mes) -> TTestTask
+    TVoidSuspendedTask h1 = [](TSocket& client, TMessageHolder<TLogEntry> mes) -> TVoidSuspendedTask
     {
         co_await client.Connect();
         auto r = co_await client.WriteSome(mes.RawData.get(), mes->Len);
@@ -161,7 +161,7 @@ void test_message_send_recv(void** state) {
     }(client, mes);
 
     TMessageHolder<TMessage> received;
-    TTestTask h2 = [](TSocket& server, TMessageHolder<TMessage>& received) -> TTestTask
+    TVoidSuspendedTask h2 = [](TSocket& server, TMessageHolder<TMessage>& received) -> TVoidSuspendedTask
     {
         auto client = std::move(co_await server.Accept());
         uint32_t type, len;
