@@ -1,4 +1,4 @@
-#include "coroio/all.hpp"
+#include <coroio/all.hpp>
 #include <csignal>
 #include <timesource.h>
 #include <raft.h>
@@ -38,8 +38,8 @@ int main(int argc, char** argv) {
         if (host.Id == id) {
             myHost = host;
         } else {
-            nodes[host.Id] = std::make_shared<TNode<TPoller>>(
-                loop.Poller(),
+            nodes[host.Id] = std::make_shared<TNode<TPoller::TSocket>>(
+                [&](const NNet::TAddress& addr) { return TPoller::TSocket(addr, loop.Poller()); },
                 std::to_string(host.Id),
                 NNet::TAddress{host.Address, host.Port},
                 timeSource);
@@ -51,7 +51,10 @@ int main(int argc, char** argv) {
     }
 
     auto raft = std::make_shared<TRaft>(myHost.Id, nodes);
-    TRaftServer server(loop.Poller(), NNet::TAddress{myHost.Address, myHost.Port}, raft, nodes, timeSource);
+    TPoller::TSocket socket(NNet::TAddress{myHost.Address, myHost.Port}, loop.Poller());
+    socket.Bind();
+    socket.Listen();
+    TRaftServer server(loop.Poller(), std::move(socket), raft, nodes, timeSource);
     server.Serve();
     loop.Loop();
     return 0;

@@ -68,19 +68,18 @@ struct THost {
     }
 };
 
-template<typename TPoller>
+template<typename TSocket>
 class TNode: public INode {
 public:
-    TNode(TPoller& poller, const std::string& name, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
-        : Poller(poller)
-        , Name(name)
+    TNode(const std::function<TSocket(const NNet::TAddress&)> factory, const std::string& name, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
+        : Name(name)
         , Address(address)
         , TimeSource(ts)
+        , SocketFactory(factory)
     { }
 
-    TNode(TPoller& poller, const std::string& name, typename TPoller::TSocket socket, const std::shared_ptr<ITimeSource>& ts)
-        : Poller(poller)
-        , Name(name)
+    TNode(const std::string& name, TSocket socket, const std::shared_ptr<ITimeSource>& ts)
+        : Name(name)
         , Socket(std::move(socket))
         , Connected(true)
         , TimeSource(ts)
@@ -88,7 +87,7 @@ public:
 
     void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
-    typename TPoller::TSocket& Sock() {
+    TSocket& Sock() {
         return Socket;
     }
 
@@ -98,11 +97,11 @@ private:
     NNet::TVoidSuspendedTask DoDrain();
     NNet::TVoidSuspendedTask DoConnect();
 
-    TPoller& Poller;
     std::string Name;
     std::optional<NNet::TAddress> Address;
     std::shared_ptr<ITimeSource> TimeSource;
-    typename TPoller::TSocket Socket;
+    std::function<TSocket(const NNet::TAddress&)> SocketFactory;
+    TSocket Socket;
     bool Connected = false;
 
     std::coroutine_handle<> Drainer;
@@ -111,17 +110,17 @@ private:
     std::vector<TMessageHolder<TMessage>> Messages;
 };
 
-template<typename TPoller>
+template<typename TSocket>
 class TRaftServer {
 public:
     TRaftServer(
-        TPoller& poller,
-        NNet::TAddress address,
+        typename TSocket::TPoller& poller,
+        TSocket socket,
         const std::shared_ptr<TRaft>& raft,
         const TNodeDict& nodes,
         const std::shared_ptr<ITimeSource>& ts)
         : Poller(poller)
-        , Socket(std::move(address), Poller)
+        , Socket(std::move(socket))
         , Raft(raft)
         , TimeSource(ts)
     {
@@ -134,13 +133,13 @@ public:
 
 private:
     NNet::TVoidTask InboundServe();
-    NNet::TVoidTask InboundConnection(typename TPoller::TSocket socket);
+    NNet::TVoidTask InboundConnection(TSocket socket);
     NNet::TVoidTask Idle();
     void DrainNodes();
     void DebugPrint();
 
-    TPoller& Poller;
-    typename TPoller::TSocket Socket;
+    typename TSocket::TPoller& Poller;
+    TSocket Socket;
     std::shared_ptr<TRaft> Raft;
     std::unordered_set<std::shared_ptr<INode>> Nodes;
     std::shared_ptr<ITimeSource> TimeSource;

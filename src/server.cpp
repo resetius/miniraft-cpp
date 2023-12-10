@@ -46,13 +46,13 @@ NNet::TValueTask<TMessageHolder<TMessage>> TMessageReader<TSocket>::Read() {
     co_return mes;
 }
 
-template<typename TPoller>
-void TNode<TPoller>::Send(TMessageHolder<TMessage> message) {
+template<typename TSocket>
+void TNode<TSocket>::Send(TMessageHolder<TMessage> message) {
     Messages.emplace_back(std::move(message));
 }
 
-template<typename TPoller>
-void TNode<TPoller>::Drain() {
+template<typename TSocket>
+void TNode<TSocket>::Drain() {
     if (!Connected) {
         Connect();
         return;
@@ -65,8 +65,8 @@ void TNode<TPoller>::Drain() {
     }
 }
 
-template<typename TPoller>
-NNet::TVoidSuspendedTask TNode<TPoller>::DoDrain() {
+template<typename TSocket>
+NNet::TVoidSuspendedTask TNode<TSocket>::DoDrain() {
     try {
         while (!Messages.empty()) {
             auto tosend = std::move(Messages); Messages.clear();
@@ -81,21 +81,21 @@ NNet::TVoidSuspendedTask TNode<TPoller>::DoDrain() {
     co_return;
 }
 
-template<typename TPoller>
-void TNode<TPoller>::Connect() {
+template<typename TSocket>
+void TNode<TSocket>::Connect() {
     if (Address && (!Connector || Connector.done())) {
         if (Connector && Connector.done()) {
             Connector.destroy();
         }
 
-        Socket = typename TPoller::TSocket(*Address, Poller);
+        Socket = SocketFactory(*Address);
         Connected = false;
         Connector = DoConnect();
     }
 }
 
-template<typename TPoller>
-NNet::TVoidSuspendedTask TNode<TPoller>::DoConnect() {
+template<typename TSocket>
+NNet::TVoidSuspendedTask TNode<TSocket>::DoConnect() {
     std::cout << "Connecting " << Name << "\n";
     while (!Connected) {
         try {
@@ -106,18 +106,15 @@ NNet::TVoidSuspendedTask TNode<TPoller>::DoConnect() {
         } catch (const std::exception& ex) {
             std::cout << "Error on connect: " << Name << " " << ex.what() << "\n";
         }
-        if (!Connected) {
-            co_await Poller.Sleep(std::chrono::milliseconds(1000));
-        }
     }
     co_return;
 }
 
-template<typename TPoller>
-NNet::TVoidTask TRaftServer<TPoller>::InboundConnection(typename TPoller::TSocket socket) {
+template<typename TSocket>
+NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
     try {
-        auto client = std::make_shared<TNode<TPoller>>(
-            Poller, "client", std::move(socket), TimeSource
+        auto client = std::make_shared<TNode<TSocket>>(
+            "client", std::move(socket), TimeSource
         );
         Nodes.insert(client);
         while (true) {
@@ -133,25 +130,21 @@ NNet::TVoidTask TRaftServer<TPoller>::InboundConnection(typename TPoller::TSocke
     co_return;
 }
 
-template<typename TPoller>
-void TRaftServer<TPoller>::Serve() {
+template<typename TSocket>
+void TRaftServer<TSocket>::Serve() {
     Idle();
     InboundServe();
 }
 
-template<typename TPoller>
-void TRaftServer<TPoller>::DrainNodes() {
+template<typename TSocket>
+void TRaftServer<TSocket>::DrainNodes() {
     for (const auto& node : Nodes) {
         node->Drain();
     }
 }
 
-template<typename TPoller>
-NNet::TVoidTask TRaftServer<TPoller>::InboundServe() {
-    std::cout << "Bind\n";
-    Socket.Bind();
-    std::cout << "Listen\n";
-    Socket.Listen();
+template<typename TSocket>
+NNet::TVoidTask TRaftServer<TSocket>::InboundServe() {
     while (true) {
         auto client = co_await Socket.Accept();
         std::cout << "Accepted\n";
@@ -160,8 +153,8 @@ NNet::TVoidTask TRaftServer<TPoller>::InboundServe() {
     co_return;
 }
 
-template<typename TPoller>
-void TRaftServer<TPoller>::DebugPrint() {
+template<typename TSocket>
+void TRaftServer<TSocket>::DebugPrint() {
     auto* state = Raft->GetState();
     auto* volatileState = Raft->GetVolatileState();
     if (Raft->CurrentStateName() == EState::LEADER) {
@@ -197,8 +190,8 @@ void TRaftServer<TPoller>::DebugPrint() {
     }
 }
 
-template<typename TPoller>
-NNet::TVoidTask TRaftServer<TPoller>::Idle() {
+template<typename TSocket>
+NNet::TVoidTask TRaftServer<TSocket>::Idle() {
     auto t0 = TimeSource->Now();
     auto dt = std::chrono::milliseconds(2000);
     auto sleep = std::chrono::milliseconds(100);
@@ -215,5 +208,7 @@ NNet::TVoidTask TRaftServer<TPoller>::Idle() {
     co_return;
 }
 
-template class TRaftServer<NNet::TDefaultPoller>;
-template class TRaftServer<NNet::TPoll>;
+template class TRaftServer<NNet::TSocket>;
+#ifdef __linux__
+template class TRaftServer<NNet::TUringSocket>;
+#endif
