@@ -14,9 +14,9 @@
 #include "raft.h"
 
 template<typename TSocket>
-class TReader {
+class TMessageReader {
 public:
-    TReader(TSocket& socket)
+    TMessageReader(TSocket& socket)
         : Socket(socket)
     { }
 
@@ -27,9 +27,9 @@ private:
 };
 
 template<typename TSocket>
-class TWriter {
+class TMessageWriter {
 public:
-    TWriter(TSocket& socket)
+    TMessageWriter(TSocket& socket)
         : Socket(socket)
     { }
 

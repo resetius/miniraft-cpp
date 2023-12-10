@@ -15,7 +15,7 @@ template<typename Poller>
 TVoidSuspendedTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
     try {
         while (true) {
-            auto response = co_await TReader(socket).Read();
+            auto response = co_await TMessageReader(socket).Read();
             auto t = times.front(); times.pop();
             auto dt = timeSource.Now() - t;
             auto commandResponse = response.template Cast<TCommandResponse>();

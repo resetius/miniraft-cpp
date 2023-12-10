@@ -9,7 +9,7 @@
 #include "messages.h"
 
 template<typename TSocket>
-NNet::TValueTask<void> TWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
+NNet::TValueTask<void> TMessageWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
     co_await NNet::TByteWriter(Socket).Write(message.Mes, message->Len);
 
     auto payload = std::move(message.Payload);
@@ -21,7 +21,7 @@ NNet::TValueTask<void> TWriter<TSocket>::Write(TMessageHolder<TMessage> message)
 }
 
 template<typename TSocket>
-NNet::TValueTask<TMessageHolder<TMessage>> TReader<TSocket>::Read() {
+NNet::TValueTask<TMessageHolder<TMessage>> TMessageReader<TSocket>::Read() {
     decltype(TMessage::Type) type;
     decltype(TMessage::Len) len;
     auto s = co_await Socket.ReadSome(&type, sizeof(type));
@@ -71,7 +71,7 @@ NNet::TVoidSuspendedTask TNode<TPoller>::DoDrain() {
         while (!Messages.empty()) {
             auto tosend = std::move(Messages); Messages.clear();
             for (auto&& m : tosend) {
-                co_await TWriter(Socket).Write(std::move(m));
+                co_await TMessageWriter(Socket).Write(std::move(m));
             }
         }
     } catch (const std::exception& ex) {
@@ -121,7 +121,7 @@ NNet::TVoidTask TRaftServer<TPoller>::InboundConnection(typename TPoller::TSocke
         );
         Nodes.insert(client);
         while (true) {
-            auto mes = co_await TReader(client->Sock()).Read();
+            auto mes = co_await TMessageReader(client->Sock()).Read();
 //            std::cout << "Got message " << mes->Type << "\n";
             Raft->Process(TimeSource->Now(), std::move(mes), client);
             Raft->ProcessTimeout(TimeSource->Now());
