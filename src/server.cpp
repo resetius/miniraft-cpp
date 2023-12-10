@@ -10,23 +10,11 @@
 
 template<typename TSocket>
 NNet::TValueTask<void> TWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
-    auto payload = std::move(message.Payload);
-    const char* p = (const char*)message.Mes;
-    uint32_t len = message->Len;
-    while (len != 0) {
-        auto written = co_await Socket.WriteSome(p, len);
-        if (written == 0) {
-            throw std::runtime_error("Connection closed");
-        }
-        if (written < 0) {
-            continue; // retry;
-        }
-        p += written;
-        len -= written;
-    }
+    co_await NNet::TByteWriter(Socket).Write(message.Mes, message->Len);
 
+    auto payload = std::move(message.Payload);
     for (uint32_t i = 0; i < message.PayloadSize; ++i) {
-        co_await TWriter(Socket).Write(std::move(payload[i]));
+        co_await Write(std::move(payload[i]));
     }
 
     co_return;
@@ -45,26 +33,14 @@ NNet::TValueTask<TMessageHolder<TMessage>> TReader<TSocket>::Read() {
         throw std::runtime_error("Connection closed");
     }
     auto mes = NewHoldedMessage<TMessage>(type, len);
-    char* p = mes->Value;
-    len -= sizeof(TMessage);
-    while (len != 0) {
-        s = co_await Socket.ReadSome(p, len);
-        if (s == 0) {
-            throw std::runtime_error("Connection closed");
-        }
-        if (s < 0) {
-            continue; // retry
-        }
-        p += s;
-        len -= s;
-    }
+    co_await NNet::TByteReader(Socket).Read(mes->Value, len - sizeof(TMessage));
     auto maybeAppendEntries = mes.Maybe<TAppendEntriesRequest>();
     if (maybeAppendEntries) {
         auto appendEntries = maybeAppendEntries.Cast();
         auto nentries = appendEntries->Nentries;
         mes.InitPayload(nentries);
         for (uint32_t i = 0; i < nentries; i++) {
-            mes.Payload[i] = co_await TReader(Socket).Read();
+            mes.Payload[i] = co_await Read();
         }
     }
     co_return mes;
