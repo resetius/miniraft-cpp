@@ -106,6 +106,9 @@ NNet::TVoidSuspendedTask TNode<TSocket>::DoConnect() {
         } catch (const std::exception& ex) {
             std::cout << "Error on connect: " << Name << " " << ex.what() << "\n";
         }
+        if (!Connected) {
+            co_await Socket.Poller()->Sleep(std::chrono::milliseconds(1000));
+        }
     }
     co_return;
 }
@@ -209,6 +212,8 @@ NNet::TVoidTask TRaftServer<TSocket>::Idle() {
 }
 
 template class TRaftServer<NNet::TSocket>;
+template class TRaftServer<NNet::TSslSocket<NNet::TSocket>>;
 #ifdef __linux__
 template class TRaftServer<NNet::TUringSocket>;
+template class TRaftServer<NNet::TSslSocket<NNet::TUringSocket>>;
 #endif

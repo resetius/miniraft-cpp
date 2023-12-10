@@ -1,3 +1,4 @@
+#include "coroio/ssl.hpp"
 #include <messages.h>
 #include <coroio/socket.hpp>
 #include <vector>
@@ -11,8 +12,8 @@ TTimeSource timeSource;
 
 using namespace NNet;
 
-template<typename Poller>
-TVoidSuspendedTask ClientReader(Poller& poller, typename Poller::TSocket& socket) {
+template<typename TPoller, typename TSocket>
+TVoidSuspendedTask ClientReader(TPoller& poller, TSocket& socket) {
     try {
         while (true) {
             auto response = co_await TMessageReader(socket).Read();
@@ -28,11 +29,9 @@ TVoidSuspendedTask ClientReader(Poller& poller, typename Poller::TSocket& socket
     co_return;
 }
 
-template<typename Poller>
-TVoidTask Client(Poller& poller, TAddress addr) {
-    using TSocket = typename Poller::TSocket;
-    using TFileHandle = typename Poller::TFileHandle;
-    TSocket socket(std::move(addr), poller);
+template<typename TPoller, typename TSocket>
+TVoidTask Client(TPoller& poller, TSocket socket) {
+    using TFileHandle = typename TPoller::TFileHandle;
     TFileHandle input{0, poller}; // stdin
     co_await socket.Connect();
     std::cout << "Connected\n";
@@ -78,10 +77,13 @@ void usage(const char* prog) {
 int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
     std::vector<THost> hosts;
+    bool ssl = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--node") && i < argc - 1) {
             // address:port:id
             hosts.push_back(THost{argv[++i]});
+        } else if (!strcmp(argv[i], "--ssl")) {
+            ssl = true;
         } else if (!strcmp(argv[i], "--help")) {
             usage(argv[0]);
         }
@@ -93,7 +95,17 @@ int main(int argc, char** argv) {
     using TPoller = NNet::TDefaultPoller;
     std::shared_ptr<ITimeSource> timeSource = std::make_shared<TTimeSource>();
     NNet::TLoop<TPoller> loop;
-    Client(loop.Poller(), NNet::TAddress{hosts[0].Address, hosts[0].Port});
-    loop.Loop();
+    NNet::TAddress addr{hosts[0].Address, hosts[0].Port};
+    TSocket socket(std::move(addr), loop.Poller());
+    if (ssl) {
+        std::function<void(const char*)> sslDebugLogFunc = [](const char* s) { std::cerr << s << "\n"; };
+        TSslContext ctx = TSslContext::Client(sslDebugLogFunc);
+        TSslSocket sslSocket(std::move(socket), ctx);
+        Client(loop.Poller(), std::move(sslSocket));
+        loop.Loop();
+    } else {
+        Client(loop.Poller(), std::move(socket));
+        loop.Loop();
+    }
     return 0;
 }
