@@ -20,6 +20,8 @@ add_library(miniraft
     src/server.cpp
 )
 
+target_link_libraries(miniraft PUBLIC coroio)
+
 add_executable(test_raft test/test_raft.cpp)
 add_executable(test_read_write test/test_read_write.cpp)
 add_executable(server server/server.cpp)
