@@ -189,6 +189,33 @@ void test_initial(void**) {
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
+void test_numbers(void**) {
+    auto raft = MakeRaft({}, 3);
+    assert_int_equal(raft->GetMinVotes(), 2);
+    assert_int_equal(raft->GetNservers(), 3);
+    assert_int_equal(raft->GetNpeers(), 2);
+
+    raft = MakeRaft({}, 2);
+    assert_int_equal(raft->GetMinVotes(), 2);
+    assert_int_equal(raft->GetNservers(), 2);
+    assert_int_equal(raft->GetNpeers(), 1);
+
+    raft = MakeRaft({}, 1);
+    assert_int_equal(raft->GetMinVotes(), 1);
+    assert_int_equal(raft->GetNservers(), 1);
+    assert_int_equal(raft->GetNpeers(), 0);
+
+    raft = MakeRaft({}, 5);
+    assert_int_equal(raft->GetMinVotes(), 3);
+    assert_int_equal(raft->GetNservers(), 5);
+    assert_int_equal(raft->GetNpeers(), 4);
+
+    raft = MakeRaft({}, 10);
+    assert_int_equal(raft->GetMinVotes(), 6);
+    assert_int_equal(raft->GetNservers(), 10);
+    assert_int_equal(raft->GetNpeers(), 9);
+}
+
 void test_become(void**) {
     auto raft = MakeRaft();
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
@@ -597,6 +624,7 @@ int main() {
         cmocka_unit_test(test_message_cast),
         cmocka_unit_test(test_message_send_recv),
         cmocka_unit_test(test_initial),
+        cmocka_unit_test(test_numbers),
         cmocka_unit_test(test_become),
         cmocka_unit_test(test_become_same_func),
         cmocka_unit_test(test_follower_to_candidate_on_timeout),
