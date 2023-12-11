@@ -87,9 +87,6 @@ void TNode<TSocket>::Connect() {
         if (Connector && Connector.done()) {
             Connector.destroy();
         }
-
-        Socket = SocketFactory(*Address);
-        Connected = false;
         Connector = DoConnect();
     }
 }
@@ -97,9 +94,11 @@ void TNode<TSocket>::Connect() {
 template<typename TSocket>
 NNet::TVoidSuspendedTask TNode<TSocket>::DoConnect() {
     std::cout << "Connecting " << Name << "\n";
+    Connected = false;
     while (!Connected) {
         try {
             auto deadline = NNet::TClock::now() + std::chrono::milliseconds(100); // TODO: broken timeout in coroio
+            Socket = SocketFactory(*Address);
             co_await Socket.Connect(deadline);
             std::cout << "Connected " << Name << "\n";
             Connected = true;
