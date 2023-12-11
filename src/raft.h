@@ -99,6 +99,18 @@ public:
         return Id;
     }
 
+    int GetMinVotes() const {
+        return MinVotes;
+    }
+
+    int GetNpeers() const {
+        return Npeers;
+    }
+
+    int GetNservers() const {
+        return Nservers;
+    }
+
 private:
     void Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
     void Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
