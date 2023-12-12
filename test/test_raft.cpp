@@ -248,15 +248,17 @@ void test_follower_append_entries_small_term(void**) {
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
-    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
-    mes->Src = 2;
-    mes->Dst = 1;
-    mes->Term = 0;
-    mes->LeaderId = 2;
-    mes->PrevLogIndex = 0;
-    mes->PrevLogTerm = 0;
-    mes->LeaderCommit = 0;
-    mes->Nentries = 0;
+    auto mes = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 0,
+    }, TAppendEntriesRequest {
+        .PrevLogIndex = 0,
+        .PrevLogTerm = 0,
+        .LeaderCommit = 0,
+        .LeaderId = 2,
+        .Nentries = 0,
+    });
     raft->Process(ts->Now(), mes);
 
     assert_true(messages.size() == 1);
@@ -280,15 +282,17 @@ void test_follower_append_entries_7a(void**) {
         .VotedFor = 2,
         .Log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6})
     });
-    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
-    mes->Src = 2;
-    mes->Dst = 1;
-    mes->Term = 1;
-    mes->LeaderId = 2;
-    mes->PrevLogIndex = 9;
-    mes->PrevLogTerm = 6;
-    mes->LeaderCommit = 9;
-    mes->Nentries = 1;
+    auto mes = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 1,
+    }, TAppendEntriesRequest {
+        .PrevLogIndex = 9,
+        .PrevLogTerm = 6,
+        .LeaderCommit = 9,
+        .LeaderId = 2,
+        .Nentries = 1,
+    });
     SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
@@ -310,15 +314,17 @@ void test_follower_append_entries_7b(void**) {
         .VotedFor = 2,
         .Log = MakeLog<TLogEntry>({1,1,1,4})
     });
-    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
-    mes->Src = 2;
-    mes->Dst = 1;
-    mes->Term = 1;
-    mes->LeaderId = 2;
-    mes->PrevLogIndex = 4;
-    mes->PrevLogTerm = 4;
-    mes->LeaderCommit = 9;
-    mes->Nentries = 6;
+    auto mes = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 1,
+    }, TAppendEntriesRequest {
+        .PrevLogIndex = 4,
+        .PrevLogTerm = 4,
+        .LeaderCommit = 9,
+        .LeaderId = 2,
+        .Nentries = 6,
+    });
     SetPayload(mes, MakeLog({4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
@@ -340,15 +346,17 @@ void test_follower_append_entries_7c(void**) {
         .VotedFor = 2,
         .Log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6,6,6})
     });
-    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
-    mes->Src = 2;
-    mes->Dst = 1;
-    mes->Term = 1;
-    mes->LeaderId = 2;
-    mes->PrevLogIndex = 9;
-    mes->PrevLogTerm = 6;
-    mes->LeaderCommit = 9;
-    mes->Nentries = 1;
+    auto mes = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 1,
+    }, TAppendEntriesRequest {
+        .PrevLogIndex = 9,
+        .PrevLogTerm = 6,
+        .LeaderCommit = 9,
+        .LeaderId = 2,
+        .Nentries = 1,
+    });
     SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
@@ -370,15 +378,17 @@ void test_follower_append_entries_7f(void**) {
         .VotedFor = 2,
         .Log = MakeLog<TLogEntry>({1,1,1,2,2,2,3,3,3,3,3})
     });
-    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
-    mes->Src = 2;
-    mes->Dst = 1;
-    mes->Term = 8;
-    mes->LeaderId = 2;
-    mes->PrevLogIndex = 3;
-    mes->PrevLogTerm = 1;
-    mes->LeaderCommit = 9;
-    mes->Nentries = 7;
+    auto mes = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 8,
+    }, TAppendEntriesRequest {
+        .PrevLogIndex = 3,
+        .PrevLogTerm = 1,
+        .LeaderCommit = 9,
+        .LeaderId = 2,
+        .Nentries = 7,
+    });
     SetPayload(mes, MakeLog({4,4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
     auto last = messages.back().Cast<TAppendEntriesResponse>();
@@ -395,15 +405,17 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
-    auto mes = NewHoldedMessage<TAppendEntriesRequest>();
-    mes->Src = 2;
-    mes->Dst = 1;
-    mes->Term = 1;
-    mes->LeaderId = 2;
-    mes->PrevLogIndex = 0;
-    mes->PrevLogTerm = 0;
-    mes->LeaderCommit = 0;
-    mes->Nentries = 0;
+    auto mes = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 1,
+    }, TAppendEntriesRequest {
+        .PrevLogIndex = 0,
+        .PrevLogTerm = 0,
+        .LeaderCommit = 0,
+        .LeaderId = 2,
+        .Nentries = 0,
+    });
     raft->Process(ts->Now(), mes);
     assert_true(!messages.empty());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
@@ -425,20 +437,19 @@ void test_candidate_initiate_election(void**) {
     raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->GetState()->CurrentTerm, term+1);
     assert_int_equal(messages.size(), 2);
-    TRequestVoteRequest r;
-    r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_REQUEST);
-    r.Len = sizeof(r);
-    r.Src = 1;
-    r.Dst = 0;
-    r.Term = term+1;
-    r.CandidateId = raft->GetId();
-    r.LastLogTerm = 0;
-    r.LastLogIndex = 0;
-
+    auto r = NewHoldedMessage(TMessageEx {
+        .Src = 1,
+        .Dst = 0,
+        .Term = term+1,
+    }, TRequestVoteRequest {
+        .LastLogIndex = 0,
+        .LastLogTerm = 0,
+        .CandidateId = raft->GetId(),
+    });
     messages[0]->Dst = 0;
-    assert_message_equal(messages[0], r);
+    assert_message_equal(messages[0], *r.Mes);
     messages[1]->Dst = 0;
-    assert_message_equal(messages[1], r);
+    assert_message_equal(messages[1], *r.Mes);
 }
 
 void test_candidate_vote_request_small_term(void**) {
@@ -449,23 +460,25 @@ void test_candidate_vote_request_small_term(void**) {
 
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
-    auto req = NewHoldedMessage<TRequestVoteRequest>();
-    req->Src = 2;
-    req->Dst = 1;
-    req->Term = 0;
-    req->CandidateId = 2;
-    req->LastLogTerm = 1;
-    req->LastLogIndex = 1;
+    auto req = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 0,
+    }, TRequestVoteRequest {
+        .LastLogIndex = 1,
+        .LastLogTerm = 1,
+        .CandidateId = 2,
+    });
     raft->Process(ts->Now(), std::move(req));
-    TRequestVoteResponse r;
-    r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE);
-    r.Len = sizeof(r);
-    r.Src = 1;
-    r.Dst = 2;
-    r.Term = raft->GetState()->CurrentTerm;
-    r.VoteGranted = false;
+    auto res = NewHoldedMessage(TMessageEx {
+        .Src = 1,
+        .Dst = 2,
+        .Term = raft->GetState()->CurrentTerm,
+    }, TRequestVoteResponse {
+        .VoteGranted = false,
+    });
     assert_int_equal(messages.size(), 1);
-    assert_message_equal(messages[0], r);
+    assert_message_equal(messages[0], *res.Mes);
     assert_int_equal(raft->GetState()->CurrentTerm, 1);
 }
 
@@ -477,23 +490,25 @@ void test_candidate_vote_request_ok_term(void**) {
 
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
-    auto req = NewHoldedMessage<TRequestVoteRequest>();
-    req->Src = 2;
-    req->Dst = 1;
-    req->Term = 1;
-    req->CandidateId = 2;
-    req->LastLogTerm = 1;
-    req->LastLogIndex = 1;
+    auto req = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 1,
+    }, TRequestVoteRequest {
+        .LastLogIndex = 1,
+        .LastLogTerm = 1,
+        .CandidateId = 2,
+    });
     raft->Process(ts->Now(), std::move(req));
-    TRequestVoteResponse r;
-    r.Type = static_cast<uint32_t>(EMessageType::REQUEST_VOTE_RESPONSE);
-    r.Len = sizeof(r);
-    r.Src = 1;
-    r.Dst = 2;
-    r.Term = raft->GetState()->CurrentTerm;
-    r.VoteGranted = true;
+    auto res = NewHoldedMessage(TMessageEx {
+        .Src = 1,
+        .Dst = 2,
+        .Term = raft->GetState()->CurrentTerm,
+    }, TRequestVoteResponse {
+        .VoteGranted = true,
+    });
     assert_int_equal(messages.size(), 1);
-    assert_message_equal(messages[0], r);
+    assert_message_equal(messages[0], *res.Mes);
     assert_int_equal(raft->GetState()->CurrentTerm, 1);
 }
 
@@ -501,13 +516,15 @@ void test_candidate_vote_request_big(void**) {
     auto raft = MakeRaft();
     auto ts = std::make_shared<TFakeTimeSource>();
     raft->Become(EState::CANDIDATE);
-    auto req = NewHoldedMessage<TRequestVoteRequest>();
-    req->Src = 2;
-    req->Dst = 1;
-    req->Term = 3;
-    req->CandidateId = 2;
-    req->LastLogTerm = 1;
-    req->LastLogIndex = 1;
+    auto req = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 3,
+    }, TRequestVoteRequest {
+        .LastLogIndex = 1,
+        .LastLogTerm = 1,
+        .CandidateId = 2,
+    });
     raft->Process(ts->Now(), req);
     assert_true(raft->CurrentStateName() == EState::FOLLOWER);
 }
@@ -525,25 +542,29 @@ void test_candidate_vote_after_start(void**) {
     raft->ProcessTimeout(ts->Now());
     assert_int_equal(raft->GetState()->VotedFor, 1);
     assert_int_equal(raft->GetState()->CurrentTerm, 2);
-    auto req = NewHoldedMessage<TRequestVoteRequest>();
-    req->Src = 2;
-    req->Dst = 1;
-    req->Term = 2;
-    req->CandidateId = 2;
-    req->LastLogTerm = 1;
-    req->LastLogIndex = 1;
+    auto req = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 2,
+    }, TRequestVoteRequest {
+        .LastLogIndex = 1,
+        .LastLogTerm = 1,
+        .CandidateId = 2,
+    });
     raft->Process(ts->Now(), req);
     auto last = messages.back().Cast<TRequestVoteResponse>();
     assert_int_equal(last->VoteGranted, false);
 
     // request with higher term => follower
-    req = NewHoldedMessage<TRequestVoteRequest>();
-    req->Src = 2;
-    req->Dst = 1;
-    req->Term = 3;
-    req->CandidateId = 3;
-    req->LastLogTerm = 1;
-    req->LastLogIndex = 1;
+    req = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 3,
+    }, TRequestVoteRequest {
+        .LastLogIndex = 1,
+        .LastLogTerm = 1,
+        .CandidateId = 3,
+    });
     raft->Process(ts->Now(), req);
     last = messages.back().Cast<TRequestVoteResponse>();
     assert_int_equal(raft->GetState()->VotedFor, 3);
@@ -555,11 +576,13 @@ void test_election_5_nodes(void**) {
     auto raft = MakeRaft({}, 5);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::CANDIDATE);
-    auto req = NewHoldedMessage<TRequestVoteResponse>();
-    req->Src = 2;
-    req->Dst = 1;
-    req->Term = 2;
-    req->VoteGranted = true;
+    auto req = NewHoldedMessage(TMessageEx {
+        .Src = 2,
+        .Dst = 1,
+        .Term = 2,
+    }, TRequestVoteResponse {
+        .VoteGranted = true,
+    });
     ts->Advance(std::chrono::milliseconds(10000));
     raft->ProcessTimeout(ts->Now());
 
