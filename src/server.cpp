@@ -121,7 +121,6 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
         Nodes.insert(client);
         while (true) {
             auto mes = co_await TMessageReader(client->Sock()).Read();
-//            std::cout << "Got message " << mes->Type << "\n";
             Raft->Process(TimeSource->Now(), std::move(mes), client);
             Raft->ProcessTimeout(TimeSource->Now());
             DrainNodes();
