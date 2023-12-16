@@ -120,6 +120,7 @@ private:
     void OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
     void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
     void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
+    void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
 
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);

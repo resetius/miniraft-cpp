@@ -233,6 +233,20 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     }
 }
 
+void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
+    auto& log = State->Log;
+    auto dataSize = command->Len - sizeof(TCommandRequest);
+    auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
+    memcpy(entry->Data, command->Data, dataSize);
+    entry->Term = State->CurrentTerm;
+    log.push_back(entry);
+    auto index = log.size()-1;
+    if (replyTo) {
+        auto mes = NewHoldedMessage(TCommandResponse {.Index = index});
+        waiting.emplace(TWaiting{mes->Index, mes, replyTo});
+    }
+}
+
 TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
     auto mes = NewHoldedMessage(
         TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm},
@@ -277,7 +291,7 @@ void TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeRequestVote.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
-        OnAppendEntries(now, maybeAppendEntries.Cast());
+        OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
     }
 }
 
@@ -287,32 +301,19 @@ void TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     } else if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeRequestVote.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
-        OnAppendEntries(now, maybeAppendEntries.Cast());
+        OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
     }
 }
 
 void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
     if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
-        OnAppendEntries(maybeAppendEntries.Cast());
+        OnAppendEntries(std::move(maybeAppendEntries.Cast()));
     } else if (auto maybeCommandRequest = message.Maybe<TCommandRequest>()) {
-        auto command = maybeCommandRequest.Cast();
-        auto& log = State->Log;
-        auto dataSize = command->Len - sizeof(TCommandRequest);
-        auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
-        memcpy(entry->Data, command->Data, dataSize);
-        entry->Term = State->CurrentTerm;
-        log.push_back(entry);
-        auto index = log.size()-1;
-        if (replyTo) {
-            auto mes = NewHoldedMessage(TCommandResponse {.Index = index});
-            waiting.emplace(TWaiting{mes->Index, mes, replyTo});
-        }
+        OnCommandRequest(std::move(maybeCommandRequest.Cast()), replyTo);
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
-    } else if (auto maybeVoteResponse = message.Maybe<TRequestVoteResponse>()) {
-        // skip additional votes
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
-        OnAppendEntries(now, maybeAppendEntries.Cast());
+        OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
     }
 }
 
