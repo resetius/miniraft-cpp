@@ -114,8 +114,9 @@ NNet::TVoidSuspendedTask TNode<TSocket>::DoConnect() {
 
 template<typename TSocket>
 NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
+    std::shared_ptr<TNode<TSocket>> client;
     try {
-        auto client = std::make_shared<TNode<TSocket>>(
+        client = std::make_shared<TNode<TSocket>>(
             "client", std::move(socket), TimeSource
         );
         Nodes.insert(client);
@@ -128,6 +129,7 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
     } catch (const std::exception & ex) {
         std::cerr << "Exception: " << ex.what() << "\n";
     }
+    Nodes.erase(client);
     co_return;
 }
 
