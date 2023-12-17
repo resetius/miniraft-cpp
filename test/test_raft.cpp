@@ -647,7 +647,29 @@ void test_commit_advance_wrong_term(void**) {
     assert_int_equal(s1.CommitIndex, 0);
 }
 
-// TODO: test leader hearbeat
+void test_leader_heartbeat(void**) {
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](auto message) {
+        messages.emplace_back(std::move(message));
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3);
+    ts->Advance(std::chrono::milliseconds(10000));
+    raft->Become(EState::LEADER);
+    raft->ProcessTimeout(ts->Now());
+    assert_int_equal(messages.size(), 2);
+    auto maybeReq0 = messages[0].Maybe<TAppendEntriesRequest>();
+    auto maybeReq1 = messages[1].Maybe<TAppendEntriesRequest>();
+    assert_true(maybeReq0);
+    assert_true(maybeReq1);
+    auto req0 = maybeReq0.Cast();
+    auto req1 = maybeReq1.Cast();
+    assert_int_equal(req0->Src, 1);
+    assert_int_equal(req1->Src, 1);
+    assert_true((req0->Dst == 2 && req1->Dst == 3) || (req0->Dst == 3 && req1->Dst == 2));
+    assert_int_equal(req0->Nentries, 0);
+    assert_int_equal(req1->Nentries, 0);
+}
 
 int main() {
     const struct CMUnitTest tests[] = {
@@ -674,6 +696,7 @@ int main() {
         cmocka_unit_test(test_election_5_nodes),
         cmocka_unit_test(test_commit_advance),
         cmocka_unit_test(test_commit_advance_wrong_term),
+        cmocka_unit_test(test_leader_heartbeat),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
