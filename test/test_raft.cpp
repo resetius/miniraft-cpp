@@ -295,6 +295,8 @@ void test_follower_append_entries_7a(void**) {
     });
     SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
+    assert_int_equal(messages.size(), 1);
+    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -327,6 +329,8 @@ void test_follower_append_entries_7b(void**) {
     });
     SetPayload(mes, MakeLog({4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
+    assert_int_equal(messages.size(), 1);
+    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -359,6 +363,8 @@ void test_follower_append_entries_7c(void**) {
     });
     SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
+    assert_int_equal(messages.size(), 1);
+    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -391,6 +397,8 @@ void test_follower_append_entries_7f(void**) {
     });
     SetPayload(mes, MakeLog({4,4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
+    assert_int_equal(messages.size(), 1);
+    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
@@ -417,7 +425,8 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
         .Nentries = 0,
     });
     raft->Process(ts->Now(), mes);
-    assert_true(!messages.empty());
+    assert_int_equal(messages.size(), 1);
+    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_int_equal(last->Dst, 2);
     assert_true(last->Success);
