@@ -10,7 +10,7 @@ enable_testing()
 set(CMAKE_CXX_STANDARD 20)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(CMOCKA REQUIRED cmocka)
+pkg_check_modules(CMOCKA REQUIRED cmocka liburing)
 
 add_subdirectory(coroio)
 
