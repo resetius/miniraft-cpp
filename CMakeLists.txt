@@ -26,11 +26,13 @@ add_executable(test_raft test/test_raft.cpp)
 add_executable(test_read_write test/test_read_write.cpp)
 add_executable(server server/server.cpp)
 add_executable(client client/client.cpp)
+add_executable(kv examples/kv.cpp)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/coroio)
 
 target_link_libraries(server miniraft coroio)
 target_link_libraries(client miniraft coroio)
+target_link_libraries(kv miniraft coroio)
 
 target_include_directories(test_raft PRIVATE ${CMOCKA_INCLUDE_DIRS})
 target_link_directories(test_raft PRIVATE ${CMOCKA_LIBRARY_DIRS})
