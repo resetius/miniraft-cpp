@@ -16,6 +16,15 @@ struct INode {
     virtual void Drain() = 0;
 };
 
+// CommandRequest -> Write? -> LogEntry -> Append -> Committed As Index -> Applied As Index (Same) -> Index -> CommandResponse
+// CommandRequest -> Read? -> CurrentIndex (fixate) >= CommittedIndex -> CommandResponse
+struct IRsm {
+    virtual ~IRsm() = default;
+    virtual TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message) = 0;
+    virtual void Write(TMessageHolder<TLogEntry> message) = 0;
+    virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) = 0;
+};
+
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TState {
