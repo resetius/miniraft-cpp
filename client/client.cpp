@@ -20,11 +20,14 @@ TVoidSuspendedTask ClientReader(TPoller& poller, TSocket& socket) {
             auto t = times.front(); times.pop();
             auto dt = timeSource.Now() - t;
             auto commandResponse = response.template Cast<TCommandResponse>();
-            std::cout << "Ok, commitIndex: " << commandResponse->Index << " " << dt.count() << "\n";
+            auto len = commandResponse->Len - sizeof(TCommandResponse);
+            std::string_view data(commandResponse->Data, len);
+            std::cout << "Ok, commitIndex: " << commandResponse->Index << " "
+                      << data << " " << dt.count() << "\n";
             inflight --;
         }
     } catch (const std::exception& ex) {
-        std::cout << "Exception: " << ex.what() << "\n";
+        std::cout << "ClientReader Exception: " << ex.what() << "\n";
     }
     co_return;
 }
@@ -58,10 +61,24 @@ TVoidTask Client(TPoller& poller, TSocket socket) {
             //std::cout << "Sending " << line.Size() << " bytes: '" << line.Part1 << line.Part2 << "'\n";
             //std::cout << "Sending\n";
             header.Len = sizeof(header) + line.Size();
+            header.Flags = TCommandRequest::EWrite;
             times.push(timeSource.Now());
-            co_await byteWriter.Write(&header, sizeof(header));
-            co_await byteWriter.Write(line.Part1.data(), line.Part1.size());
-            co_await byteWriter.Write(line.Part2.data(), line.Part2.size());
+            if (line.Part1.data()[0] == '_') {
+                // read
+                header.Flags = 0;
+                header.Len = sizeof(header) + sizeof(uint64_t);
+                co_await byteWriter.Write(&header, sizeof(header));
+                uint64_t index;
+                std::string strIndex;
+                strIndex += std::string_view(line.Part1.data(), line.Part1.size());
+                strIndex += std::string_view(line.Part2.data(), line.Part2.size());
+                sscanf(strIndex.data(), "_ %llu", &index);
+                co_await byteWriter.Write(&index, sizeof(index));
+            } else {
+                co_await byteWriter.Write(&header, sizeof(header));
+                co_await byteWriter.Write(line.Part1.data(), line.Part1.size());
+                co_await byteWriter.Write(line.Part2.data(), line.Part2.size());
+            }
         }
     } catch (const std::exception& ex) {
         std::cout << "Exception: " << ex.what() << "\n";

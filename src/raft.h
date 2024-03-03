@@ -29,6 +29,9 @@ struct TDummyRsm: public IRsm {
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     void Write(TMessageHolder<TLogEntry> message) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
+
+private:
+    std::vector<TMessageHolder<TLogEntry>> Log;
 };
 
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
