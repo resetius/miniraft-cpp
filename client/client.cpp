@@ -74,7 +74,7 @@ TVoidTask Client(TPoller& poller, TSocket socket) {
                 std::string strIndex;
                 strIndex += std::string_view(line.Part1.data(), line.Part1.size());
                 strIndex += std::string_view(line.Part2.data(), line.Part2.size());
-                sscanf(strIndex.data(), "_ %llu", &index);
+                sscanf(strIndex.data(), "_ %llu", (unsigned long long*)&index);
                 co_await byteWriter.Write(&index, sizeof(index));
             } else {
                 co_await byteWriter.Write(&header, sizeof(header));
