@@ -26,11 +26,24 @@ static uint32_t rand_(uint32_t* seed) {
 
 TMessageHolder<TMessage> TDummyRsm::Read(TMessageHolder<TCommandRequest> message, uint64_t index)
 {
-    return NewHoldedMessage<TCommandResponse>(TCommandResponse {.Index = index});
+    int64_t readIndex;
+    memcpy(&readIndex, message->Data, sizeof(readIndex));
+    if (readIndex > 0 && readIndex <= Log.size()) {
+        auto log = Log[readIndex-1];
+        auto size = log->Len - sizeof(TMessage);
+        auto mes = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + size);
+        mes->Index = index;
+        memcpy(mes->Data, log->Data, size);
+        return mes;
+    } else {
+        return NewHoldedMessage<TCommandResponse>(TCommandResponse {.Index = index});
+    }
 }
 
 void TDummyRsm::Write(TMessageHolder<TLogEntry> message)
-{ }
+{
+    Log.emplace_back(std::move(message));
+}
 
 TMessageHolder<TLogEntry> TDummyRsm::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term)
 {
@@ -367,12 +380,10 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
 
 void TRaft::ProcessCommitted() {
     auto commitIndex = VolatileState->CommitIndex;
-    if (commitIndex > 0) {
-        for (auto i = VolatileState->LastApplied; i <= commitIndex; i++) {
-            Rsm->Write(State->Log[i-1]);
-        }
-        VolatileState->LastApplied = commitIndex;
+    for (auto i = VolatileState->LastApplied+1; i <= commitIndex; i++) {
+        Rsm->Write(State->Log[i-1]);
     }
+    VolatileState->LastApplied = commitIndex;
 }
 
 void TRaft::ProcessWaiting() {

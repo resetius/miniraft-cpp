@@ -95,6 +95,7 @@ static_assert(sizeof(TCommandRequest) == sizeof(TMessage) + 4);
 struct TCommandResponse: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_RESPONSE;
     uint64_t Index;
+    char Data[0];
 };
 
 static_assert(sizeof(TCommandResponse) == sizeof(TMessage) + 8);
