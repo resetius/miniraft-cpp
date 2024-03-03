@@ -297,7 +297,6 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
         for (auto i = prevIndex; i < lastIndex; i++) {
             mes.Payload[j++] = State->Log[i];
         }
-        // std::cout << "Send " << j << " entries to " << nodeId << "\n";
     }
     return mes;
 }
@@ -408,6 +407,10 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
             VolatileState->RpcDue[id] = now + TTimeout::Rpc;
             node->Send(CreateAppendEntries(id));
         }
+    }
+
+    if (Nservers == 1) {
+        VolatileState->CommitAdvance(Nservers, *State);
     }
 
     ProcessCommitted();
