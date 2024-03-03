@@ -44,13 +44,18 @@ MiniRaft-CPP is an implementation of the Raft consensus algorithm using C++20. T
    ```
 
 ### Running the Application
-- Start the servers: 
-  ```
-  ./server --id 1 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
-  ./server --id 2 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
-  ./server --id 3 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
-  ```
-- Run the client (the client can now only work with the leader): 
-  ```
-  ./client --node 127.0.0.1:8001:1
-  ```
+
+This is a simple application designed to demonstrate log replication in the Raft consensus algorithm. 
+
+To start the application, launch the servers with the following commands:
+```
+./server --id 1 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
+./server --id 2 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
+./server --id 3 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
+```
+
+To interact with the system, run the client as follows:
+```
+./client --node 127.0.0.1:8001:1
+```
+The client expects an input string to be added to the distributed log. If the input string starts with an underscore (`_`), it should be followed by a number (e.g., `_3`). In this case, the client will attempt to read the log entry at the specified number.
