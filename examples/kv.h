@@ -8,9 +8,10 @@
 class TKv: public IRsm {
 public:
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
-    void Write(TMessageHolder<TLogEntry> message) override;
+    void Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
 
 private:
+    uint64_t LastAppliedIndex = 0;
     std::unordered_map<std::string, std::string> H;
 };
