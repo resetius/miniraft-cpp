@@ -34,12 +34,14 @@ TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message, uint
     }
 }
 
-void TKv::Write(TMessageHolder<TLogEntry> message) {
-    auto writeKv = message.Cast<TWriteKv>();
-    std::string_view k(writeKv->Data, writeKv->KeySize);
-    std::string_view v(writeKv->Data + writeKv->KeySize, writeKv->ValSize);
-    H[std::string(k)] = std::string(v);
-    return;
+void TKv::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
+    if (index < LastAppliedIndex) {
+        auto writeKv = message.Cast<TWriteKv>();
+        std::string_view k(writeKv->Data, writeKv->KeySize);
+        std::string_view v(writeKv->Data + writeKv->KeySize, writeKv->ValSize);
+        H[std::string(k)] = std::string(v);
+        LastAppliedIndex = index;
+    }
 }
 
 TMessageHolder<TLogEntry> TKv::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term) {
