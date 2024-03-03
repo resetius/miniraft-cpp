@@ -24,6 +24,23 @@ static uint32_t rand_(uint32_t* seed) {
 
 } // namespace
 
+TMessageHolder<TMessage> TDummyRsm::Read(TMessageHolder<TCommandRequest> message)
+{
+    return {};
+}
+
+void TDummyRsm::Write(TMessageHolder<TLogEntry> message)
+{ }
+
+TMessageHolder<TLogEntry> TDummyRsm::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term)
+{
+    auto dataSize = command->Len - sizeof(TCommandRequest);
+    auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
+    memcpy(entry->Data, command->Data, dataSize);
+    entry->Term = term;
+    return entry;
+}
+
 TVolatileState& TVolatileState::SetElectionDue(ITimeSource::Time due) {
     ElectionDue = due;
     return *this;
@@ -95,8 +112,9 @@ TVolatileState& TVolatileState::SetCommitIndex(int index)
     return *this;
 }
 
-TRaft::TRaft(int node, const TNodeDict& nodes)
-    : Id(node)
+TRaft::TRaft(std::shared_ptr<IRsm> rsm, int node, const TNodeDict& nodes)
+    : Rsm(rsm)
+    , Id(node)
     , Nodes(nodes)
     , MinVotes((nodes.size()+2+nodes.size()%2)/2)
     , Npeers(nodes.size())

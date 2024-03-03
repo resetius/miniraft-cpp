@@ -71,7 +71,8 @@ int main(int argc, char** argv) {
         std::cerr << "Host not found\n"; return 1;
     }
 
-    auto raft = std::make_shared<TRaft>(myHost.Id, nodes);
+    std::shared_ptr<IRsm> rsm = std::make_shared<TDummyRsm>();
+    auto raft = std::make_shared<TRaft>(rsm, myHost.Id, nodes);
     TPoller::TSocket socket(NNet::TAddress{myHost.Address, myHost.Port}, loop.Poller());
     socket.Bind();
     socket.Listen();

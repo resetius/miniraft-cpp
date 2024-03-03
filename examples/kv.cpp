@@ -13,16 +13,25 @@ struct TReadKv: public TCommandRequest {
     char Data[0];
 };
 
+struct TResultValue: public TCommandResponse {
+    uint16_t ValSize;
+    char Data[0];
+};
+
 TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message) {
     auto readKv = message.Cast<TReadKv>();
     std::string_view k(readKv->Data, readKv->KeySize);
     auto it = H.find(std::string(k));
     if (it == H.end()) {
-        // TODO
+        auto res = NewHoldedMessage<TResultValue>(sizeof(TResultValue));
+        res->ValSize = -1;
+        return res;
     } else {
-        // TODO
+        auto res = NewHoldedMessage<TResultValue>(sizeof(TResultValue)+it->second.size());
+        res->ValSize = it->second.size();
+        memcpy(res->Data, it->second.data(), res->ValSize);
+        return res;
     }
-    return {};
 }
 
 void TKv::Write(TMessageHolder<TLogEntry> message) {
