@@ -85,3 +85,9 @@ The KV client expects commands as input:
 2. `get <key>` - Retrieves a value by its key.
 3. `list` - Displays all key/value pairs in the store.
 4. `del <key>` - Deletes a key from the store.
+
+## Media
+1. [Implementation of the Raft Consensus Algorithm Using C++20 Coroutines](https://dzone.com/articles/implementation-of-the-raft-consensus-algorithm-usi)
+2. [Разработка сетевой библиотеки на C++20: интеграция асинхронности и алгоритма Raft (часть 1)](https://www.linux.org.ru/articles/development/17447126)
+3. [Разработка сетевой библиотеки на C++20: интеграция асинхронности и алгоритма Raft (часть 2)](https://www.linux.org.ru/articles/development/17449693)
+4. [Simplifying Raft with C++20 coroutines](https://youtu.be/xztv-zIDLxc?si=3amGsi0Co9ZP6flT)
