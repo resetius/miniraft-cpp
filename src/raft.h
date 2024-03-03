@@ -20,13 +20,13 @@ struct INode {
 // CommandRequest -> Read? -> CurrentIndex (fixate) >= CommittedIndex -> CommandResponse
 struct IRsm {
     virtual ~IRsm() = default;
-    virtual TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message) = 0;
+    virtual TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) = 0;
     virtual void Write(TMessageHolder<TLogEntry> message) = 0;
     virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) = 0;
 };
 
 struct TDummyRsm: public IRsm {
-    TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message) override;
+    TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     void Write(TMessageHolder<TLogEntry> message) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
 };
@@ -158,7 +158,7 @@ private:
 
     struct TWaiting {
         uint64_t Index;
-        TMessageHolder<TMessage> Message;
+        TMessageHolder<TCommandRequest> Command;
         std::shared_ptr<INode> ReplyTo;
         bool operator< (const TWaiting& other) const {
             return Index > other.Index;

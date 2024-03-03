@@ -42,6 +42,7 @@ TVoidTask Client(TPoller& poller, TSocket socket) {
 
     TLine line;
     TCommandRequest header;
+    header.Flags = TCommandRequest::EWrite;
     header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
     auto lineReader = TLineReader(input, 2*1024);
     auto byteWriter = TByteWriter(socket);
