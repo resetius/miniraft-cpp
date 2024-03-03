@@ -25,6 +25,12 @@ struct IRsm {
     virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) = 0;
 };
 
+struct TDummyRsm: public IRsm {
+    TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message) override;
+    void Write(TMessageHolder<TLogEntry> message) override;
+    TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
+};
+
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TState {
@@ -80,7 +86,7 @@ enum class EState: int {
 
 class TRaft {
 public:
-    TRaft(int node, const TNodeDict& nodes);
+    TRaft(std::shared_ptr<IRsm> rsm, int node, const TNodeDict& nodes);
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
@@ -140,6 +146,7 @@ private:
     void ProcessWaiting();
     ITimeSource::Time MakeElection(ITimeSource::Time now);
 
+    std::shared_ptr<IRsm> Rsm;
     uint32_t Id;
     TNodeDict Nodes;
     int MinVotes;
