@@ -143,6 +143,7 @@ private:
 
     TMessageHolder<TRequestVoteRequest> CreateVote(uint32_t nodeId);
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
+    void ProcessCommitted();
     void ProcessWaiting();
     ITimeSource::Time MakeElection(ITimeSource::Time now);
 
