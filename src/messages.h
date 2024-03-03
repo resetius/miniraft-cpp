@@ -82,10 +82,15 @@ static_assert(sizeof(TAppendEntriesResponse) == sizeof(TMessageEx) + 16);
 
 struct TCommandRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
+    enum EFlags {
+        ENone = 0,
+        EWrite = 1,
+    };
+    uint32_t Flags = ENone;
     char Data[0];
 };
 
-static_assert(sizeof(TCommandRequest) == sizeof(TMessage));
+static_assert(sizeof(TCommandRequest) == sizeof(TMessage) + 4);
 
 struct TCommandResponse: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_RESPONSE;

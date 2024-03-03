@@ -18,7 +18,7 @@ struct TResultValue: public TCommandResponse {
     char Data[0];
 };
 
-TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message) {
+TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
     auto readKv = message.Cast<TReadKv>();
     std::string_view k(readKv->Data, readKv->KeySize);
     auto it = H.find(std::string(k));

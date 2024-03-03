@@ -24,9 +24,9 @@ static uint32_t rand_(uint32_t* seed) {
 
 } // namespace
 
-TMessageHolder<TMessage> TDummyRsm::Read(TMessageHolder<TCommandRequest> message)
+TMessageHolder<TMessage> TDummyRsm::Read(TMessageHolder<TCommandRequest> message, uint64_t index)
 {
-    return {};
+    return NewHoldedMessage<TCommandResponse>(TCommandResponse {.Index = index});
 }
 
 void TDummyRsm::Write(TMessageHolder<TLogEntry> message)
@@ -253,12 +253,13 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
 
 void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
     auto& log = State->Log;
-    auto entry = Rsm->Prepare(std::move(command), State->CurrentTerm);
-    log.emplace_back(std::move(entry));
+    if (command->Flags & TCommandRequest::EWrite) {
+        auto entry = Rsm->Prepare(std::move(command), State->CurrentTerm);
+        log.emplace_back(std::move(entry));
+    }
     auto index = log.size();
     if (replyTo) {
-        auto mes = NewHoldedMessage(TCommandResponse {.Index = index});
-        waiting.emplace(TWaiting{mes->Index, mes, replyTo});
+        waiting.emplace(TWaiting{index, std::move(command), replyTo});
     }
 }
 
@@ -378,7 +379,13 @@ void TRaft::ProcessWaiting() {
     auto lastApplied = VolatileState->LastApplied;
     while (!waiting.empty() && waiting.top().Index <= lastApplied) {
         auto w = waiting.top(); waiting.pop();
-        w.ReplyTo->Send(std::move(w.Message));
+        TMessageHolder<TMessage> reply;
+        if (w.Command->Flags & TCommandRequest::EWrite) {
+            reply = NewHoldedMessage(TCommandResponse {.Index = w.Index});
+        } else {
+            reply = Rsm->Read(std::move(w.Command), w.Index);
+        }
+        w.ReplyTo->Send(std::move(reply));
     }
 }
 
