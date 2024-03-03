@@ -90,4 +90,5 @@ The KV client expects commands as input:
 1. [Implementation of the Raft Consensus Algorithm Using C++20 Coroutines](https://dzone.com/articles/implementation-of-the-raft-consensus-algorithm-usi)
 2. [Разработка сетевой библиотеки на C++20: интеграция асинхронности и алгоритма Raft (часть 1)](https://www.linux.org.ru/articles/development/17447126)
 3. [Разработка сетевой библиотеки на C++20: интеграция асинхронности и алгоритма Raft (часть 2)](https://www.linux.org.ru/articles/development/17449693)
-4. [Simplifying Raft with C++20 coroutines](https://youtu.be/xztv-zIDLxc?si=3amGsi0Co9ZP6flT)
+4. [High-performance network library using C++20 coroutines](https://habr.com/ru/articles/768418/)
+5. [Simplifying Raft with C++20 coroutines](https://youtu.be/xztv-zIDLxc?si=3amGsi0Co9ZP6flT)
