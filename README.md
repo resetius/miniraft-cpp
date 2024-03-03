@@ -58,4 +58,4 @@ To interact with the system, run the client as follows:
 ```
 ./client --node 127.0.0.1:8001:1
 ```
-The client expects an input string to be added to the distributed log. If the input string starts with an underscore (`_`), it should be followed by a number (e.g., `_3`). In this case, the client will attempt to read the log entry at the specified number.
+The client expects an input string to be added to the distributed log. If the input string starts with an underscore (`_`), it should be followed by a number (e.g., `_ 3`). In this case, the client will attempt to read the log entry at the specified number.
