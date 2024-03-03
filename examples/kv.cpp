@@ -4,45 +4,62 @@
 
 #include "kv.h"
 
-struct TWriteKvEntry: public TLogEntry {
-    uint16_t KeySize;
-    uint16_t ValSize;
+struct TKvEntry {
+    uint16_t KeySize = 0;
+    uint16_t ValSize = 0;
     char Data[0];
 };
 
-struct TWriteKv: public TCommandRequest {
-    uint16_t KeySize;
-    uint16_t ValSize;
-    char Data[0];
+struct TKvLogEntry: public TLogEntry, public TKvEntry
+{
+};
+
+struct TWriteKv: public TCommandRequest, public TKvEntry
+{
 };
 
 struct TReadKv: public TCommandRequest {
-    uint16_t KeySize;
+    uint16_t KeySize = 0;
     char Data[0];
 };
 
 TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
     auto readKv = message.Cast<TReadKv>();
-    std::string_view k(readKv->Data, readKv->KeySize);
-    auto it = H.find(std::string(k));
-    if (it == H.end()) {
-        auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse));
+    if (readKv->KeySize == 0) {
+        std::string data;
+        for (auto& [k, v] : H) {
+            data += k + "=" + v + ",";
+        }
+        auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + data.size());
+        memcpy(res->Data, data.data(), data.size());
         res->Index = index;
         return res;
     } else {
-        auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse)+it->second.size());
-        res->Index = index;
-        memcpy(res->Data, it->second.data(), it->second.size());
-        return res;
+        std::string_view k(readKv->Data, readKv->KeySize);
+        auto it = H.find(std::string(k));
+        if (it == H.end()) {
+            auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse));
+            res->Index = index;
+            return res;
+        } else {
+            auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse)+it->second.size());
+            res->Index = index;
+            memcpy(res->Data, it->second.data(), it->second.size());
+            return res;
+        }
     }
 }
 
 void TKv::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     if (LastAppliedIndex < index) {
-        auto writeKv = message.Cast<TWriteKvEntry>();
-        std::string_view k(writeKv->Data, writeKv->KeySize);
-        std::string_view v(writeKv->Data + writeKv->KeySize, writeKv->ValSize);
-        H[std::string(k)] = std::string(v);
+        auto entry = message.Cast<TKvLogEntry>();
+        std::string_view k(entry->TKvEntry::Data, entry->KeySize);
+        if (entry->ValSize) {
+            std::string_view v(entry->TKvEntry::Data + entry->KeySize, entry->ValSize);
+            H[std::string(k)] = std::string(v);
+        } else {
+            H.erase(std::string(k));
+        }
         LastAppliedIndex = index;
     }
 }
@@ -87,8 +104,8 @@ NNet::TVoidTask Client(TPoller& poller, TSocket socket) {
                 mes->Flags = TCommandRequest::EWrite;
                 mes->KeySize = keySize;
                 mes->ValSize = valSize;
-                memcpy(mes->Data, key, keySize);
-                memcpy(mes->Data+keySize, val, valSize);
+                memcpy(mes->TKvEntry::Data, key, keySize);
+                memcpy(mes->TKvEntry::Data+keySize, val, valSize);
                 req = mes;
             } else if (!strcmp(prefix, "get")) {
                 auto key = strtok(nullptr, sep);
@@ -96,6 +113,17 @@ NNet::TVoidTask Client(TPoller& poller, TSocket socket) {
                 auto mes = NewHoldedMessage<TReadKv>(sizeof(TReadKv) + size);
                 mes->KeySize = size;
                 memcpy(mes->Data, key, size);
+                req = mes;
+            } else if (!strcmp(prefix, "list")) {
+                req = NewHoldedMessage<TReadKv>(sizeof(TReadKv));
+            } else if (!strcmp(prefix, "del")) {
+                auto key = strtok(nullptr, sep);
+                auto size = strlen(key);
+                auto mes = NewHoldedMessage<TWriteKv>(sizeof(TWriteKv) + size);
+                mes->Flags = TCommandRequest::EWrite;
+                mes->KeySize = size;
+                mes->ValSize = 0;
+                memcpy(mes->TKvEntry::Data, key, size);
                 req = mes;
             } else {
                 std::cout << "Cannot parse command: " << strLine << "\n";
