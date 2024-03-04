@@ -1,5 +1,9 @@
 # MiniRaft-CPP
 
+[![Number of GitHub stars](https://img.shields.io/github/stars/resetius/miniraft-cpp)](https://github.com/resetius/miniraft-cpp/stargazers)
+![GitHub commit activity](https://img.shields.io/github/commit-activity/m/resetius/miniraft-cpp)
+[![GitHub license which is BSD-2-Clause license](https://img.shields.io/github/license/resetius/miniraft-cpp)](https://github.com/resetius/miniraft-cpp)
+
 ## Overview
 MiniRaft-CPP is an implementation of the Raft consensus algorithm using C++20. This project leverages the [coroio library](https://github.com/resetius/coroio) for efficient asynchronous I/O operations. It aims to provide a clear and efficient representation of the Raft protocol, ensuring consistency and reliability in distributed systems.
 
