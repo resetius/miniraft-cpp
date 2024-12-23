@@ -63,25 +63,30 @@ TSql::~TSql()
 
 void TSql::Execute(const std::string& q) {
     char* err = nullptr;
+    std::cerr << "Execute: " << q << std::endl;
     if (sqlite3_exec(Db, q.c_str(), nullptr, nullptr, &err) != SQLITE_OK) {
         // TODO: Return error to user
         // TODO: Move LastApplied?
         std::cerr << "Cannot apply changes, error: " << err << std::endl;
         throw std::runtime_error("Failed to execute SQL command");
     }
+    std::cerr << "OK" << std::endl;
 }
  
 TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
     // TODO: non-empty result
     auto readSql = message.Cast<TReadSql>();
+    std::cerr << "Execute read\n";
     Execute(std::string(readSql->Query, readSql->QuerySize));
     return NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse));
 }
 
 void TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     // TODO: index + 1 == LastAppliedIndex
-    if (index < LastAppliedIndex) {
+    std::cerr << "Write: index: " << index << ", LastApplied: " << LastAppliedIndex << "\n"; 
+    if (LastAppliedIndex < index) {
         auto entry = message.Cast<TSqlLogEntry>();
+        std::cerr << "Execute write of size: " << entry->QuerySize << std::endl;
         Execute(std::string(entry->Query, entry->QuerySize));
         // TODO: must be committed with query at the same tx
         LastAppliedIndex = index;
@@ -90,6 +95,7 @@ void TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
 
 TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term) {
     auto dataSize = command->Len - sizeof(TCommandRequest);
+    std::cerr << "Prepare entry of size: " << dataSize << ", in term: " << term << std::endl;
     auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
     memcpy(entry->Data, command->Data, dataSize);
     entry->Term = term;
@@ -116,24 +122,33 @@ NNet::TVoidTask Client(TPoller& poller, TSocket socket) {
             std::string strLine;
             strLine += std::string_view(line.Part1.data(), line.Part1.size());
             strLine += std::string_view(line.Part2.data(), line.Part2.size());
-            auto prefix = strtok((char*)strLine.data(), sep);
+            size_t pos = strLine.find(' ');
+            auto prefix = strLine.substr(0, pos);
             TMessageHolder<TMessage> req;
         
             int flags = 0;
-            if (!strcmp(prefix, "create") || !strcmp(prefix, "insert") || !strcmp(prefix, "update")) {
-                flags = TCommandRequest::EWrite;
-            } else if (!strcmp(prefix, "select")) {
-                ;
+            if (!strcasecmp(prefix.data(), "create") || !strcasecmp(prefix.data(), "insert") || !strcasecmp(prefix.data(), "update")) {
+                auto mes = NewHoldedMessage<TWriteSql>(sizeof(TWriteSql) + strLine.size());
+                mes->Flags = TCommandRequest::EWrite;
+                mes->QuerySize = strLine.size();
+                memcpy(mes->Query, strLine.data(), strLine.size());
+                req = mes;
+            } else if (!strcasecmp(prefix.data(), "select")) {
+                auto mes = NewHoldedMessage<TReadSql>(sizeof(TReadSql) + strLine.size());
+                mes->QuerySize = strLine.size();
+                memcpy(mes->Query, strLine.data(), strLine.size());
+                req = mes;
             } else {
                 std::cerr << "Cannot parse command: " << strLine << std::endl;
                 continue;
             }
-            size_t querySize = strLine.size();
-            auto mes = NewHoldedMessage<TWriteSql>(sizeof(TWriteSql) + querySize);
-            mes->Flags = flags;
-            mes->QuerySize = querySize;
-            memcpy(mes->Query, strLine.data(), querySize);
-            req = mes;
+            co_await TMessageWriter(socket).Write(std::move(req));
+            auto reply = co_await TMessageReader(socket).Read();
+            auto res = reply.template Cast<TCommandResponse>();
+            auto len = res->Len - sizeof(TCommandResponse);
+            std::string_view data(res->Data, len);
+            std::cout << "Ok, commitIndex: " << res->Index << " "
+                      << data << "\n";
         }
     } catch (const std::exception& ex) {
         std::cout << "Exception: " << ex.what() << "\n";
