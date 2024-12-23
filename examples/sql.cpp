@@ -96,6 +96,51 @@ TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command,
     return entry;
 }
 
+template<typename TPoller, typename TSocket>
+NNet::TVoidTask Client(TPoller& poller, TSocket socket) {
+    using TFileHandle = typename TPoller::TFileHandle;
+    TFileHandle input{0, poller}; // stdin
+    co_await socket.Connect();
+    std::cout << "Connected\n";
+
+    NNet::TLine line;
+    TCommandRequest header;
+    header.Flags = TCommandRequest::EWrite;
+    header.Type = static_cast<uint32_t>(TCommandRequest::MessageType);
+    auto lineReader = NNet::TLineReader(input, 2*1024);
+    auto byteWriter = NNet::TByteWriter(socket);
+    const char* sep = " \t\r\n";
+
+    try {
+        while ((line = co_await lineReader.Read())) {
+            std::string strLine;
+            strLine += std::string_view(line.Part1.data(), line.Part1.size());
+            strLine += std::string_view(line.Part2.data(), line.Part2.size());
+            auto prefix = strtok((char*)strLine.data(), sep);
+            TMessageHolder<TMessage> req;
+        
+            int flags = 0;
+            if (!strcmp(prefix, "create") || !strcmp(prefix, "insert") || !strcmp(prefix, "update")) {
+                flags = TCommandRequest::EWrite;
+            } else if (!strcmp(prefix, "select")) {
+                ;
+            } else {
+                std::cerr << "Cannot parse command: " << strLine << std::endl;
+                continue;
+            }
+            size_t querySize = strLine.size();
+            auto mes = NewHoldedMessage<TWriteSql>(sizeof(TWriteSql) + querySize);
+            mes->Flags = flags;
+            mes->QuerySize = querySize;
+            memcpy(mes->Query, strLine.data(), querySize);
+            req = mes;
+        }
+    } catch (const std::exception& ex) {
+        std::cout << "Exception: " << ex.what() << "\n";
+    }
+    co_return;
+}
+
 void usage(const char* prog) {
     std::cerr << prog << "--client|--server --id myid --node ip:port:id [--node ip:port:id ...]" << "\n";
     exit(0);
@@ -155,7 +200,11 @@ int main(int argc, char** argv)
         server.Serve();
         loop.Loop();
     } else {
-        // TODO: client
+        NNet::TAddress addr{hosts[0].Address, hosts[0].Port};
+        NNet::TSocket socket(std::move(addr), loop.Poller());
+
+        Client(loop.Poller(), std::move(socket));
+        loop.Loop();
     }
     return 0;
 }
