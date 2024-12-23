@@ -214,9 +214,6 @@ NNet::TVoidTask TRaftServer<TSocket>::Idle() {
     co_return;
 }
 
+// TODO: Use TPoller::TSocket
 template class TRaftServer<NNet::TSocket>;
 template class TRaftServer<NNet::TSslSocket<NNet::TSocket>>;
-#ifdef __linux__
-template class TRaftServer<NNet::TUringSocket>;
-template class TRaftServer<NNet::TSslSocket<NNet::TUringSocket>>;
-#endif
