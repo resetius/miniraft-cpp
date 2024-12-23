@@ -270,7 +270,7 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
 void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
     auto& log = State->Log;
     if (command->Flags & TCommandRequest::EWrite) {
-        auto entry = Rsm->Prepare(std::move(command), State->CurrentTerm);
+        auto entry = Rsm->Prepare(command, State->CurrentTerm);
         log.emplace_back(std::move(entry));
     }
     auto index = log.size();
