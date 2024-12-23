@@ -164,7 +164,8 @@ void TRaftServer<TSocket>::DebugPrint() {
         std::cout << "Leader, "
             << "Term: " << state->CurrentTerm << ", "
             << "Index: " << state->Log.size() << ", "
-            << "CommitIndex: " << volatileState->CommitIndex << ", ";
+            << "CommitIndex: " << volatileState->CommitIndex << ", "
+            << "LastApplied: " << volatileState->LastApplied << ", ";
         std::cout << "Delay: ";
         for (auto [id, index] : volatileState->MatchIndex) {
             std::cout << id << ":" << (state->Log.size() - index) << " ";
@@ -183,12 +184,14 @@ void TRaftServer<TSocket>::DebugPrint() {
             << "Term: " << state->CurrentTerm << ", "
             << "Index: " << state->Log.size() << ", "
             << "CommitIndex: " << volatileState->CommitIndex << ", "
+            << "LastApplied: " << volatileState->LastApplied << ", "
             << "\n";
     } else if (Raft->CurrentStateName() == EState::FOLLOWER) {
         std::cout << "Follower, "
             << "Term: " << state->CurrentTerm << ", "
             << "Index: " << state->Log.size() << ", "
             << "CommitIndex: " << volatileState->CommitIndex << ", "
+            << "LastApplied: " << volatileState->LastApplied << ", "
             << "\n";
     }
 }

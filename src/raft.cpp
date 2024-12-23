@@ -235,6 +235,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
     (*VolatileState)
         .SetCommitIndex(commitIndex)
         .SetElectionDue(MakeElection(now));
+
     Become(EState::FOLLOWER);
     Nodes[reply->Dst]->Send(std::move(reply));
 }
@@ -407,6 +408,8 @@ void TRaft::FollowerTimeout(ITimeSource::Time now) {
     if (VolatileState->ElectionDue <= now) {
         Become(EState::CANDIDATE);
     }
+
+    ProcessCommitted();
 }
 
 void TRaft::CandidateTimeout(ITimeSource::Time now) {
