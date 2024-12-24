@@ -18,6 +18,7 @@ add_library(miniraft
     src/messages.cpp
     src/raft.cpp
     src/server.cpp
+    src/persist.cpp
 )
 
 target_link_libraries(miniraft PUBLIC coroio)
