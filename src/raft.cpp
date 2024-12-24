@@ -312,7 +312,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
         mes.InitPayload(lastIndex - prevIndex);
         uint32_t j = 0;
         for (auto i = prevIndex; i < lastIndex; i++) {
-            mes.Payload[j++] = std::static_pointer_cast<TState>(State)->Log[i]; // TODO: fixme
+            mes.Payload[j++] = State->Get(i);
         }
     }
     return mes;
@@ -385,7 +385,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
 void TRaft::ProcessCommitted() {
     auto commitIndex = VolatileState->CommitIndex;
     for (auto i = VolatileState->LastApplied+1; i <= commitIndex; i++) {
-        Rsm->Write(std::static_pointer_cast<TState>(State)->Log[i-1], i); // TODO: fixme
+        Rsm->Write(State->Get(i-1), i);
     }
     VolatileState->LastApplied = commitIndex;
 }
