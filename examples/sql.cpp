@@ -114,7 +114,6 @@ bool TSql::Execute(const std::string& q) {
     Result.Clear();
     LastError.clear();
     if (sqlite3_exec(Db, q.c_str(), Process, this, &err) != SQLITE_OK) {
-        // TODO: Return error to user
         std::cerr << "Cannot apply changes, error: " << err << std::endl;
         LastError = err;
         sqlite3_free(err);
