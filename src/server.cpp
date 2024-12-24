@@ -158,8 +158,8 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundServe() {
 
 template<typename TSocket>
 void TRaftServer<TSocket>::DebugPrint() {
-    TStateFields state = *Raft->GetState();
-    TVolatileState volatileState = *Raft->GetVolatileState();
+    const TStateFields& state = *Raft->GetState();
+    const TVolatileState& volatileState = *Raft->GetVolatileState();
     if (state == PersistentFields && volatileState == VolatileFields) {
         return;
     }
