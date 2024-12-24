@@ -84,7 +84,6 @@ void TDiskState::Append(TMessageHolder<TLogEntry> entry)
 
 TMessageHolder<TLogEntry> TDiskState::Get(int64_t index) const
 {
-    std::cerr << "Get " << index << "\n";
     if (index >= LastLogIndex || index < 0) {
         return {};
     }
