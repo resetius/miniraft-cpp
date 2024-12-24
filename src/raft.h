@@ -22,13 +22,13 @@ struct INode {
 struct IRsm {
     virtual ~IRsm() = default;
     virtual TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) = 0;
-    virtual void Write(TMessageHolder<TLogEntry> message, uint64_t index) = 0;
+    virtual TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) = 0;
     virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) = 0;
 };
 
 struct TDummyRsm: public IRsm {
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
-    void Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
+    TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
 
 private:
@@ -152,7 +152,7 @@ private:
     
     struct TAnswer {
         uint64_t Index;
-        TMessageHolder<TCommandResponse> Reply;
+        TMessageHolder<TMessage> Reply;
     };
     std::queue<TAnswer> WriteAnswers;
 

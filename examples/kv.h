@@ -8,7 +8,7 @@
 class TKv: public IRsm {
 public:
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
-    void Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
+    TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
 
 private:

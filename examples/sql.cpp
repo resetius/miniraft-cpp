@@ -34,8 +34,7 @@ public:
     // select
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     // insert, update, create
-    // TODO: implement result
-    void Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
+    TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     // convert request to log message
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
 
@@ -105,7 +104,7 @@ TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uin
     return NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse));
 }
 
-void TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
+TMessageHolder<TMessage> TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     // TODO: index + 1 == LastAppliedIndex
     std::cerr << "Write: index: " << index << ", LastApplied: " << LastAppliedIndex << "\n"; 
     if (LastAppliedIndex < index) {
@@ -125,6 +124,7 @@ void TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
             Execute("ROLLBACK;");
         }
     }
+    return {};
 }
 
 TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term) {

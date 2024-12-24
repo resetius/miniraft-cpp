@@ -40,12 +40,13 @@ TMessageHolder<TMessage> TDummyRsm::Read(TMessageHolder<TCommandRequest> message
     }
 }
 
-void TDummyRsm::Write(TMessageHolder<TLogEntry> message, uint64_t index)
+TMessageHolder<TMessage> TDummyRsm::Write(TMessageHolder<TLogEntry> message, uint64_t index)
 {
     if (LastAppliedIndex < index) {
         Log.emplace_back(std::move(message));
         LastAppliedIndex = index;
     }
+    return {};
 }
 
 TMessageHolder<TLogEntry> TDummyRsm::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term)
@@ -386,10 +387,10 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
 void TRaft::ProcessCommitted() {
     auto commitIndex = VolatileState->CommitIndex;
     for (auto i = VolatileState->LastApplied+1; i <= commitIndex; i++) {
-        Rsm->Write(State->Get(i-1), i); // TODO: Write returns result
+        auto reply = Rsm->Write(State->Get(i-1), i);
         WriteAnswers.emplace(TAnswer {
             .Index = i,
-            .Reply = NewHoldedMessage(TCommandResponse {.Index = i})
+            .Reply = reply ? reply : NewHoldedMessage(TCommandResponse {.Index = i})
         });
     }
     VolatileState->LastApplied = commitIndex;
