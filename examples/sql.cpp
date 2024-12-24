@@ -103,7 +103,7 @@ TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command,
 }
 
 template<typename TPoller, typename TSocket>
-NNet::TVoidTask Client(TPoller& poller, TSocket socket) {
+NNet::TFuture<void> Client(TPoller& poller, TSocket socket) {
     using TFileHandle = typename TPoller::TFileHandle;
     TFileHandle input{0, poller}; // stdin
     co_await socket.Connect();
@@ -218,8 +218,10 @@ int main(int argc, char** argv)
         NNet::TAddress addr{hosts[0].Address, hosts[0].Port};
         NNet::TSocket socket(std::move(addr), loop.Poller());
 
-        Client(loop.Poller(), std::move(socket));
-        loop.Loop();
+        auto h = Client(loop.Poller(), std::move(socket));
+        while (!h.done()) {
+            loop.Step();
+        }
     }
     return 0;
 }
