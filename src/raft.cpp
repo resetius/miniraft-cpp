@@ -276,7 +276,7 @@ void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std:
     }
     auto index = State->LastLogIndex;
     if (replyTo) {
-        waiting.emplace(TWaiting{index, std::move(command), replyTo});
+        Waiting.emplace(TWaiting{index, std::move(command), replyTo});
     }
 }
 
@@ -386,18 +386,28 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
 void TRaft::ProcessCommitted() {
     auto commitIndex = VolatileState->CommitIndex;
     for (auto i = VolatileState->LastApplied+1; i <= commitIndex; i++) {
-        Rsm->Write(State->Get(i-1), i);
+        Rsm->Write(State->Get(i-1), i); // TODO: Write returns result
+        WriteAnswers.emplace(TAnswer {
+            .Index = i,
+            .Reply = NewHoldedMessage(TCommandResponse {.Index = i})
+        });
     }
     VolatileState->LastApplied = commitIndex;
 }
 
 void TRaft::ProcessWaiting() {
     auto lastApplied = VolatileState->LastApplied;
-    while (!waiting.empty() && waiting.top().Index <= lastApplied) {
-        auto w = waiting.top(); waiting.pop();
+    while (!Waiting.empty() && Waiting.top().Index <= lastApplied) {
+        auto w = Waiting.top(); Waiting.pop();
         TMessageHolder<TMessage> reply;
         if (w.Command->Flags & TCommandRequest::EWrite) {
-            reply = NewHoldedMessage(TCommandResponse {.Index = w.Index});
+            while (!WriteAnswers.empty() && WriteAnswers.front().Index < w.Index) {
+                WriteAnswers.pop();
+            }
+            assert(!WriteAnswers.empty());
+            auto answer = std::move(WriteAnswers.front()); WriteAnswers.pop();
+            assert(answer.Index == w.Index);
+            reply = std::move(answer.Reply);
         } else {
             reply = Rsm->Read(std::move(w.Command), w.Index);
         }

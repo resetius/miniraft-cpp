@@ -148,8 +148,15 @@ private:
             return Index > other.Index;
         }
     };
-    std::priority_queue<TWaiting> waiting;
+    std::priority_queue<TWaiting> Waiting;
+    
+    struct TAnswer {
+        uint64_t Index;
+        TMessageHolder<TCommandResponse> Reply;
+    };
+    std::queue<TAnswer> WriteAnswers;
 
     EState StateName;
     uint32_t Seed = 31337;
 };
+
