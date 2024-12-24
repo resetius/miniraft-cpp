@@ -1,5 +1,5 @@
 #include "persist.h"
-
+#include <iostream>
 
 TDiskState::TDiskState(const std::string& name, uint32_t id)
     : Entries(Open(name + ".entries." + std::to_string(id)))
@@ -7,9 +7,16 @@ TDiskState::TDiskState(const std::string& name, uint32_t id)
     , State(Open(name + ".state." + std::to_string(id)))
 {
     // TODO: read all an validate
-    State.read((char*)&LastLogIndex, sizeof(LastLogIndex));
-    State.read((char*)&CurrentTerm, sizeof(CurrentTerm));
-    State.read((char*)&VotedFor, sizeof(VotedFor));
+    State.seekg(0, std::ios_base::end);
+    auto size = State.tellg();
+    if (size == sizeof(LastLogIndex) + sizeof(CurrentTerm) + sizeof(VotedFor)) {
+        State.seekg(0);
+        State.read((char*)&LastLogIndex, sizeof(LastLogIndex));
+        State.read((char*)&CurrentTerm, sizeof(CurrentTerm));
+        State.read((char*)&VotedFor, sizeof(VotedFor));
+    }
+    State.clear();
+    State.seekg(0);
 }
 
 std::fstream TDiskState::Open(const std::string& name)
@@ -17,7 +24,7 @@ std::fstream TDiskState::Open(const std::string& name)
     auto flags = std::ios::in | std::ios::out | std::ios::binary;
     std::fstream f(name, flags);
     if (!f.is_open()) {
-        std::ofstream tmp(name, flags);
+        std::ofstream tmp(name);
         tmp.close();
         f.open(name, flags);
     }
@@ -43,25 +50,12 @@ TMessageHolder<TMessage> TDiskState::Read() const
     if (!Entries.read((char*)mes->Value, len - sizeof(TMessage))) {
         throw std::runtime_error("Error on read 3");
     }
-    auto maybeAppendEntries = mes.Maybe<TAppendEntriesRequest>();
-    if (maybeAppendEntries) {
-        auto appendEntries = maybeAppendEntries.Cast();
-        auto nentries = appendEntries->Nentries;
-        mes.InitPayload(nentries);
-        for (uint32_t i = 0; i < nentries; i++) {
-            mes.Payload[i] = Read();
-        }
-    }
     return mes;
 }
 
 void TDiskState::Write(TMessageHolder<TMessage> message)
 {
     Entries.write((char*)message.Mes, message->Len);
-    auto payload = std::move(message.Payload);
-    for (uint32_t i = 0; i < message.PayloadSize; ++i) {
-        Write(std::move(payload[i]));
-    }
 }
 
 void TDiskState::RemoveLast()
@@ -82,7 +76,7 @@ void TDiskState::Append(TMessageHolder<TLogEntry> entry)
 
     Write(entry);
     Index.seekg(LastLogIndex * sizeof(offset));
-    Index.write((char*)&LastLogIndex, sizeof(LastLogIndex));
+    Index.write((char*)&offset, sizeof(offset));
     LastLogIndex ++;
     State.seekg(0);
     State.write((char*)&LastLogIndex, sizeof(LastLogIndex));
@@ -90,6 +84,7 @@ void TDiskState::Append(TMessageHolder<TLogEntry> entry)
 
 TMessageHolder<TLogEntry> TDiskState::Get(int64_t index) const
 {
+    std::cerr << "Get " << index << "\n";
     if (index >= LastLogIndex || index < 0) {
         return {};
     }
@@ -101,13 +96,16 @@ TMessageHolder<TLogEntry> TDiskState::Get(int64_t index) const
     }
 
     Entries.seekg(offset);
-    return Read().Cast<TLogEntry>();
+    auto entry = Read().Cast<TLogEntry>();
+    return entry;
 }
 
 void TDiskState::Commit()
 {
-    State.seekg(sizeof(LastLogIndex));
+    State.seekg(0);
+    State.write((char*)&LastLogIndex, sizeof(LastLogIndex));
     State.write((char*)&CurrentTerm, sizeof(CurrentTerm));
     State.write((char*)&VotedFor, sizeof(VotedFor));
+    State.clear();
 }
 
