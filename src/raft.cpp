@@ -491,6 +491,14 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
 
             VolatileState = std::move(nextVolatileState);
             StateName = EState::LEADER;
+
+            // Add fake empty entry for faster commit
+            //
+            {
+                auto empty = NewHoldedMessage<TLogEntry>();
+                empty->Term = State->CurrentTerm;
+                State->Append(std::move(empty));
+            }
         }
     }
 
