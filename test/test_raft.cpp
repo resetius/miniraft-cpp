@@ -62,14 +62,16 @@ private:
 
 std::shared_ptr<TRaft> MakeRaft(
     const OnSendFunc& sendFunc = {},
-    int count = 3)
+    int count = 3,
+    TState st = {})
 {
     std::shared_ptr<IRsm> rsm = std::make_shared<TDummyRsm>();
     TNodeDict nodes;
     for (int i = 2; i <= count; i++) {
         nodes[i] = std::make_shared<TFakeNode>(sendFunc);
     }
-    return std::make_shared<TRaft>(std::move(rsm), 1, nodes);
+    std::shared_ptr<IState> state = std::make_shared<TState>(st);
+    return std::make_shared<TRaft>(std::move(rsm), std::move(state), 1, nodes);
 }
 
 template<typename T=TMessage>
@@ -277,11 +279,10 @@ void test_follower_append_entries_7a(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3);
-    raft->SetState(TState{
-        .CurrentTerm = 1,
-        .VotedFor = 2,
-        .Log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6})
+    auto raft = MakeRaft(onSend, 3, TState{
+        /*.CurrentTerm =*/ 1,
+        /*.VotedFor =*/ 2,
+        /*.Log =*/ MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6})
     });
     auto mes = NewHoldedMessage(TMessageEx {
         .Src = 2,
@@ -301,7 +302,7 @@ void test_follower_append_entries_7a(void**) {
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->Log.size() == 10);
+    assert_true(raft->GetState()->LastLogIndex == 10);
 }
 
 void test_follower_append_entries_7b(void**) {
@@ -311,11 +312,10 @@ void test_follower_append_entries_7b(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3);
-    raft->SetState(TState{
-        .CurrentTerm = 1,
-        .VotedFor = 2,
-        .Log = MakeLog<TLogEntry>({1,1,1,4})
+    auto raft = MakeRaft(onSend, 3, TState{
+        /*.CurrentTerm =*/ 1,
+        /*.VotedFor =*/ 2,
+        /*.Log =*/ MakeLog<TLogEntry>({1,1,1,4})
     });
     auto mes = NewHoldedMessage(TMessageEx {
         .Src = 2,
@@ -335,7 +335,7 @@ void test_follower_append_entries_7b(void**) {
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->Log.size() == 10);
+    assert_true(raft->GetState()->LastLogIndex == 10);
 }
 
 void test_follower_append_entries_7c(void**) {
@@ -345,11 +345,10 @@ void test_follower_append_entries_7c(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3);
-    raft->SetState(TState{
-        .CurrentTerm = 1,
-        .VotedFor = 2,
-        .Log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6,6,6})
+    auto raft = MakeRaft(onSend, 3, TState{
+        /*.CurrentTerm =*/ 1,
+        /*.VotedFor =*/ 2,
+        /*.Log =*/ MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6,6,6})
     });
     auto mes = NewHoldedMessage(TMessageEx {
         .Src = 2,
@@ -369,7 +368,7 @@ void test_follower_append_entries_7c(void**) {
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->Log.size() == 11);
+    assert_true(raft->GetState()->LastLogIndex == 11);
 }
 
 void test_follower_append_entries_7f(void**) {
@@ -379,11 +378,10 @@ void test_follower_append_entries_7f(void**) {
         messages.push_back(message);
     };
     auto ts = std::make_shared<TFakeTimeSource>();
-    auto raft = MakeRaft(onSend, 3);
-    raft->SetState(TState{
-        .CurrentTerm = 1,
-        .VotedFor = 2,
-        .Log = MakeLog<TLogEntry>({1,1,1,2,2,2,3,3,3,3,3})
+    auto raft = MakeRaft(onSend, 3, TState{
+        /*.CurrentTerm =*/ 1,
+        /*.VotedFor =*/ 2,
+        /*.Log =*/ MakeLog<TLogEntry>({1,1,1,2,2,2,3,3,3,3,3})
     });
     auto mes = NewHoldedMessage(TMessageEx {
         .Src = 2,
@@ -403,8 +401,8 @@ void test_follower_append_entries_7f(void**) {
     auto last = messages.back().Cast<TAppendEntriesResponse>();
     assert_true(last->Success);
     assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->Log.size() == 10);
-    assert_terms(raft->GetState()->Log, {1,1,1,4,4,5,5,6,6,6});
+    assert_true(raft->GetState()->LastLogIndex == 10);
+    assert_terms(std::static_pointer_cast<TState>(raft->GetState())->Log, {1,1,1,4,4,5,5,6,6,6});
 }
 
 void test_follower_append_entries_empty_to_empty_log(void**) {
@@ -612,8 +610,9 @@ void test_election_5_nodes(void**) {
 
 void test_commit_advance(void**) {
     auto state = TState {
-        .CurrentTerm = 1,
-        .Log = MakeLog<TLogEntry>({1})
+        /*.CurrentTerm =*/ 1,
+        0,
+        /*.Log =*/ MakeLog<TLogEntry>({1})
     };
 
     auto s = TVolatileState {
@@ -629,7 +628,9 @@ void test_commit_advance(void**) {
         .MatchIndex = {{1, 1}, {2, 2}}
     };
     auto add = MakeLog<TLogEntry>({1});
-    state.Log.insert(state.Log.end(), add.begin(), add.end());
+    for (auto& entry : add) {
+        state.Append(entry);
+    }
     s1 = TVolatileState(s).CommitAdvance(3, state);
     assert_int_equal(s1.CommitIndex, 2);
     s1 = TVolatileState(s).CommitAdvance(5, state);
@@ -638,8 +639,9 @@ void test_commit_advance(void**) {
 
 void test_commit_advance_wrong_term(void**) {
     auto state = TState {
-        .CurrentTerm = 2,
-        .Log = MakeLog<TLogEntry>({1,1})
+        /*.CurrentTerm =*/ 2,
+        0,
+        /*.Log =*/ MakeLog<TLogEntry>({1,1})
     };
     auto s = TVolatileState {
         .MatchIndex = {{1, 1}, {2, 2}}

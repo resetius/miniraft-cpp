@@ -68,9 +68,9 @@ TVolatileState& TVolatileState::Vote(uint32_t nodeId)
     return *this;
 }
 
-TVolatileState& TVolatileState::CommitAdvance(int nservers, const TState& state)
+TVolatileState& TVolatileState::CommitAdvance(int nservers, const IState& state)
 {
-    auto lastIndex = state.Log.size();
+    auto lastIndex = state.LastLogIndex;
     Indices.clear(); Indices.reserve(nservers);
     for (auto [_, index] : MatchIndex) {
         Indices.push_back(index);
@@ -128,14 +128,14 @@ TVolatileState& TVolatileState::SetCommitIndex(int index)
     return *this;
 }
 
-TRaft::TRaft(std::shared_ptr<IRsm> rsm, int node, const TNodeDict& nodes)
+TRaft::TRaft(std::shared_ptr<IRsm> rsm, std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
     : Rsm(rsm)
     , Id(node)
     , Nodes(nodes)
     , MinVotes((nodes.size()+2+nodes.size()%2)/2)
     , Npeers(nodes.size())
     , Nservers(nodes.size()+1)
-    , State(std::make_unique<TState>())
+    , State(std::move(state))
     , VolatileState(std::make_unique<TVolatileState>())
     , StateName(EState::FOLLOWER)
 {
@@ -155,7 +155,7 @@ void TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequ
         if (State->VotedFor == 0 || State->VotedFor == message->CandidateId) {
             if (message->LastLogTerm > State->LogTerm()) {
                 accept = true;
-            } else if (message->LastLogTerm == State->LogTerm() && message->LastLogIndex >= State->Log.size()) {
+            } else if (message->LastLogTerm == State->LogTerm() && message->LastLogIndex >= State->LastLogIndex) {
                 accept = true;
             }
         }
@@ -167,6 +167,7 @@ void TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequ
         if (accept) {
             VolatileState->ElectionDue = MakeElection(now);
             State->VotedFor = message->CandidateId;
+            State->Commit();
         }
 
         Nodes[reply->Dst]->Send(std::move(reply));
@@ -205,22 +206,21 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
     uint64_t commitIndex = VolatileState->CommitIndex;
     bool success = false;
     if (message->PrevLogIndex == 0 ||
-        (message->PrevLogIndex <= State->Log.size()
+        (message->PrevLogIndex <= State->LastLogIndex
             && State->LogTerm(message->PrevLogIndex) == message->PrevLogTerm))
     {
         success = true;
         auto index = message->PrevLogIndex;
-        auto& log = State->Log;
         for (uint32_t i = 0 ; i < message.PayloadSize; i++) {
             auto& data = message.Payload[i];
             auto entry = data.Cast<TLogEntry>();
             index++;
             // replace or append log entries
             if (State->LogTerm(index) != entry->Term) {
-                while (log.size() > index-1) {
-                    log.pop_back();
+                while (State->LastLogIndex > index-1) {
+                    State->RemoveLast();
                 }
-                log.push_back(entry);
+                State->Append(entry);
             }
         }
 
@@ -269,12 +269,11 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
 }
 
 void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
-    auto& log = State->Log;
     if (command->Flags & TCommandRequest::EWrite) {
         auto entry = Rsm->Prepare(command, State->CurrentTerm);
-        log.emplace_back(std::move(entry));
+        State->Append(std::move(entry));
     }
-    auto index = log.size();
+    auto index = State->LastLogIndex;
     if (replyTo) {
         waiting.emplace(TWaiting{index, std::move(command), replyTo});
     }
@@ -284,8 +283,8 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
     auto mes = NewHoldedMessage(
         TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm},
         TRequestVoteRequest {
-            .LastLogIndex = State->Log.size(),
-            .LastLogTerm = State->Log.empty() ? 0 : State->Log.back()->Term,
+            .LastLogIndex = State->LastLogIndex,
+            .LastLogTerm = State->LastLogTerm,
             .CandidateId = Id,
         });
     return mes;
@@ -294,7 +293,7 @@ TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
 TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId) {
     int batchSize = std::max(1, VolatileState->BatchSize[nodeId]);
     auto prevIndex = VolatileState->NextIndex[nodeId] - 1;
-    auto lastIndex = std::min(prevIndex+batchSize, (uint64_t)State->Log.size());
+    auto lastIndex = std::min<uint64_t>(prevIndex+batchSize, State->LastLogIndex);
     if (VolatileState->MatchIndex[nodeId]+1 < VolatileState->NextIndex[nodeId]) {
         lastIndex = prevIndex;
     }
@@ -313,7 +312,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
         mes.InitPayload(lastIndex - prevIndex);
         uint32_t j = 0;
         for (auto i = prevIndex; i < lastIndex; i++) {
-            mes.Payload[j++] = State->Log[i];
+            mes.Payload[j++] = State->Get(i);
         }
     }
     return mes;
@@ -361,6 +360,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
         if (messageEx->Term > State->CurrentTerm) {
             State->CurrentTerm = messageEx->Term;
             State->VotedFor = 0;
+            State->Commit();
             StateName = EState::FOLLOWER;
             if (VolatileState->ElectionDue <= now || VolatileState->ElectionDue == ITimeSource::Max) {
                 VolatileState->ElectionDue = MakeElection(now);
@@ -385,7 +385,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
 void TRaft::ProcessCommitted() {
     auto commitIndex = VolatileState->CommitIndex;
     for (auto i = VolatileState->LastApplied+1; i <= commitIndex; i++) {
-        Rsm->Write(State->Log[i-1], i);
+        Rsm->Write(State->Get(i-1), i);
     }
     VolatileState->LastApplied = commitIndex;
 }
@@ -424,7 +424,7 @@ void TRaft::CandidateTimeout(ITimeSource::Time now) {
 void TRaft::LeaderTimeout(ITimeSource::Time now) {
     for (auto& [id, node] : Nodes) {
         if (VolatileState->HeartbeatDue[id] <= now
-            || (VolatileState->NextIndex[id] <= State->Log.size() &&
+            || (VolatileState->NextIndex[id] <= State->LastLogIndex &&
             VolatileState->RpcDue[id] <= now))
         {
             VolatileState->HeartbeatDue[id] = now + TTimeout::Election / 2;
@@ -453,6 +453,7 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
             VolatileState = std::move(nextVolatileState);
             State->VotedFor = Id;
             State->CurrentTerm ++;
+            State->Commit();
             Become(EState::CANDIDATE);
         }
     }
@@ -460,7 +461,7 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
     if (StateName == EState::CANDIDATE) {
         int nvotes = VolatileState->Votes.size()+1;
         if (nvotes >= MinVotes) {
-            auto value = State->Log.size()+1;
+            auto value = State->LastLogIndex+1;
             decltype(VolatileState->NextIndex) nextIndex;
             decltype(VolatileState->RpcDue) rpcDue;
             for (auto [id, _] : Nodes) {

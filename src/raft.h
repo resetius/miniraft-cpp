@@ -37,12 +37,54 @@ private:
 
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
-struct TState {
+struct IState {
     uint64_t CurrentTerm = 1;
     uint32_t VotedFor = 0;
+    uint64_t LastLogIndex = 0;
+    uint64_t LastLogTerm = 0;
+
+    virtual uint64_t LogTerm(int64_t index = -1) const = 0;
+    virtual void RemoveLast() = 0;
+    virtual void Append(TMessageHolder<TLogEntry>) = 0;
+    virtual TMessageHolder<TLogEntry> Get(int64_t index) = 0;
+    virtual void Commit() = 0;
+    virtual ~IState() = default;
+};
+
+struct TState: IState {
     std::vector<TMessageHolder<TLogEntry>> Log;
 
-    uint64_t LogTerm(int64_t index = -1) const {
+    TState() = default;
+    TState(uint64_t currentTerm, uint32_t votedFor, const std::vector<TMessageHolder<TLogEntry>>& log)
+        : Log(log)
+    {
+        CurrentTerm = currentTerm;
+        VotedFor = votedFor;
+        if (!log.empty()) {
+            LastLogIndex = log.size();
+            LastLogTerm = log.back()->Term;
+        }
+    }
+
+    void RemoveLast() override {
+        Log.pop_back();
+        LastLogIndex = Log.size();
+        LastLogTerm = Log.empty() ? 0 : Log.back()->Term;
+    }
+
+    void Append(TMessageHolder<TLogEntry> entry) override {
+        Log.emplace_back(std::move(entry));
+        LastLogIndex = Log.size();
+        LastLogTerm = Log.back()->Term;
+    }
+
+    TMessageHolder<TLogEntry> Get(int64_t index) override {
+        return Log[index];
+    }
+
+    void Commit() override { }
+
+    uint64_t LogTerm(int64_t index = -1) const override {
         if (index < 0) {
             index = Log.size();
         }
@@ -70,7 +112,7 @@ struct TVolatileState {
 
     TVolatileState& Vote(uint32_t id);
     TVolatileState& SetLastApplied(int index);
-    TVolatileState& CommitAdvance(int nservers, const TState& state);
+    TVolatileState& CommitAdvance(int nservers, const IState& state);
     TVolatileState& SetCommitIndex(int index);
     TVolatileState& SetElectionDue(ITimeSource::Time);
     TVolatileState& SetNextIndex(uint32_t id, uint64_t nextIndex);
@@ -90,25 +132,21 @@ enum class EState: int {
 
 class TRaft {
 public:
-    TRaft(std::shared_ptr<IRsm> rsm, int node, const TNodeDict& nodes);
+    TRaft(std::shared_ptr<IRsm> rsm, std::shared_ptr<IState> state, int node, const TNodeDict& nodes);
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
 
 // ut
+    const auto GetState() const {
+        return State;
+    }
+
     EState CurrentStateName() const {
         return StateName;
     }
 
     void Become(EState newStateName);
-
-    const TState* GetState() const {
-        return State.get();
-    }
-
-    void SetState(const TState& state) {
-        *State = state;
-    }
 
     const TVolatileState* GetVolatileState() const {
         return VolatileState.get();
@@ -157,7 +195,7 @@ private:
     int MinVotes;
     int Npeers;
     int Nservers;
-    std::unique_ptr<TState> State;
+    std::shared_ptr<IState> State;
     std::unique_ptr<TVolatileState> VolatileState;
 
     struct TWaiting {
