@@ -84,6 +84,7 @@ TVolatileState& TVolatileState::CommitAdvance(int nservers, const IState& state)
     if (state.LogTerm(commitIndex) == state.CurrentTerm) {
         CommitIndex = commitIndex;
     }
+    // TODO: If state.LogTerm(commitIndex) < state.CurrentTerm need to append empty message to log
     return *this;
 }
 

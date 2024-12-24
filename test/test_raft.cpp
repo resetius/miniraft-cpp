@@ -8,6 +8,7 @@
 #include <messages.h>
 #include <raft.h>
 #include <timesource.h>
+#include <persist.h>
 #include <coroio/all.hpp>
 
 #include <stdarg.h>
@@ -674,6 +675,94 @@ void test_leader_heartbeat(void**) {
     assert_int_equal(req1->Nentries, 0);
 }
 
+void test_disk_state(void**) {
+    remove("test_disk_state.entries.1");
+    remove("test_disk_state.index.1");
+    remove("test_disk_state.state.1");
+
+    TDiskState state("test_disk_state", 1);
+    assert_int_equal(state.LastLogIndex, 0);
+    assert_int_equal(state.CurrentTerm, 1);
+    assert_int_equal(state.VotedFor, 0);
+    auto log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6});
+    for (auto entry : log) {
+        state.Append(entry);
+    }
+    assert_int_equal(state.LastLogIndex, 9);
+
+    std::vector<TMessageHolder<TLogEntry>> log2;
+    for (int i = 0; i < state.LastLogIndex; i++) {
+        auto entry = state.Get(i);
+        log2.emplace_back(entry);
+    }
+
+    assert_terms(log2, {1,1,1,4,4,5,5,6,6});
+}
+
+void test_disk_state_restore1(void**) {
+    remove("test_disk_state_restore1.entries.1");
+    remove("test_disk_state_restore1.index.1");
+    remove("test_disk_state_restore1.state.1");
+
+    std::unique_ptr<TDiskState> state = std::make_unique<TDiskState>("test_disk_state_restore1", 1);
+    assert_int_equal(state->LastLogIndex, 0);
+    assert_int_equal(state->CurrentTerm, 1);
+    assert_int_equal(state->VotedFor, 0);
+    auto log = MakeLog<TLogEntry>({1});
+    for (auto entry : log) {
+        state->Append(entry);
+    }
+    assert_int_equal(state->LastLogIndex, 1);
+
+    state.reset();
+    state = std::make_unique<TDiskState>("test_disk_state_restore1", 1);
+    assert_int_equal(state->CurrentTerm, 1);
+    assert_int_equal(state->VotedFor, 0);
+    assert_int_equal(state->LastLogIndex, 1);
+ 
+    std::vector<TMessageHolder<TLogEntry>> log2;
+    for (int i = 0; i < state->LastLogIndex; i++) {
+        auto entry = state->Get(i);
+        log2.emplace_back(entry);
+    }
+
+    assert_terms(log2, {1});
+}
+
+
+void test_disk_state_restore(void**) {
+    remove("test_disk_state_restore.entries.1");
+    remove("test_disk_state_restore.index.1");
+    remove("test_disk_state_restore.state.1");
+
+    std::unique_ptr<TDiskState> state = std::make_unique<TDiskState>("test_disk_state_restore", 1);
+    assert_int_equal(state->LastLogIndex, 0);
+    assert_int_equal(state->CurrentTerm, 1);
+    assert_int_equal(state->VotedFor, 0);
+    auto log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6});
+    for (auto entry : log) {
+        state->Append(entry);
+    }
+    assert_int_equal(state->LastLogIndex, 9);
+    state->VotedFor = 2;
+    state->CurrentTerm = 10;
+    state->Commit();
+
+    state.reset();
+    state = std::make_unique<TDiskState>("test_disk_state_restore", 1);
+    assert_int_equal(state->CurrentTerm, 10);
+    assert_int_equal(state->VotedFor, 2);
+    assert_int_equal(state->LastLogIndex, 9);
+ 
+    std::vector<TMessageHolder<TLogEntry>> log2;
+    for (int i = 0; i < state->LastLogIndex; i++) {
+        auto entry = state->Get(i);
+        log2.emplace_back(entry);
+    }
+
+    assert_terms(log2, {1,1,1,4,4,5,5,6,6});
+}
+
 int main() {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_empty),
@@ -700,6 +789,10 @@ int main() {
         cmocka_unit_test(test_commit_advance),
         cmocka_unit_test(test_commit_advance_wrong_term),
         cmocka_unit_test(test_leader_heartbeat),
+        cmocka_unit_test(test_disk_state),
+        cmocka_unit_test(test_disk_state_restore1),
+        cmocka_unit_test(test_disk_state_restore),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
+

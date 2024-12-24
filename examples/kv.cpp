@@ -1,6 +1,7 @@
 #include <string_view>
 
 #include <server.h>
+#include <persist.h>
 
 #include "kv.h"
 
@@ -73,7 +74,7 @@ TMessageHolder<TLogEntry> TKv::Prepare(TMessageHolder<TCommandRequest> command, 
 }
 
 template<typename TPoller, typename TSocket>
-NNet::TVoidTask Client(TPoller& poller, TSocket socket) {
+NNet::TFuture<void> Client(TPoller& poller, TSocket socket) {
     using TFileHandle = typename TPoller::TFileHandle;
     TFileHandle input{0, poller}; // stdin
     co_await socket.Connect();
@@ -144,7 +145,7 @@ NNet::TVoidTask Client(TPoller& poller, TSocket socket) {
 }
 
 void usage(const char* prog) {
-    std::cerr << prog << "--client|--server --id myid --node ip:port:id [--node ip:port:id ...]" << "\n";
+    std::cerr << prog << "--client|--server --id myid --node ip:port:id [--node ip:port:id ...] [--persist]" << "\n";
     exit(0);
 }
 
@@ -155,6 +156,7 @@ int main(int argc, char** argv) {
     TNodeDict nodes;
     uint32_t id = 0;
     bool server = false;
+    bool persist = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--server")) {
             server = true;
@@ -163,6 +165,8 @@ int main(int argc, char** argv) {
             hosts.push_back(THost{argv[++i]});
         } else if (!strcmp(argv[i], "--id") && i < argc - 1) {
             id = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--persist")) {
+            persist = true;
         } else if (!strcmp(argv[i], "--help")) {
             usage(argv[0]);
         }
@@ -193,7 +197,11 @@ int main(int argc, char** argv) {
         }
 
         std::shared_ptr<IRsm> rsm = std::make_shared<TKv>();
-        auto raft = std::make_shared<TRaft>(rsm, std::make_shared<TState>(), myHost.Id, nodes);
+        std::shared_ptr<IState> state = std::make_shared<TState>();
+        if (persist) {
+            state = std::make_shared<TDiskState>("state", myHost.Id);
+        }
+        auto raft = std::make_shared<TRaft>(rsm, state, myHost.Id, nodes);
         TPoller::TSocket socket(NNet::TAddress{myHost.Address, myHost.Port}, loop.Poller());
         socket.Bind();
         socket.Listen();
@@ -204,8 +212,10 @@ int main(int argc, char** argv) {
         NNet::TAddress addr{hosts[0].Address, hosts[0].Port};
         NNet::TSocket socket(std::move(addr), loop.Poller());
 
-        Client(loop.Poller(), std::move(socket));
-        loop.Loop();
+        auto h = Client(loop.Poller(), std::move(socket));
+        while (!h.done()) {
+            loop.Step();
+        }
     }
 
     return 0;
