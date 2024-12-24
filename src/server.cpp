@@ -158,42 +158,47 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundServe() {
 
 template<typename TSocket>
 void TRaftServer<TSocket>::DebugPrint() {
-    auto state = Raft->GetState();
-    auto* volatileState = Raft->GetVolatileState();
+    TStateFields state = *Raft->GetState();
+    TVolatileState volatileState = *Raft->GetVolatileState();
+    if (state == PersistentFields && volatileState == VolatileFields) {
+        return;
+    }
     if (Raft->CurrentStateName() == EState::LEADER) {
         std::cout << "Leader, "
-            << "Term: " << state->CurrentTerm << ", "
-            << "Index: " << state->LastLogIndex << ", "
-            << "CommitIndex: " << volatileState->CommitIndex << ", "
-            << "LastApplied: " << volatileState->LastApplied << ", ";
+            << "Term: " << state.CurrentTerm << ", "
+            << "Index: " << state.LastLogIndex << ", "
+            << "CommitIndex: " << volatileState.CommitIndex << ", "
+            << "LastApplied: " << volatileState.LastApplied << ", ";
         std::cout << "Delay: ";
-        for (auto [id, index] : volatileState->MatchIndex) {
-            std::cout << id << ":" << (state->LastLogIndex - index) << " ";
+        for (auto [id, index] : volatileState.MatchIndex) {
+            std::cout << id << ":" << (state.LastLogIndex - index) << " ";
         }
         std::cout << "MatchIndex: ";
-        for (auto [id, index] : volatileState->MatchIndex) {
+        for (auto [id, index] : volatileState.MatchIndex) {
             std::cout << id << ":" << index << " ";
         }
         std::cout << "NextIndex: ";
-        for (auto [id, index] : volatileState->NextIndex) {
+        for (auto [id, index] : volatileState.NextIndex) {
             std::cout << id << ":" << index << " ";
         }
         std::cout << "\n";
     } else if (Raft->CurrentStateName() == EState::CANDIDATE) {
         std::cout << "Candidate, "
-            << "Term: " << state->CurrentTerm << ", "
-            << "Index: " << state->LastLogIndex << ", "
-            << "CommitIndex: " << volatileState->CommitIndex << ", "
-            << "LastApplied: " << volatileState->LastApplied << ", "
+            << "Term: " << state.CurrentTerm << ", "
+            << "Index: " << state.LastLogIndex << ", "
+            << "CommitIndex: " << volatileState.CommitIndex << ", "
+            << "LastApplied: " << volatileState.LastApplied << ", "
             << "\n";
     } else if (Raft->CurrentStateName() == EState::FOLLOWER) {
         std::cout << "Follower, "
-            << "Term: " << state->CurrentTerm << ", "
-            << "Index: " << state->LastLogIndex << ", "
-            << "CommitIndex: " << volatileState->CommitIndex << ", "
-            << "LastApplied: " << volatileState->LastApplied << ", "
+            << "Term: " << state.CurrentTerm << ", "
+            << "Index: " << state.LastLogIndex << ", "
+            << "CommitIndex: " << volatileState.CommitIndex << ", "
+            << "LastApplied: " << volatileState.LastApplied << ", "
             << "\n";
     }
+    PersistentFields = state;
+    VolatileFields = volatileState;
 }
 
 template<typename TSocket>

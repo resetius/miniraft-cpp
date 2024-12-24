@@ -2,12 +2,16 @@
 
 #include "messages.h"
 
-struct IState {
+struct TStateFields {
     uint64_t CurrentTerm = 1;
     uint32_t VotedFor = 0;
     uint64_t LastLogIndex = 0;
     uint64_t LastLogTerm = 0;
 
+    bool operator==(const TStateFields& other) const = default;
+};
+
+struct IState: TStateFields {
     virtual void RemoveLast() = 0;
     virtual void Append(TMessageHolder<TLogEntry>) = 0;
     virtual TMessageHolder<TLogEntry> Get(int64_t index) const = 0;

@@ -143,4 +143,9 @@ private:
     std::shared_ptr<TRaft> Raft;
     std::unordered_set<std::shared_ptr<INode>> Nodes;
     std::shared_ptr<ITimeSource> TimeSource;
+
+    // for debug
+    TStateFields PersistentFields;
+    TVolatileState VolatileFields;
 };
+

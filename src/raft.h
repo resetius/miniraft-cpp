@@ -63,6 +63,13 @@ struct TVolatileState {
     TVolatileState& SetRpcDue(uint32_t id, ITimeSource::Time rpcDue);
     TVolatileState& SetBatchSize(uint32_t id, int size);
     TVolatileState& SetBackOff(uint32_t id, int size);
+
+    bool operator==(const TVolatileState& other) const {
+        return CommitIndex == other.CommitIndex &&
+            LastApplied == other.LastApplied &&
+            NextIndex == other.NextIndex &&
+            MatchIndex == other.MatchIndex;
+    }
 };
 
 enum class EState: int {
