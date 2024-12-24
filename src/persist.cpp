@@ -102,9 +102,9 @@ TMessageHolder<TLogEntry> TDiskState::Get(int64_t index) const
 void TDiskState::Commit()
 {
     State.seekg(0);
-    State.write((char*)&LastLogIndex, sizeof(LastLogIndex));
-    State.write((char*)&CurrentTerm, sizeof(CurrentTerm));
-    State.write((char*)&VotedFor, sizeof(VotedFor));
+    if (!State.write((char*)&LastLogIndex, sizeof(LastLogIndex))) { abort(); }
+    if (!State.write((char*)&CurrentTerm, sizeof(CurrentTerm))) { abort(); }
+    if (!State.write((char*)&VotedFor, sizeof(VotedFor))) { abort(); }
     State.clear();
 }
 

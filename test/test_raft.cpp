@@ -717,6 +717,7 @@ void test_disk_state_restore(void**) {
     state->CurrentTerm = 10;
     state->Commit();
 
+    state.reset();
     state = std::make_unique<TDiskState>("test_disk_state_restore", 1);
     assert_int_equal(state->CurrentTerm, 10);
     assert_int_equal(state->VotedFor, 2);
@@ -762,3 +763,4 @@ int main() {
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
+
