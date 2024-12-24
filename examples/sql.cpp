@@ -22,6 +22,10 @@ struct TReadSql: public TCommandRequest, public TSqlEntry
 {
 };
 
+struct TRow {
+    std::unordered_map<std::string, std::string> values;
+};
+
 class TSql: public IRsm {
 public:
     TSql(const std::string& path, int serverId);
@@ -36,8 +40,10 @@ public:
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
 
 private:
-    void Execute(const std::string& q);
+    bool Execute(const std::string& q);
+    static int Process(void* self, int ncols, char** values, char** cols);
 
+    std::vector<TRow> Result;
     uint64_t LastAppliedIndex = 0;
     sqlite3* Db = nullptr;
 };
@@ -51,6 +57,12 @@ TSql::TSql(const std::string& path, int serverId)
             << std::endl;
         throw std::runtime_error("Cannot open db");
     }
+    Execute(R"__(CREATE TABLE IF NOT EXISTS raft_metadata_ (key TEXT PRIMARY KEY, value TEXT))__");
+    Execute(R"__(SELECT value FROM raft_metadata_ WHERE key = 'LastAppliedIndex')__");
+    if (!Result.empty()) {
+        LastAppliedIndex = std::stoi(Result[0].values["value"]);
+    }
+    std::cerr << "LastAppliedIndex: " << LastAppliedIndex << std::endl;
 }
 
 TSql::~TSql()
@@ -62,16 +74,27 @@ TSql::~TSql()
     }
 }
 
-void TSql::Execute(const std::string& q) {
+int TSql::Process(void* self, int ncols, char** values, char** cols) {
+    TSql* this_ = (TSql*)self;
+    TRow row;
+    for (int i = 0; i < ncols; i++) {
+        row.values[cols[i]] = values[i];
+    }
+    this_->Result.emplace_back(std::move(row));
+    return 0;
+}
+
+bool TSql::Execute(const std::string& q) {
     char* err = nullptr;
     std::cerr << "Execute: " << q << std::endl;
-    if (sqlite3_exec(Db, q.c_str(), nullptr, nullptr, &err) != SQLITE_OK) {
+    Result.clear();
+    if (sqlite3_exec(Db, q.c_str(), Process, this, &err) != SQLITE_OK) {
         // TODO: Return error to user
-        // TODO: Move LastApplied?
         std::cerr << "Cannot apply changes, error: " << err << std::endl;
-        throw std::runtime_error("Failed to execute SQL command");
+        return false;
     }
     std::cerr << "OK" << std::endl;
+    return true;
 }
  
 TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
@@ -88,9 +111,19 @@ void TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     if (LastAppliedIndex < index) {
         auto entry = message.Cast<TSqlLogEntry>();
         std::cerr << "Execute write of size: " << entry->QuerySize << std::endl;
-        Execute(std::string(entry->Query, entry->QuerySize));
-        // TODO: must be committed with query at the same tx
-        LastAppliedIndex = index;
+        std::string q = "BEGIN TRANSACTION;\n";
+        q += std::string(entry->Query, entry->QuerySize);
+        if (q.back() != ';') {
+            q += ";\n";
+        }
+        q += "INSERT INTO raft_metadata_ (key, value) VALUES ('LastAppliedIndex','" + std::to_string(index) + "')\n";
+        q += "ON CONFLICT(key) DO UPDATE SET value = '" + std::to_string(index) + "';\n";
+        q += "COMMIT;";
+        if (Execute(q)) {
+            LastAppliedIndex = index;
+        } else {
+            Execute("ROLLBACK;");
+        }
     }
 }
 
