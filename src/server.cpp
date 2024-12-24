@@ -158,17 +158,17 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundServe() {
 
 template<typename TSocket>
 void TRaftServer<TSocket>::DebugPrint() {
-    auto* state = Raft->GetState();
+    auto state = Raft->GetState();
     auto* volatileState = Raft->GetVolatileState();
     if (Raft->CurrentStateName() == EState::LEADER) {
         std::cout << "Leader, "
             << "Term: " << state->CurrentTerm << ", "
-            << "Index: " << state->Log.size() << ", "
+            << "Index: " << state->LastLogIndex << ", "
             << "CommitIndex: " << volatileState->CommitIndex << ", "
             << "LastApplied: " << volatileState->LastApplied << ", ";
         std::cout << "Delay: ";
         for (auto [id, index] : volatileState->MatchIndex) {
-            std::cout << id << ":" << (state->Log.size() - index) << " ";
+            std::cout << id << ":" << (state->LastLogIndex - index) << " ";
         }
         std::cout << "MatchIndex: ";
         for (auto [id, index] : volatileState->MatchIndex) {
@@ -182,14 +182,14 @@ void TRaftServer<TSocket>::DebugPrint() {
     } else if (Raft->CurrentStateName() == EState::CANDIDATE) {
         std::cout << "Candidate, "
             << "Term: " << state->CurrentTerm << ", "
-            << "Index: " << state->Log.size() << ", "
+            << "Index: " << state->LastLogIndex << ", "
             << "CommitIndex: " << volatileState->CommitIndex << ", "
             << "LastApplied: " << volatileState->LastApplied << ", "
             << "\n";
     } else if (Raft->CurrentStateName() == EState::FOLLOWER) {
         std::cout << "Follower, "
             << "Term: " << state->CurrentTerm << ", "
-            << "Index: " << state->Log.size() << ", "
+            << "Index: " << state->LastLogIndex << ", "
             << "CommitIndex: " << volatileState->CommitIndex << ", "
             << "LastApplied: " << volatileState->LastApplied << ", "
             << "\n";
