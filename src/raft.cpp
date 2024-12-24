@@ -224,6 +224,9 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
                 log.push_back(entry);
             }
         }
+        // TODO: fixme
+        State->LastLogIndex = log.size();
+        State->LastLogTerm = log.empty() ? 0 : log.back()->Term;
 
         matchIndex = index;
         commitIndex = std::max(commitIndex, message->LeaderCommit);

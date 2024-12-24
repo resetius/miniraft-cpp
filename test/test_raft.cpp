@@ -628,7 +628,9 @@ void test_commit_advance(void**) {
         .MatchIndex = {{1, 1}, {2, 2}}
     };
     auto add = MakeLog<TLogEntry>({1});
-    state.Log.insert(state.Log.end(), add.begin(), add.end());
+    for (auto& entry : add) {
+        state.Append(entry);
+    }
     s1 = TVolatileState(s).CommitAdvance(3, state);
     assert_int_equal(s1.CommitIndex, 2);
     s1 = TVolatileState(s).CommitAdvance(5, state);
