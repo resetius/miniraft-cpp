@@ -140,7 +140,7 @@ TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uin
         for (int j = 0; j < Result.Rows.size(); j++) {
             for (int i = 0; i < Result.Cols.size(); i++) {
                 text += Result.Rows[j].Values[i] ? *Result.Rows[j].Values[i] : "null";
-                if (i != Result.Rows.size() - 1) {
+                if (i != Result.Cols.size() - 1) {
                     text += ",";
                 }
             }
