@@ -14,9 +14,12 @@ TDiskState::TDiskState(const std::string& name, uint32_t id)
         State.read((char*)&LastLogIndex, sizeof(LastLogIndex));
         State.read((char*)&CurrentTerm, sizeof(CurrentTerm));
         State.read((char*)&VotedFor, sizeof(VotedFor));
+    } else {
+        Commit();
     }
-    State.clear();
-    State.seekg(0);
+    if (LastLogIndex > 0) {
+        LastLogTerm = Get(LastLogIndex-1)->Term;
+    }
 }
 
 std::fstream TDiskState::Open(const std::string& name)
@@ -62,8 +65,7 @@ void TDiskState::RemoveLast()
 {
     if (LastLogIndex > 0) {
         LastLogIndex--;
-        State.seekg(0);
-        State.write((char*)&LastLogIndex, sizeof(LastLogIndex));
+        Commit();
     }
 }
 
@@ -77,9 +79,9 @@ void TDiskState::Append(TMessageHolder<TLogEntry> entry)
     Write(entry);
     Index.seekg(LastLogIndex * sizeof(offset));
     Index.write((char*)&offset, sizeof(offset));
+    LastLogTerm = entry->Term;
     LastLogIndex ++;
-    State.seekg(0);
-    State.write((char*)&LastLogIndex, sizeof(LastLogIndex));
+    Commit();
 }
 
 TMessageHolder<TLogEntry> TDiskState::Get(int64_t index) const
@@ -105,6 +107,8 @@ void TDiskState::Commit()
     if (!State.write((char*)&LastLogIndex, sizeof(LastLogIndex))) { abort(); }
     if (!State.write((char*)&CurrentTerm, sizeof(CurrentTerm))) { abort(); }
     if (!State.write((char*)&VotedFor, sizeof(VotedFor))) { abort(); }
-    State.clear();
+    State.flush();
+    Index.flush();
+    Entries.flush();
 }
 
