@@ -23,7 +23,21 @@ struct TReadSql: public TCommandRequest, public TSqlEntry
 };
 
 struct TRow {
-    std::unordered_map<std::string, std::string> values;
+    std::vector<std::optional<std::string>> Values;
+};
+
+struct TResult {
+    std::vector<std::string> Cols;
+    std::vector<TRow> Rows;
+
+    void Clear() {
+        Cols.clear();
+        Rows.clear();
+    }
+
+    bool Empty() {
+        return Cols.empty();
+    }
 };
 
 class TSql: public IRsm {
@@ -41,8 +55,10 @@ public:
 private:
     bool Execute(const std::string& q);
     static int Process(void* self, int ncols, char** values, char** cols);
+    TMessageHolder<TMessage> Reply(const std::string& ans, uint64_t index);
 
-    std::vector<TRow> Result;
+    TResult Result;
+    std::string LastError;
     uint64_t LastAppliedIndex = 0;
     sqlite3* Db = nullptr;
 };
@@ -58,8 +74,8 @@ TSql::TSql(const std::string& path, int serverId)
     }
     Execute(R"__(CREATE TABLE IF NOT EXISTS raft_metadata_ (key TEXT PRIMARY KEY, value TEXT))__");
     Execute(R"__(SELECT value FROM raft_metadata_ WHERE key = 'LastAppliedIndex')__");
-    if (!Result.empty()) {
-        LastAppliedIndex = std::stoi(Result[0].values["value"]);
+    if (!Result.Empty()) {
+        LastAppliedIndex = std::stoi(*Result.Rows[0].Values[0]);
     }
     std::cerr << "LastAppliedIndex: " << LastAppliedIndex << std::endl;
 }
@@ -75,21 +91,33 @@ TSql::~TSql()
 
 int TSql::Process(void* self, int ncols, char** values, char** cols) {
     TSql* this_ = (TSql*)self;
+    if (this_->Result.Cols.empty()) {
+        for (int i = 0; i < ncols; i++) {
+            this_->Result.Cols.emplace_back(cols[i]);
+        }
+    }
     TRow row;
     for (int i = 0; i < ncols; i++) {
-        row.values[cols[i]] = values[i];
+        if (values[i]) {
+            row.Values.emplace_back(values[i]);
+        } else {
+            row.Values.emplace_back(std::nullopt);
+        }
     }
-    this_->Result.emplace_back(std::move(row));
+    this_->Result.Rows.emplace_back(std::move(row));
     return 0;
 }
 
 bool TSql::Execute(const std::string& q) {
     char* err = nullptr;
     std::cerr << "Execute: " << q << std::endl;
-    Result.clear();
+    Result.Clear();
+    LastError.clear();
     if (sqlite3_exec(Db, q.c_str(), Process, this, &err) != SQLITE_OK) {
         // TODO: Return error to user
         std::cerr << "Cannot apply changes, error: " << err << std::endl;
+        LastError = err;
+        sqlite3_free(err);
         return false;
     }
     std::cerr << "OK" << std::endl;
@@ -97,15 +125,35 @@ bool TSql::Execute(const std::string& q) {
 }
  
 TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
-    // TODO: non-empty result
     auto readSql = message.Cast<TReadSql>();
-    std::cerr << "Execute read\n";
-    Execute(std::string(readSql->Query, readSql->QuerySize));
-    return NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse));
+    if (!Execute(std::string(readSql->Query, readSql->QuerySize))) {
+        return Reply(LastError, index);
+    } else {
+        std::string text;
+        for (int i = 0; i < Result.Cols.size(); i++) {
+            text += Result.Cols[i];
+            if (i != Result.Cols.size() - 1) {
+                text += ",";
+            }
+        }
+        text += "\n";
+        for (int j = 0; j < Result.Rows.size(); j++) {
+            for (int i = 0; i < Result.Cols.size(); i++) {
+                text += Result.Rows[j].Values[i] ? *Result.Rows[j].Values[i] : "null";
+                if (i != Result.Rows.size() - 1) {
+                    text += ",";
+                }
+            }
+            text += "\n";
+        }
+        return Reply(text, index);
+    }
 }
 
 TMessageHolder<TMessage> TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     // TODO: index + 1 == LastAppliedIndex
+
+    std::string err;
     if (LastAppliedIndex < index) {
         auto entry = message.Cast<TSqlLogEntry>();
         std::cerr << "Execute write of size: " << entry->QuerySize << std::endl;
@@ -122,11 +170,20 @@ TMessageHolder<TMessage> TSql::Write(TMessageHolder<TLogEntry> message, uint64_t
         if (Execute(q)) {
             LastAppliedIndex = index;
         } else {
+            err = LastError;
             Execute("ROLLBACK;");
             Execute(updateLastApplied); // need to update LastAppliedIndex in order not to execute failed query aqain
         }
     }
-    return {};
+    return Reply(err, index);
+}
+
+TMessageHolder<TMessage> TSql::Reply(const std::string& ans, uint64_t index)
+{
+    auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse)+ans.size());
+    res->Index = index;
+    memcpy(res->Data, ans.data(), ans.size());
+    return res;
 }
 
 TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term) {
@@ -183,8 +240,10 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket) {
             auto res = reply.template Cast<TCommandResponse>();
             auto len = res->Len - sizeof(TCommandResponse);
             std::string_view data(res->Data, len);
-            std::cout << "Ok, commitIndex: " << res->Index << " "
-                      << data << "\n";
+            std::cout << "commitIndex: " << res->Index << "\n";
+            if (!data.empty()) {
+                std::cout << data << "\n";
+            }
         }
     } catch (const std::exception& ex) {
         std::cout << "Exception: " << ex.what() << "\n";
