@@ -211,22 +211,18 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
     {
         success = true;
         auto index = message->PrevLogIndex;
-        auto& log = std::static_pointer_cast<TState>(State)->Log; // TODO: fixme
         for (uint32_t i = 0 ; i < message.PayloadSize; i++) {
             auto& data = message.Payload[i];
             auto entry = data.Cast<TLogEntry>();
             index++;
             // replace or append log entries
             if (State->LogTerm(index) != entry->Term) {
-                while (log.size() > index-1) {
-                    log.pop_back();
+                while (State->LastLogIndex > index-1) {
+                    State->RemoveLast();
                 }
-                log.push_back(entry);
+                State->Append(entry);
             }
         }
-        // TODO: fixme
-        State->LastLogIndex = log.size();
-        State->LastLogTerm = log.empty() ? 0 : log.back()->Term;
 
         matchIndex = index;
         commitIndex = std::max(commitIndex, message->LeaderCommit);

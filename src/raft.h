@@ -44,6 +44,7 @@ struct IState {
     uint64_t LastLogTerm = 0;
 
     virtual uint64_t LogTerm(int64_t index = -1) const = 0;
+    virtual void RemoveLast() = 0;
     virtual void Append(TMessageHolder<TLogEntry>) = 0;
     virtual void Commit() = 0;
     virtual ~IState() = default;
@@ -62,6 +63,12 @@ struct TState: IState {
             LastLogIndex = log.size();
             LastLogTerm = log.back()->Term;
         }
+    }
+
+    void RemoveLast() override {
+        Log.pop_back();
+        LastLogIndex = Log.size();
+        LastLogTerm = Log.empty() ? 0 : Log.back()->Term;
     }
 
     void Append(TMessageHolder<TLogEntry> entry) override {
