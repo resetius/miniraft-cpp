@@ -106,22 +106,24 @@ TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uin
 
 TMessageHolder<TMessage> TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     // TODO: index + 1 == LastAppliedIndex
-    std::cerr << "Write: index: " << index << ", LastApplied: " << LastAppliedIndex << "\n"; 
     if (LastAppliedIndex < index) {
         auto entry = message.Cast<TSqlLogEntry>();
         std::cerr << "Execute write of size: " << entry->QuerySize << std::endl;
+        std::string updateLastApplied;
+        updateLastApplied += "INSERT INTO raft_metadata_ (key, value) VALUES ('LastAppliedIndex','" + std::to_string(index) + "')\n";
+        updateLastApplied += "ON CONFLICT(key) DO UPDATE SET value = '" + std::to_string(index) + "';\n";
         std::string q = "BEGIN TRANSACTION;\n";
         q += std::string(entry->Query, entry->QuerySize);
         if (q.back() != ';') {
             q += ";\n";
         }
-        q += "INSERT INTO raft_metadata_ (key, value) VALUES ('LastAppliedIndex','" + std::to_string(index) + "')\n";
-        q += "ON CONFLICT(key) DO UPDATE SET value = '" + std::to_string(index) + "';\n";
+        q += updateLastApplied;
         q += "COMMIT;";
         if (Execute(q)) {
             LastAppliedIndex = index;
         } else {
             Execute("ROLLBACK;");
+            Execute(updateLastApplied); // need to update LastAppliedIndex in order not to execute failed query aqain
         }
     }
     return {};
