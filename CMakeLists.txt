@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD 20)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CMOCKA REQUIRED cmocka)
+find_package(SQLite3)
 
 add_subdirectory(coroio)
 
@@ -34,6 +35,12 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(server miniraft coroio)
 target_link_libraries(client miniraft coroio)
 target_link_libraries(kv miniraft coroio)
+
+if (SQLite3_FOUND)
+add_executable(sql examples/sql.cpp)
+target_include_directories(sql PRIVATE ${SQLite3_INCLUDE_DIRS})
+target_link_libraries(sql PRIVATE ${SQLite3_LIBRARIES} miniraft coroio)
+endif()
 
 target_include_directories(test_raft PRIVATE ${CMOCKA_INCLUDE_DIRS})
 target_link_directories(test_raft PRIVATE ${CMOCKA_LIBRARY_DIRS})

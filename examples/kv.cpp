@@ -51,7 +51,7 @@ TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message, uint
     }
 }
 
-void TKv::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
+TMessageHolder<TMessage> TKv::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     if (LastAppliedIndex < index) {
         auto entry = message.Cast<TKvLogEntry>();
         std::string_view k(entry->TKvEntry::Data, entry->KeySize);
@@ -63,6 +63,7 @@ void TKv::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
         }
         LastAppliedIndex = index;
     }
+    return {};
 }
 
 TMessageHolder<TLogEntry> TKv::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term) {
