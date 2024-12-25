@@ -158,15 +158,21 @@ template<typename TSocket>
 NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocket>> node) {
     // read forwarded replies
     while (true) {
+        bool error = false;
         try {
             auto mes = co_await TMessageReader(node->Sock()).Read();
             // TODO: check message type
             // TODO: should be only TCommandResponse
             Raft->Process(TimeSource->Now(), std::move(mes), nullptr);
+            DrainNodes();
         } catch (const std::exception& ex) {
+            // wait for reconnection
             std::cerr << "Exception: " << ex.what() << "\n";
+            error = true;
         }
-        co_await Poller.Sleep(std::chrono::milliseconds(1000));
+        if (error) {
+            co_await Poller.Sleep(std::chrono::milliseconds(1000));
+        }
     }
     co_return;
 }
