@@ -129,6 +129,7 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
     } catch (const std::exception & ex) {
         std::cerr << "Exception: " << ex.what() << "\n";
     }
+    // TODO: erase also from Forwarded
     Nodes.erase(client);
     co_return;
 }
