@@ -160,6 +160,8 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
     while (true) {
         try {
             auto mes = co_await TMessageReader(node->Sock()).Read();
+            // TODO: check message type
+            // TODO: should be only TCommandResponse
             Raft->Process(TimeSource->Now(), std::move(mes), nullptr);
         } catch (const std::exception& ex) {
             std::cerr << "Exception: " << ex.what() << "\n";
