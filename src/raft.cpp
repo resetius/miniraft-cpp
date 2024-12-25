@@ -124,6 +124,11 @@ TVolatileState& TVolatileState::SetBackOff(uint32_t id, int size) {
     return *this;
 }
 
+TVolatileState& TVolatileState::SetLeaderId(uint32_t id) {
+    LeaderId = id;
+    return *this;
+}
+
 TVolatileState& TVolatileState::SetCommitIndex(int index)
 {
     CommitIndex = index;
@@ -235,6 +240,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
         TAppendEntriesResponse {.MatchIndex = matchIndex, .Success = success});
 
     (*VolatileState)
+        .SetLeaderId(message->LeaderId)
         .SetCommitIndex(commitIndex)
         .SetElectionDue(MakeElection(now));
 
@@ -283,14 +289,41 @@ void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std:
         }
     } else if (StateName == EState::FOLLOWER && replyTo) {
         if (command->Flags & TCommandRequest::EWrite) {
-            // TODO: send error code
-            replyTo->Send(NewHoldedMessage(TCommandResponse {.Index = 0}));
+            if (command->Cookie) {
+                // already forwarded
+                replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+                return;
+            }
+ 
+            if (VolatileState->LeaderId == 0) {
+                // TODO: wait for state change
+                replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+                return;
+            }
+
+            assert(VolatileState->LeaderId != Id);
+            // Forward
+            command->Cookie = std::max<uint32_t>(1, ForwardCookie);
+            Nodes[VolatileState->LeaderId]->Send(std::move(command));
+            Forwarded[ForwardCookie] = replyTo;
+            ForwardCookie++;
         } else {
             Waiting.emplace(TWaiting{State->LastLogIndex, std::move(command), replyTo});
         }
     } else if (StateName == EState::CANDIDATE && replyTo) {
-        // wait
+        // TODO: wait for state change
+        replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
     }
+}
+
+void TRaft::OnCommandResponse(TMessageHolder<TCommandResponse> command) {
+    // forwarded
+    auto it = Forwarded.find(command->Cookie);
+    if (it == Forwarded.end()) {
+        return;
+    }
+    it->second->Send(std::move(command));
+    Forwarded.erase(it);
 }
 
 TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
@@ -370,6 +403,8 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
     // client request 
     if (auto maybeCommandRequest = message.Maybe<TCommandRequest>()) {
         return OnCommandRequest(std::move(maybeCommandRequest.Cast()), replyTo);
+    } else if (auto maybeCommandResponse = message.Maybe<TCommandResponse>()) {
+        return OnCommandResponse(std::move(maybeCommandResponse.Cast()));
     }
 
     if (message.IsEx()) {
@@ -420,7 +455,7 @@ void TRaft::ProcessWaiting() {
     auto lastApplied = VolatileState->LastApplied;
     while (!Waiting.empty() && Waiting.top().Index <= lastApplied) {
         auto w = Waiting.top(); Waiting.pop();
-        TMessageHolder<TMessage> reply;
+        TMessageHolder<TCommandResponse> reply;
         if (w.Command->Flags & TCommandRequest::EWrite) {
             while (!WriteAnswers.empty() && WriteAnswers.front().Index < w.Index) {
                 WriteAnswers.pop();
@@ -428,10 +463,11 @@ void TRaft::ProcessWaiting() {
             assert(!WriteAnswers.empty());
             auto answer = std::move(WriteAnswers.front()); WriteAnswers.pop();
             assert(answer.Index == w.Index);
-            reply = std::move(answer.Reply);
+            reply = std::move(answer.Reply.Cast<TCommandResponse>());
         } else {
-            reply = Rsm->Read(std::move(w.Command), w.Index);
+            reply = Rsm->Read(std::move(w.Command), w.Index).Cast<TCommandResponse>();
         }
+        reply->Cookie = w.Command->Cookie;
         w.ReplyTo->Send(std::move(reply));
     }
 }

@@ -87,6 +87,7 @@ public:
 
     void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
+    bool IsConnected() { return Connected; }
     TSocket& Sock() {
         return Socket;
     }
@@ -134,6 +135,7 @@ public:
 private:
     NNet::TVoidTask InboundServe();
     NNet::TVoidTask InboundConnection(TSocket socket);
+    NNet::TVoidTask OutboundServe(std::shared_ptr<TNode<TSocket>>);
     NNet::TVoidTask Idle();
     void DrainNodes();
     void DebugPrint();
