@@ -30,7 +30,12 @@ static_assert(sizeof(TMessage) == 8);
 
 struct TLogEntry: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::LOG_ENTRY;
+    enum EFlags {
+        ENone = 0,
+        EStub = 1,
+    };
     uint64_t Term = 1;
+    uint64_t Flags = 0;
     char Data[0];
 };
 
@@ -87,18 +92,21 @@ struct TCommandRequest: public TMessage {
         EWrite = 1,
     };
     uint32_t Flags = ENone;
+    uint32_t Cookie = 0;
     char Data[0];
 };
 
-static_assert(sizeof(TCommandRequest) == sizeof(TMessage) + 4);
+static_assert(sizeof(TCommandRequest) == sizeof(TMessage) + 8);
 
 struct TCommandResponse: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_RESPONSE;
-    uint64_t Index;
+    uint64_t Index = 0;
+    uint32_t Cookie = 0;
+    uint32_t ErrorCode = 0;
     char Data[0];
 };
 
-static_assert(sizeof(TCommandResponse) == sizeof(TMessage) + 8);
+static_assert(sizeof(TCommandResponse) == sizeof(TMessage) + 16);
 
 struct TTimeout {
     static constexpr std::chrono::milliseconds Election = std::chrono::milliseconds(5000);
