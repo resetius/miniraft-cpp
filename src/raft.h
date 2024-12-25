@@ -120,12 +120,13 @@ public:
 private:
     void Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
     void Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
-    void Leader(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo);
+    void Leader(ITimeSource::Time now, TMessageHolder<TMessage> message);
 
     void OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message);
     void OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
     void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
     void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
+
     void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
 
     void LeaderTimeout(ITimeSource::Time now);

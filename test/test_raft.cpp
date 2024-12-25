@@ -127,7 +127,7 @@ void test_message_create(void** state) {
 }
 
 void test_message_cast(void** state) {
-    TMessageHolder<TMessage> mes = NewHoldedMessage<TLogEntry>(16);
+    TMessageHolder<TMessage> mes = NewHoldedMessage(TLogEntry{});
     auto casted = mes.Cast<TLogEntry>();
     assert_true(mes.RawData == casted.RawData);
     assert_true(mes->Len == casted->Len);

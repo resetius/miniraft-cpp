@@ -271,13 +271,25 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
 }
 
 void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
-    if (command->Flags & TCommandRequest::EWrite) {
-        auto entry = Rsm->Prepare(command, State->CurrentTerm);
-        State->Append(std::move(entry));
-    }
-    auto index = State->LastLogIndex;
-    if (replyTo) {
-        Waiting.emplace(TWaiting{index, std::move(command), replyTo});
+    // TODO: move this logic to separate class
+    if (StateName == EState::LEADER) {
+        if (command->Flags & TCommandRequest::EWrite) {
+            auto entry = Rsm->Prepare(command, State->CurrentTerm);
+            State->Append(std::move(entry));
+        }
+        auto index = State->LastLogIndex;
+        if (replyTo) {
+            Waiting.emplace(TWaiting{index, std::move(command), replyTo});
+        }
+    } else if (StateName == EState::FOLLOWER && replyTo) {
+        if (command->Flags & TCommandRequest::EWrite) {
+            // TODO: send error code
+            replyTo->Send(NewHoldedMessage(TCommandResponse {.Index = 0}));
+        } else {
+            Waiting.emplace(TWaiting{State->LastLogIndex, std::move(command), replyTo});
+        }
+    } else if (StateName == EState::CANDIDATE && replyTo) {
+        // wait
     }
 }
 
@@ -338,16 +350,14 @@ void TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     }
 }
 
-void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
+void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
         OnAppendEntries(std::move(maybeAppendEntries.Cast()));
-    } else if (auto maybeCommandRequest = message.Maybe<TCommandRequest>()) {
-        OnCommandRequest(std::move(maybeCommandRequest.Cast()), replyTo);
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
         OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
-    }
+    } 
 }
 
 void TRaft::Become(EState newStateName) {
@@ -357,6 +367,11 @@ void TRaft::Become(EState newStateName) {
 }
 
 void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
+    // client request 
+    if (auto maybeCommandRequest = message.Maybe<TCommandRequest>()) {
+        return OnCommandRequest(std::move(maybeCommandRequest.Cast()), replyTo);
+    }
+
     if (message.IsEx()) {
         auto messageEx = message.Cast<TMessageEx>();
         if (messageEx->Term > State->CurrentTerm) {
@@ -369,6 +384,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
             }
         }
     }
+
     switch (StateName) {
     case EState::FOLLOWER:
         Follower(now, std::move(message));
@@ -377,7 +393,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
         Candidate(now, std::move(message));
         break;
     case EState::LEADER:
-        Leader(now, std::move(message), replyTo);
+        Leader(now, std::move(message));
         break;
     default:
         throw std::logic_error("Unknown state");
@@ -387,7 +403,11 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
 void TRaft::ProcessCommitted() {
     auto commitIndex = VolatileState->CommitIndex;
     for (auto i = VolatileState->LastApplied+1; i <= commitIndex; i++) {
-        auto reply = Rsm->Write(State->Get(i-1), i);
+        auto entry = State->Get(i-1);
+        if (entry->Flags == TLogEntry::EStub) {
+            continue;
+        }
+        auto reply = Rsm->Write(entry, i);
         WriteAnswers.emplace(TAnswer {
             .Index = i,
             .Reply = reply ? reply : NewHoldedMessage(TCommandResponse {.Index = i})
@@ -422,6 +442,7 @@ void TRaft::FollowerTimeout(ITimeSource::Time now) {
     }
 
     ProcessCommitted();
+    ProcessWaiting(); // For forwarded requests
 }
 
 void TRaft::CandidateTimeout(ITimeSource::Time now) {
@@ -497,6 +518,7 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
             {
                 auto empty = NewHoldedMessage<TLogEntry>();
                 empty->Term = State->CurrentTerm;
+                empty->Flags = TLogEntry::EStub;
                 State->Append(std::move(empty));
             }
         }
