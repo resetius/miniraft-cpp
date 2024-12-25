@@ -41,6 +41,7 @@ using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 struct TVolatileState {
     uint64_t CommitIndex = 0;
     uint64_t LastApplied = 0;
+    uint32_t LeaderId = 0;
     std::unordered_map<uint32_t, uint64_t> NextIndex;
     std::unordered_map<uint32_t, uint64_t> MatchIndex;
     std::unordered_set<uint32_t> Votes;
@@ -63,6 +64,7 @@ struct TVolatileState {
     TVolatileState& SetRpcDue(uint32_t id, ITimeSource::Time rpcDue);
     TVolatileState& SetBatchSize(uint32_t id, int size);
     TVolatileState& SetBackOff(uint32_t id, int size);
+    TVolatileState& SetLeaderId(uint32_t id);
 
     bool operator==(const TVolatileState& other) const {
         return CommitIndex == other.CommitIndex &&
@@ -128,6 +130,7 @@ private:
     void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
 
     void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+    void OnCommandResponse(TMessageHolder<TCommandResponse> message);
 
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
@@ -163,6 +166,8 @@ private:
         TMessageHolder<TMessage> Reply;
     };
     std::queue<TAnswer> WriteAnswers;
+    uint32_t ForwardCookie = 1;
+    std::unordered_map<uint32_t, std::shared_ptr<INode>> Forwarded;
 
     EState StateName;
     uint32_t Seed = 31337;

@@ -137,6 +137,13 @@ template<typename TSocket>
 void TRaftServer<TSocket>::Serve() {
     Idle();
     InboundServe();
+    std::vector<NNet::TVoidTask> tasks;
+    for (auto& node : Nodes) {
+        auto realNode = std::dynamic_pointer_cast<TNode<TSocket>>(node);
+        if (realNode) {
+            tasks.emplace_back(OutboundServe(realNode));
+        }
+    }
 }
 
 template<typename TSocket>
@@ -144,6 +151,21 @@ void TRaftServer<TSocket>::DrainNodes() {
     for (const auto& node : Nodes) {
         node->Drain();
     }
+}
+
+template<typename TSocket>
+NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocket>> node) {
+    // read forwarded replies
+    while (true) {
+        try {
+            auto mes = co_await TMessageReader(node->Sock()).Read();
+            Raft->Process(TimeSource->Now(), std::move(mes), nullptr);
+        } catch (const std::exception& ex) {
+            std::cerr << "Exception: " << ex.what() << "\n";
+        }
+        co_await Poller.Sleep(std::chrono::milliseconds(1000));
+    }
+    co_return;
 }
 
 template<typename TSocket>
