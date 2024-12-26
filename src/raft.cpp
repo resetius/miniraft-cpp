@@ -482,36 +482,40 @@ void TRaft::Append(TMessageHolder<TLogEntry> entry) {
 void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
     auto stateName = Raft->CurrentStateName();
     auto leaderId = Raft->GetVolatileState()->LeaderId;
-    if (stateName == EState::LEADER) {
-        if (command->Flags & TCommandRequest::EWrite) {
-            Raft->Append(std::move(Rsm->Prepare(command)));
+    
+    // read request
+    if (! (command->Flags & TCommandRequest::EWrite)) {
+        if (replyTo) {
+            Waiting.emplace(TWaiting{Raft->GetState()->LastLogIndex, std::move(command), replyTo});
         }
+        return;
+    }
+
+    // write request
+    if (stateName == EState::LEADER) {
+        Raft->Append(std::move(Rsm->Prepare(command)));
         if (replyTo) {
             Waiting.emplace(TWaiting{Raft->GetState()->LastLogIndex, std::move(command), replyTo});
         }
     } else if (stateName == EState::FOLLOWER && replyTo) {
-        if (command->Flags & TCommandRequest::EWrite) {
-            if (command->Cookie) {
-                // already forwarded
-                replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
-                return;
-            }
- 
-            if (leaderId == 0) {
-                // TODO: wait for state change
-                replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
-                return;
-            }
-
-            assert(leaderId != Raft->GetId());
-            // Forward
-            command->Cookie = std::max<uint32_t>(1, ForwardCookie);
-            Nodes[leaderId]->Send(std::move(command));
-            Forwarded[ForwardCookie] = replyTo;
-            ForwardCookie++;
-        } else {
-            Waiting.emplace(TWaiting{Raft->GetState()->LastLogIndex, std::move(command), replyTo});
+        if (command->Cookie) {
+            // already forwarded
+            replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+            return;
         }
+ 
+        if (leaderId == 0) {
+            // TODO: wait for state change
+            replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+            return;
+        }
+
+        assert(leaderId != Raft->GetId());
+        // Forward
+        command->Cookie = std::max<uint32_t>(1, ForwardCookie);
+        Nodes[leaderId]->Send(std::move(command));
+        Forwarded[ForwardCookie] = replyTo;
+        ForwardCookie++;
     } else if (stateName == EState::CANDIDATE && replyTo) {
         // TODO: wait for state change
         replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
