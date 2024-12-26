@@ -474,14 +474,19 @@ ITimeSource::Time TRaft::MakeElection(ITimeSource::Time now) {
     return now + std::chrono::milliseconds(delta);
 }
 
-void TRaft::Append(TMessageHolder<TLogEntry> entry) {
+uint64_t TRaft::Append(TMessageHolder<TLogEntry> entry) {
     entry->Term = State->CurrentTerm;
     State->Append(std::move(entry));
+    return State->LastLogIndex;
+}
+
+uint32_t TRaft::GetLeaderId() const {
+    return VolatileState->LeaderId;
 }
 
 void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
     auto stateName = Raft->CurrentStateName();
-    auto leaderId = Raft->GetVolatileState()->LeaderId;
+    auto leaderId = Raft->GetLeaderId();
     
     // read request
     if (! (command->Flags & TCommandRequest::EWrite)) {
@@ -493,9 +498,9 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
 
     // write request
     if (stateName == EState::LEADER) {
-        Raft->Append(std::move(Rsm->Prepare(command)));
+        auto index = Raft->Append(std::move(Rsm->Prepare(command)));
         if (replyTo) {
-            Waiting.emplace(TWaiting{Raft->GetState()->LastLogIndex, std::move(command), replyTo});
+            Waiting.emplace(TWaiting{index, std::move(command), replyTo});
         }
     } else if (stateName == EState::FOLLOWER && replyTo) {
         if (command->Cookie) {

@@ -86,7 +86,8 @@ public:
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
 
-    void Append(TMessageHolder<TLogEntry> entry);
+    uint64_t Append(TMessageHolder<TLogEntry> entry);
+    uint32_t GetLeaderId() const;
 
 // ut
     const auto& GetState() const {
