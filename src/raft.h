@@ -119,6 +119,10 @@ public:
         return Nservers;
     }
 
+    auto& GetRsm() {
+        return Rsm_;
+    }
+
 private:
     void Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
     void Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
@@ -129,20 +133,15 @@ private:
     void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
     void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
 
-    void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
-    void OnCommandResponse(TMessageHolder<TCommandResponse> message);
-
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
     void FollowerTimeout(ITimeSource::Time now);
 
     TMessageHolder<TRequestVoteRequest> CreateVote(uint32_t nodeId);
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
-    void ProcessCommitted();
-    void ProcessWaiting();
     ITimeSource::Time MakeElection(ITimeSource::Time now);
 
-    std::shared_ptr<IRsm> Rsm;
+    std::shared_ptr<IRsm> Rsm_;
     uint32_t Id;
     TNodeDict Nodes;
     int MinVotes;
@@ -151,33 +150,22 @@ private:
     std::shared_ptr<IState> State;
     std::unique_ptr<TVolatileState> VolatileState;
 
-    struct TWaiting {
-        uint64_t Index;
-        TMessageHolder<TCommandRequest> Command;
-        std::shared_ptr<INode> ReplyTo;
-        bool operator< (const TWaiting& other) const {
-            return Index > other.Index;
-        }
-    };
-    std::priority_queue<TWaiting> Waiting;
-    
-    struct TAnswer {
-        uint64_t Index;
-        TMessageHolder<TMessage> Reply;
-    };
-    std::queue<TAnswer> WriteAnswers;
-    uint32_t ForwardCookie = 1;
-    std::unordered_map<uint32_t, std::shared_ptr<INode>> Forwarded;
-
     EState StateName;
     uint32_t Seed = 31337;
 };
 
 class TRequestProcessor {
 public:
+    TRequestProcessor(std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, const TNodeDict& nodes)
+        : Raft(raft)
+        , Rsm(rsm)
+        , Nodes(nodes)
+    { }
+
     void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void OnCommandResponse(TMessageHolder<TCommandResponse> message);
     void ProcessCommitted();
+    void ProcessWaiting();
 
 private:
     std::shared_ptr<TRaft> Raft;

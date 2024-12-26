@@ -123,6 +123,7 @@ public:
         : Poller(poller)
         , Socket(std::move(socket))
         , Raft(raft)
+        , RequestProcessor(std::make_shared<TRequestProcessor>(raft, raft->GetRsm(), nodes))
         , TimeSource(ts)
     {
         for (const auto& [_, node] : nodes) {
@@ -143,6 +144,7 @@ private:
     typename TSocket::TPoller& Poller;
     TSocket Socket;
     std::shared_ptr<TRaft> Raft;
+    std::shared_ptr<TRequestProcessor> RequestProcessor;
     std::unordered_set<std::shared_ptr<INode>> Nodes;
     std::shared_ptr<ITimeSource> TimeSource;
 
