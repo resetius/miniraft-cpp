@@ -88,6 +88,7 @@ public:
 
     uint64_t Append(TMessageHolder<TLogEntry> entry);
     uint32_t GetLeaderId() const;
+    uint64_t GetLastIndex() const;
 
 // ut
     const auto& GetState() const {
@@ -172,11 +173,8 @@ private:
         uint64_t Index;
         TMessageHolder<TCommandRequest> Command;
         std::shared_ptr<INode> ReplyTo;
-        bool operator< (const TWaiting& other) const {
-            return Index > other.Index;
-        }
     };
-    std::priority_queue<TWaiting> Waiting;
+    std::queue<TWaiting> Waiting;
 
     struct TAnswer {
         uint64_t Index;

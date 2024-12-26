@@ -484,6 +484,10 @@ uint32_t TRaft::GetLeaderId() const {
     return VolatileState->LeaderId;
 }
 
+uint64_t TRaft::GetLastIndex() const {
+    return State->LastLogIndex;
+}
+
 void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
     auto stateName = Raft->CurrentStateName();
     auto leaderId = Raft->GetLeaderId();
@@ -491,7 +495,8 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
     // read request
     if (! (command->Flags & TCommandRequest::EWrite)) {
         if (replyTo) {
-            Waiting.emplace(TWaiting{Raft->GetState()->LastLogIndex, std::move(command), replyTo});
+            assert(Waiting.empty() || Waiting.back().Index <= Raft->GetLastIndex());
+            Waiting.emplace(TWaiting{Raft->GetLastIndex(), std::move(command), replyTo});
         }
         return;
     }
@@ -500,6 +505,7 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
     if (stateName == EState::LEADER) {
         auto index = Raft->Append(std::move(Rsm->Prepare(command)));
         if (replyTo) {
+            assert(Waiting.empty() || Waiting.back().Index <= index);
             Waiting.emplace(TWaiting{index, std::move(command), replyTo});
         }
         return;
@@ -565,8 +571,8 @@ void TRequestProcessor::ProcessCommitted() {
 
 void TRequestProcessor::ProcessWaiting() {
     auto lastApplied = Rsm->LastAppliedIndex;
-    while (!Waiting.empty() && Waiting.top().Index <= lastApplied) {
-        auto w = Waiting.top(); Waiting.pop();
+    while (!Waiting.empty() && Waiting.back().Index <= lastApplied) {
+        auto w = Waiting.back(); Waiting.pop();
         TMessageHolder<TCommandResponse> reply;
         if (w.Command->Flags & TCommandRequest::EWrite) {
             while (!WriteAnswers.empty() && WriteAnswers.front().Index < w.Index) {
