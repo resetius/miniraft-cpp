@@ -553,7 +553,8 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
         // Forward
         command->Cookie = std::max<uint32_t>(1, ForwardCookie);
         Nodes[leaderId]->Send(std::move(command));
-        Forwarded[ForwardCookie] = replyTo;
+        Cookie2Client[ForwardCookie] = replyTo;
+        Client2Cookie[replyTo].emplace(ForwardCookie);
         ForwardCookie++;
         return;
     }
@@ -563,12 +564,28 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
 
 void TRequestProcessor::OnCommandResponse(TMessageHolder<TCommandResponse> command) {
     // forwarded
-    auto it = Forwarded.find(command->Cookie);
-    if (it == Forwarded.end()) {
+    auto it = Cookie2Client.find(command->Cookie);
+    if (it == Cookie2Client.end()) {
         return;
     }
     it->second->Send(std::move(command));
-    Forwarded.erase(it);
+    auto jt = Client2Cookie.find(it->second);
+    jt->second.erase(command->Cookie);
+    if (jt->second.empty()) {
+        Client2Cookie.erase(jt);
+    }
+    Cookie2Client.erase(it);
+}
+
+void TRequestProcessor::CleanUp(const std::shared_ptr<INode>& replyTo) {
+    auto jt = Client2Cookie.find(replyTo);
+    if (jt == Client2Cookie.end()) {
+        return;
+    }
+    for (auto cookie : jt->second) {
+        Cookie2Client.erase(cookie);
+    }
+    Client2Cookie.erase(jt);
 }
 
 void TRequestProcessor::ProcessCommitted() {

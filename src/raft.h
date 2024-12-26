@@ -164,6 +164,7 @@ public:
     void OnCommandResponse(TMessageHolder<TCommandResponse> message);
     void ProcessCommitted();
     void ProcessWaiting();
+    void CleanUp(const std::shared_ptr<INode>& replyTo);
 
 private:
     std::shared_ptr<TRaft> Raft;
@@ -184,6 +185,7 @@ private:
     };
     std::queue<TAnswer> WriteAnswers;
     uint32_t ForwardCookie = 1;
-    std::unordered_map<uint32_t, std::shared_ptr<INode>> Forwarded;
+    std::unordered_map<uint32_t, std::shared_ptr<INode>> Cookie2Client;
+    std::unordered_map<std::shared_ptr<INode>, std::unordered_set<uint32_t>> Client2Cookie;
 };
 
