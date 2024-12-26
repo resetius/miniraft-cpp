@@ -50,7 +50,7 @@ public:
     // insert, update, create
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     // convert request to log message
-    TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
+    TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
 
 private:
     bool Execute(const std::string& q);
@@ -59,7 +59,6 @@ private:
 
     TResult Result;
     std::string LastError;
-    uint64_t LastAppliedIndex = 0;
     sqlite3* Db = nullptr;
 };
 
@@ -185,12 +184,10 @@ TMessageHolder<TMessage> TSql::Reply(const std::string& ans, uint64_t index)
     return res;
 }
 
-TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term) {
+TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command) {
     auto dataSize = command->Len - sizeof(TCommandRequest);
-    std::cerr << "Prepare entry of size: " << dataSize << ", in term: " << term << std::endl;
     auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
     memcpy(entry->Data, command->Data, dataSize);
-    entry->Term = term;
     return entry;
 }
 
@@ -302,11 +299,11 @@ int main(int argc, char** argv)
 
         std::shared_ptr<IRsm> rsm = std::make_shared<TSql>("sql_file.db", myHost.Id);
         auto state = std::make_shared<TDiskState>("sql_state", myHost.Id);
-        auto raft = std::make_shared<TRaft>(rsm, state, myHost.Id, nodes);
+        auto raft = std::make_shared<TRaft>(state, myHost.Id, nodes);
         TPoller::TSocket socket(NNet::TAddress{myHost.Address, myHost.Port}, loop.Poller());
         socket.Bind();
         socket.Listen();
-        TRaftServer server(loop.Poller(), std::move(socket), raft, nodes, timeSource);
+        TRaftServer server(loop.Poller(), std::move(socket), raft, rsm, nodes, timeSource);
         server.Serve();
         loop.Loop();
     } else {

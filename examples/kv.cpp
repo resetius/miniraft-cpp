@@ -66,11 +66,10 @@ TMessageHolder<TMessage> TKv::Write(TMessageHolder<TLogEntry> message, uint64_t 
     return {};
 }
 
-TMessageHolder<TLogEntry> TKv::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term) {
+TMessageHolder<TLogEntry> TKv::Prepare(TMessageHolder<TCommandRequest> command) {
     auto dataSize = command->Len - sizeof(TCommandRequest);
     auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
     memcpy(entry->Data, command->Data, dataSize);
-    entry->Term = term;
     return entry;
 }
 
@@ -202,11 +201,11 @@ int main(int argc, char** argv) {
         if (persist) {
             state = std::make_shared<TDiskState>("state", myHost.Id);
         }
-        auto raft = std::make_shared<TRaft>(rsm, state, myHost.Id, nodes);
+        auto raft = std::make_shared<TRaft>(state, myHost.Id, nodes);
         TPoller::TSocket socket(NNet::TAddress{myHost.Address, myHost.Port}, loop.Poller());
         socket.Bind();
         socket.Listen();
-        TRaftServer server(loop.Poller(), std::move(socket), raft, nodes, timeSource);
+        TRaftServer server(loop.Poller(), std::move(socket), raft, rsm, nodes, timeSource);
         server.Serve();
         loop.Loop();
     } else {

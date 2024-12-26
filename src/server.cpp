@@ -122,15 +122,25 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
         Nodes.insert(client);
         while (true) {
             auto mes = co_await TMessageReader(client->Sock()).Read();
-            Raft->Process(TimeSource->Now(), std::move(mes), client);
+            // client request 
+            if (auto maybeCommandRequest = mes.template Maybe<TCommandRequest>()) {
+                RequestProcessor->OnCommandRequest(std::move(maybeCommandRequest.Cast()), client);
+            } else if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
+                RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()));
+            } else {
+                Raft->Process(TimeSource->Now(), std::move(mes), client);
+            }
             Raft->ProcessTimeout(TimeSource->Now());
+            RequestProcessor->CheckStateChange();
+            RequestProcessor->ProcessCommitted();
+            RequestProcessor->ProcessWaiting();
             DrainNodes();
         }
     } catch (const std::exception & ex) {
         std::cerr << "Exception: " << ex.what() << "\n";
     }
-    // TODO: erase also from Forwarded
     Nodes.erase(client);
+    RequestProcessor->CleanUp(client);
     co_return;
 }
 
@@ -161,13 +171,16 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
         bool error = false;
         try {
             auto mes = co_await TMessageReader(node->Sock()).Read();
-            // TODO: check message type
-            // TODO: should be only TCommandResponse
-            Raft->Process(TimeSource->Now(), std::move(mes), nullptr);
-            DrainNodes();
+            if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
+                RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()));
+                RequestProcessor->ProcessWaiting();
+                DrainNodes();
+            } else {
+                std::cerr << "Wrong message type: " << mes->Type << std::endl;
+            }
         } catch (const std::exception& ex) {
             // wait for reconnection
-            std::cerr << "Exception: " << ex.what() << "\n";
+            std::cerr << "Exception: " << ex.what() << std::endl;
             error = true;
         }
         if (error) {
@@ -198,8 +211,7 @@ void TRaftServer<TSocket>::DebugPrint() {
         std::cout << "Leader, "
             << "Term: " << state.CurrentTerm << ", "
             << "Index: " << state.LastLogIndex << ", "
-            << "CommitIndex: " << volatileState.CommitIndex << ", "
-            << "LastApplied: " << volatileState.LastApplied << ", ";
+            << "CommitIndex: " << volatileState.CommitIndex << ", ";
         std::cout << "Delay: ";
         for (auto [id, index] : volatileState.MatchIndex) {
             std::cout << id << ":" << (state.LastLogIndex - index) << " ";
@@ -218,14 +230,12 @@ void TRaftServer<TSocket>::DebugPrint() {
             << "Term: " << state.CurrentTerm << ", "
             << "Index: " << state.LastLogIndex << ", "
             << "CommitIndex: " << volatileState.CommitIndex << ", "
-            << "LastApplied: " << volatileState.LastApplied << ", "
             << "\n";
     } else if (Raft->CurrentStateName() == EState::FOLLOWER) {
         std::cout << "Follower, "
             << "Term: " << state.CurrentTerm << ", "
             << "Index: " << state.LastLogIndex << ", "
             << "CommitIndex: " << volatileState.CommitIndex << ", "
-            << "LastApplied: " << volatileState.LastApplied << ", "
             << "\n";
     }
     PersistentFields = state;

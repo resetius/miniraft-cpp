@@ -23,16 +23,17 @@ struct IRsm {
     virtual ~IRsm() = default;
     virtual TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) = 0;
     virtual TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) = 0;
-    virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) = 0;
+    virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) = 0;
+
+    uint64_t LastAppliedIndex = 0;
 };
 
 struct TDummyRsm: public IRsm {
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
-    TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message, uint64_t term) override;
+    TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
 
 private:
-    uint64_t LastAppliedIndex;
     std::vector<TMessageHolder<TLogEntry>> Log;
 };
 
@@ -40,7 +41,6 @@ using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TVolatileState {
     uint64_t CommitIndex = 0;
-    uint64_t LastApplied = 0;
     uint32_t LeaderId = 0;
     std::unordered_map<uint32_t, uint64_t> NextIndex;
     std::unordered_map<uint32_t, uint64_t> MatchIndex;
@@ -54,7 +54,6 @@ struct TVolatileState {
     std::vector<uint64_t> Indices;
 
     TVolatileState& Vote(uint32_t id);
-    TVolatileState& SetLastApplied(int index);
     TVolatileState& CommitAdvance(int nservers, const IState& state);
     TVolatileState& SetCommitIndex(int index);
     TVolatileState& SetElectionDue(ITimeSource::Time);
@@ -68,7 +67,6 @@ struct TVolatileState {
 
     bool operator==(const TVolatileState& other) const {
         return CommitIndex == other.CommitIndex &&
-            LastApplied == other.LastApplied &&
             NextIndex == other.NextIndex &&
             MatchIndex == other.MatchIndex;
     }
@@ -83,13 +81,17 @@ enum class EState: int {
 
 class TRaft {
 public:
-    TRaft(std::shared_ptr<IRsm> rsm, std::shared_ptr<IState> state, int node, const TNodeDict& nodes);
+    TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes);
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
 
+    uint64_t Append(TMessageHolder<TLogEntry> entry);
+    uint32_t GetLeaderId() const;
+    uint64_t GetLastIndex() const;
+
 // ut
-    const auto GetState() const {
+    const auto& GetState() const {
         return State;
     }
 
@@ -129,20 +131,14 @@ private:
     void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
     void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
 
-    void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
-    void OnCommandResponse(TMessageHolder<TCommandResponse> message);
-
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
     void FollowerTimeout(ITimeSource::Time now);
 
     TMessageHolder<TRequestVoteRequest> CreateVote(uint32_t nodeId);
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
-    void ProcessCommitted();
-    void ProcessWaiting();
     ITimeSource::Time MakeElection(ITimeSource::Time now);
 
-    std::shared_ptr<IRsm> Rsm;
     uint32_t Id;
     TNodeDict Nodes;
     int MinVotes;
@@ -151,25 +147,45 @@ private:
     std::shared_ptr<IState> State;
     std::unique_ptr<TVolatileState> VolatileState;
 
+    EState StateName;
+    uint32_t Seed = 31337;
+};
+
+class TRequestProcessor {
+public:
+    TRequestProcessor(std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, const TNodeDict& nodes)
+        : Raft(raft)
+        , Rsm(rsm)
+        , Nodes(nodes)
+    { }
+
+    void CheckStateChange();
+    void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+    void OnCommandResponse(TMessageHolder<TCommandResponse> message);
+    void ProcessCommitted();
+    void ProcessWaiting();
+    void CleanUp(const std::shared_ptr<INode>& replyTo);
+
+private:
+    std::shared_ptr<TRaft> Raft;
+    std::shared_ptr<IRsm> Rsm;
+    TNodeDict Nodes;
+
     struct TWaiting {
         uint64_t Index;
         TMessageHolder<TCommandRequest> Command;
         std::shared_ptr<INode> ReplyTo;
-        bool operator< (const TWaiting& other) const {
-            return Index > other.Index;
-        }
     };
-    std::priority_queue<TWaiting> Waiting;
-    
+    std::queue<TWaiting> Waiting;
+    std::queue<TWaiting> WaitingStateChange;
+
     struct TAnswer {
         uint64_t Index;
         TMessageHolder<TMessage> Reply;
     };
     std::queue<TAnswer> WriteAnswers;
     uint32_t ForwardCookie = 1;
-    std::unordered_map<uint32_t, std::shared_ptr<INode>> Forwarded;
-
-    EState StateName;
-    uint32_t Seed = 31337;
+    std::unordered_map<uint32_t, std::shared_ptr<INode>> Cookie2Client;
+    std::unordered_map<std::shared_ptr<INode>, std::unordered_set<uint32_t>> Client2Cookie;
 };
 

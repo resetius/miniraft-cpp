@@ -72,17 +72,17 @@ int main(int argc, char** argv) {
     }
 
     std::shared_ptr<IRsm> rsm = std::make_shared<TDummyRsm>();
-    auto raft = std::make_shared<TRaft>(rsm, std::make_shared<TState>(), myHost.Id, nodes);
+    auto raft = std::make_shared<TRaft>(std::make_shared<TState>(), myHost.Id, nodes);
     TPoller::TSocket socket(NNet::TAddress{myHost.Address, myHost.Port}, loop.Poller());
     socket.Bind();
     socket.Listen();
     if (ssl) {
         auto sslSocket = NNet::TSslSocket(std::move(socket), *serverContext.get());
-        TRaftServer server(loop.Poller(), std::move(sslSocket), raft, nodes, timeSource);
+        TRaftServer server(loop.Poller(), std::move(sslSocket), raft, rsm, nodes, timeSource);
         server.Serve();
         loop.Loop();
     } else {
-        TRaftServer server(loop.Poller(), std::move(socket), raft, nodes, timeSource);
+        TRaftServer server(loop.Poller(), std::move(socket), raft, rsm, nodes, timeSource);
         server.Serve();
         loop.Loop();
     }
