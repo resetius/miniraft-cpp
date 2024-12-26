@@ -515,6 +515,7 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
     // read request
     if (! (command->Flags & TCommandRequest::EWrite)) {
         if (replyTo) {
+            // TODO: possible stale read, should use max(LastIndex, LeaderLastIndex)
             assert(Waiting.empty() || Waiting.back().Index <= Raft->GetLastIndex());
             Waiting.emplace(TWaiting{Raft->GetLastIndex(), std::move(command), replyTo});
         }
