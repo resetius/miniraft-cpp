@@ -134,9 +134,8 @@ TVolatileState& TVolatileState::SetCommitIndex(int index)
     return *this;
 }
 
-TRaft::TRaft(std::shared_ptr<IRsm> rsm, std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
-    : Rsm_(rsm)
-    , Id(node)
+TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
+    : Id(node)
     , Nodes(nodes)
     , MinVotes((nodes.size()+2+nodes.size()%2)/2)
     , Npeers(nodes.size())

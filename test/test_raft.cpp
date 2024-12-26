@@ -66,13 +66,12 @@ std::shared_ptr<TRaft> MakeRaft(
     int count = 3,
     TState st = {})
 {
-    std::shared_ptr<IRsm> rsm = std::make_shared<TDummyRsm>();
     TNodeDict nodes;
     for (int i = 2; i <= count; i++) {
         nodes[i] = std::make_shared<TFakeNode>(sendFunc);
     }
     std::shared_ptr<IState> state = std::make_shared<TState>(st);
-    return std::make_shared<TRaft>(std::move(rsm), std::move(state), 1, nodes);
+    return std::make_shared<TRaft>(std::move(state), 1, nodes);
 }
 
 template<typename T=TMessage>

@@ -118,12 +118,13 @@ public:
         typename TSocket::TPoller& poller,
         TSocket socket,
         const std::shared_ptr<TRaft>& raft,
+        const std::shared_ptr<IRsm>& rsm,
         const TNodeDict& nodes,
         const std::shared_ptr<ITimeSource>& ts)
         : Poller(poller)
         , Socket(std::move(socket))
         , Raft(raft)
-        , RequestProcessor(std::make_shared<TRequestProcessor>(raft, raft->GetRsm(), nodes))
+        , RequestProcessor(std::make_shared<TRequestProcessor>(raft, rsm, nodes))
         , TimeSource(ts)
     {
         for (const auto& [_, node] : nodes) {

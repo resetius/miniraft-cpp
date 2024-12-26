@@ -299,11 +299,11 @@ int main(int argc, char** argv)
 
         std::shared_ptr<IRsm> rsm = std::make_shared<TSql>("sql_file.db", myHost.Id);
         auto state = std::make_shared<TDiskState>("sql_state", myHost.Id);
-        auto raft = std::make_shared<TRaft>(rsm, state, myHost.Id, nodes);
+        auto raft = std::make_shared<TRaft>(state, myHost.Id, nodes);
         TPoller::TSocket socket(NNet::TAddress{myHost.Address, myHost.Port}, loop.Poller());
         socket.Bind();
         socket.Listen();
-        TRaftServer server(loop.Poller(), std::move(socket), raft, nodes, timeSource);
+        TRaftServer server(loop.Poller(), std::move(socket), raft, rsm, nodes, timeSource);
         server.Serve();
         loop.Loop();
     } else {

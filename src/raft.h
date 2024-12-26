@@ -81,7 +81,7 @@ enum class EState: int {
 
 class TRaft {
 public:
-    TRaft(std::shared_ptr<IRsm> rsm, std::shared_ptr<IState> state, int node, const TNodeDict& nodes);
+    TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes);
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
@@ -119,10 +119,6 @@ public:
         return Nservers;
     }
 
-    auto& GetRsm() {
-        return Rsm_;
-    }
-
 private:
     void Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
     void Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
@@ -141,7 +137,6 @@ private:
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
     ITimeSource::Time MakeElection(ITimeSource::Time now);
 
-    std::shared_ptr<IRsm> Rsm_;
     uint32_t Id;
     TNodeDict Nodes;
     int MinVotes;
