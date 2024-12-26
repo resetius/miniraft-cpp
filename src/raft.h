@@ -159,6 +159,7 @@ public:
         , Nodes(nodes)
     { }
 
+    void CheckStateChange();
     void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void OnCommandResponse(TMessageHolder<TCommandResponse> message);
     void ProcessCommitted();
@@ -175,6 +176,7 @@ private:
         std::shared_ptr<INode> ReplyTo;
     };
     std::queue<TWaiting> Waiting;
+    std::queue<TWaiting> WaitingStateChange;
 
     struct TAnswer {
         uint64_t Index;

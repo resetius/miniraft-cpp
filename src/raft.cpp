@@ -488,6 +488,26 @@ uint64_t TRaft::GetLastIndex() const {
     return State->LastLogIndex;
 }
 
+void TRequestProcessor::CheckStateChange() {
+    if (WaitingStateChange.empty()) {
+        return;
+    }
+
+    auto stateName = Raft->CurrentStateName();
+    auto leaderId = Raft->GetLeaderId();
+
+    if (stateName == EState::CANDIDATE || leaderId == 0) {
+        return;
+    }
+
+    std::queue<TWaiting> apply;
+    WaitingStateChange.swap(apply);
+    while (!apply.empty()) {
+        auto w = std::move(apply.front()); apply.pop();
+        OnCommandRequest(std::move(w.Command), w.ReplyTo);
+    }
+}
+
 void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
     auto stateName = Raft->CurrentStateName();
     auto leaderId = Raft->GetLeaderId();
@@ -524,8 +544,7 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
     }
  
     if (stateName == EState::CANDIDATE || leaderId == 0) {
-        // TODO: wait for state change
-        replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+        WaitingStateChange.emplace(TWaiting{0, std::move(command), replyTo});
         return;
     }
 
