@@ -49,12 +49,11 @@ TMessageHolder<TMessage> TDummyRsm::Write(TMessageHolder<TLogEntry> message, uin
     return {};
 }
 
-TMessageHolder<TLogEntry> TDummyRsm::Prepare(TMessageHolder<TCommandRequest> command, uint64_t term)
+TMessageHolder<TLogEntry> TDummyRsm::Prepare(TMessageHolder<TCommandRequest> command)
 {
     auto dataSize = command->Len - sizeof(TCommandRequest);
     auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
     memcpy(entry->Data, command->Data, dataSize);
-    entry->Term = term;
     return entry;
 }
 
@@ -280,8 +279,7 @@ void TRaft::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std:
     // TODO: move this logic to separate class
     if (StateName == EState::LEADER) {
         if (command->Flags & TCommandRequest::EWrite) {
-            auto entry = Rsm->Prepare(command, State->CurrentTerm);
-            State->Append(std::move(entry));
+            Append(std::move(Rsm->Prepare(command)));
         }
         auto index = State->LastLogIndex;
         if (replyTo) {
@@ -437,7 +435,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
 
 void TRaft::ProcessCommitted() {
     auto commitIndex = VolatileState->CommitIndex;
-    for (auto i = VolatileState->LastApplied+1; i <= commitIndex; i++) {
+    for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
         auto entry = State->Get(i-1);
         if (entry->Flags == TLogEntry::EStub) {
             continue;
@@ -448,11 +446,10 @@ void TRaft::ProcessCommitted() {
             .Reply = reply ? reply : NewHoldedMessage(TCommandResponse {.Index = i})
         });
     }
-    VolatileState->LastApplied = commitIndex;
 }
 
 void TRaft::ProcessWaiting() {
-    auto lastApplied = VolatileState->LastApplied;
+    auto lastApplied = Rsm->LastAppliedIndex;
     while (!Waiting.empty() && Waiting.top().Index <= lastApplied) {
         auto w = Waiting.top(); Waiting.pop();
         TMessageHolder<TCommandResponse> reply;
@@ -540,7 +537,6 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
 
             auto nextVolatileState = std::make_unique<TVolatileState>(TVolatileState {
                 .CommitIndex = VolatileState->CommitIndex,
-                .LastApplied = VolatileState->LastApplied,
                 .NextIndex = nextIndex,
                 .RpcDue = rpcDue,
                 .ElectionDue = ITimeSource::Max,
@@ -576,3 +572,65 @@ ITimeSource::Time TRaft::MakeElection(ITimeSource::Time now) {
     uint64_t delta = (uint64_t)((1.0 + (double)rand_(&Seed) / (double)UINT_MAX) * TTimeout::Election.count());
     return now + std::chrono::milliseconds(delta);
 }
+
+void TRaft::Append(TMessageHolder<TLogEntry> entry) {
+    entry->Term = State->CurrentTerm;
+    State->Append(std::move(entry));
+}
+
+void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
+    auto stateName = Raft->CurrentStateName();
+    auto index = Raft->GetState()->LastLogIndex;
+    auto leaderId = Raft->GetVolatileState()->LeaderId;
+    if (stateName == EState::LEADER) {
+        if (command->Flags & TCommandRequest::EWrite) {
+            Raft->Append(std::move(Rsm->Prepare(command)));
+        }
+        if (replyTo) {
+            Waiting.emplace(TWaiting{index, std::move(command), replyTo});
+        }
+    } else if (stateName == EState::FOLLOWER && replyTo) {
+        if (command->Flags & TCommandRequest::EWrite) {
+            if (command->Cookie) {
+                // already forwarded
+                replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+                return;
+            }
+ 
+            if (leaderId == 0) {
+                // TODO: wait for state change
+                replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+                return;
+            }
+
+            assert(leaderId != Id);
+            // Forward
+            command->Cookie = std::max<uint32_t>(1, ForwardCookie);
+            Nodes[leaderId]->Send(std::move(command));
+            Forwarded[ForwardCookie] = replyTo;
+            ForwardCookie++;
+        } else {
+            Waiting.emplace(TWaiting{index, std::move(command), replyTo});
+        }
+    } else if (stateName == EState::CANDIDATE && replyTo) {
+        // TODO: wait for state change
+        replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+    }
+}
+
+void TRequestProcessor::ProcessCommitted() {
+    auto commitIndex = Raft->GetVolatileState()->CommitIndex;
+    auto& state = Raft->GetState();
+    for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
+        auto entry = state->Get(i-1);
+        if (entry->Flags == TLogEntry::EStub) {
+            continue;
+        }
+        auto reply = Rsm->Write(entry, i);
+        WriteAnswers.emplace(TAnswer {
+            .Index = i,
+            .Reply = reply ? reply : NewHoldedMessage(TCommandResponse {.Index = i})
+        });
+    }
+}
+

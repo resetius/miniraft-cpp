@@ -198,8 +198,7 @@ void TRaftServer<TSocket>::DebugPrint() {
         std::cout << "Leader, "
             << "Term: " << state.CurrentTerm << ", "
             << "Index: " << state.LastLogIndex << ", "
-            << "CommitIndex: " << volatileState.CommitIndex << ", "
-            << "LastApplied: " << volatileState.LastApplied << ", ";
+            << "CommitIndex: " << volatileState.CommitIndex << ", ";
         std::cout << "Delay: ";
         for (auto [id, index] : volatileState.MatchIndex) {
             std::cout << id << ":" << (state.LastLogIndex - index) << " ";
@@ -218,14 +217,12 @@ void TRaftServer<TSocket>::DebugPrint() {
             << "Term: " << state.CurrentTerm << ", "
             << "Index: " << state.LastLogIndex << ", "
             << "CommitIndex: " << volatileState.CommitIndex << ", "
-            << "LastApplied: " << volatileState.LastApplied << ", "
             << "\n";
     } else if (Raft->CurrentStateName() == EState::FOLLOWER) {
         std::cout << "Follower, "
             << "Term: " << state.CurrentTerm << ", "
             << "Index: " << state.LastLogIndex << ", "
             << "CommitIndex: " << volatileState.CommitIndex << ", "
-            << "LastApplied: " << volatileState.LastApplied << ", "
             << "\n";
     }
     PersistentFields = state;
