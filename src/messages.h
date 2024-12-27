@@ -45,9 +45,10 @@ struct TMessageEx: public TMessage {
     uint32_t Src = 0;
     uint32_t Dst = 0;
     uint64_t Term = 0;
+    uint64_t Seqno = 0;
 };
 
-static_assert(sizeof(TMessageEx) == sizeof(TMessage)+16);
+static_assert(sizeof(TMessageEx) == sizeof(TMessage)+24);
 
 struct TRequestVoteRequest: public TMessageEx {
     static constexpr EMessageType MessageType = EMessageType::REQUEST_VOTE_REQUEST;
@@ -91,7 +92,7 @@ struct TCommandRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
     enum EFlags {
         ENone = 0,
-        EWrite = 1, // 
+        EWrite = 1, //
 
         // read semantics, default: read from leader w/o ping check, possible stale reads if there are 2 leaders
         EStale = 2, // stale read, can read from follower
