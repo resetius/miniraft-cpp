@@ -30,7 +30,7 @@ public:
 
     uint64_t getPercentile(int targetPercentile) {
         if (windowSorted.empty()) {
-            return -1; // Окно пусто
+            return -1;
         }
 
         int index = (targetPercentile * windowSorted.size()) / 100;
@@ -40,14 +40,13 @@ public:
     }
 
 private:
-    std::queue<uint64_t> windowQueue; // Сохраняет элементы в порядке их добавления
-    std::multiset<uint64_t> windowSorted; // Отсортированные элементы окна
+    std::queue<uint64_t> windowQueue; 
+    std::multiset<uint64_t> windowSorted; 
     int windowSize;
 };
 
 int main() {
-    // Пример использования
-    SlidingWindowPercentile calculator(1000000); // 50-й перцентиль с размером окна 5
+    SlidingWindowPercentile calculator(1000000); 
     vector<int> p = {50, 80, 90, 99};
     uint64_t num;
 

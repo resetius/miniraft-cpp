@@ -12,6 +12,7 @@ endmacro()
 
 target(debug_client client.cpp)
 target(debug_server server.cpp)
+target(debug_percentiles percentiles2.cpp)
 target(kv kv.cpp)
 
 if (SQLite3_FOUND)
