@@ -338,7 +338,7 @@ void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
         OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
         OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
-    } 
+    }
 }
 
 void TRaft::Become(EState newStateName) {
@@ -508,33 +508,9 @@ void TRequestProcessor::CheckStateChange() {
     }
 }
 
-void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
-    auto stateName = Raft->CurrentStateName();
-    auto leaderId = Raft->GetLeaderId();
-    
-    // read request
-    if (! (command->Flags & TCommandRequest::EWrite)) {
-        if (replyTo) {
-            // TODO: possible stale read, should use max(LastIndex, LeaderLastIndex)
-            assert(Waiting.empty() || Waiting.back().Index <= Raft->GetLastIndex());
-            Waiting.emplace(TWaiting{Raft->GetLastIndex(), std::move(command), replyTo});
-        }
-        return;
-    }
-
-    // write request
-    if (stateName == EState::LEADER) {
-        auto index = Raft->Append(std::move(Rsm->Prepare(command)));
-        if (replyTo) {
-            assert(Waiting.empty() || Waiting.back().Index <= index);
-            Waiting.emplace(TWaiting{index, std::move(command), replyTo});
-        }
-        return;
-    }
-
-    // forwarding write request
+void TRequestProcessor::Forward(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo)
+{
     if (!replyTo) {
-        // nothing to forward
         return;
     }
 
@@ -543,7 +519,9 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
         replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
         return;
     }
- 
+
+    auto stateName = Raft->CurrentStateName();
+    auto leaderId = Raft->GetLeaderId();
     if (stateName == EState::CANDIDATE || leaderId == 0) {
         WaitingStateChange.emplace(TWaiting{0, std::move(command), replyTo});
         return;
@@ -561,6 +539,54 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
     }
 
     assert(false && "Wrong state");
+}
+
+void TRequestProcessor::OnReadRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo)
+{
+    auto stateName = Raft->CurrentStateName();
+    auto flags = command->Flags;
+    assert(!(flags & TCommandRequest::EWrite));
+
+    // stale read, default read (from leader)
+    if ((flags & TCommandRequest::EStale) || (!(flags & TCommandRequest::EConsistent) && stateName == EState::LEADER)) {
+        assert(Waiting.empty() || Waiting.back().Index <= Raft->GetLastIndex());
+        Waiting.emplace(TWaiting{Raft->GetLastIndex(), std::move(command), replyTo});
+        return;
+    }
+
+    if (stateName != EState::LEADER) {
+        return Forward(std::move(command), replyTo);
+    }
+
+    // TODO: consistent read
+    assert(false);
+}
+
+void TRequestProcessor::OnWriteRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
+    auto stateName = Raft->CurrentStateName();
+    auto flags = command->Flags;
+    assert((flags & TCommandRequest::EWrite));
+
+    if (stateName == EState::LEADER) {
+        uint64_t index = Raft->Append(std::move(Rsm->Prepare(command)));
+        if (replyTo) {
+            assert(Waiting.empty() || Waiting.back().Index <= index);
+            // TODO: cleanup these queues on state change
+            Waiting.emplace(TWaiting{index, std::move(command), replyTo});
+        }
+    } else {
+        Forward(std::move(command), replyTo);
+    }
+}
+
+void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
+    auto flags = command->Flags;
+
+    if (!(flags & TCommandRequest::EWrite)) {
+        return OnReadRequest(std::move(command), replyTo);
+    } else {
+        return OnWriteRequest(std::move(command), replyTo);
+    }
 }
 
 void TRequestProcessor::OnCommandResponse(TMessageHolder<TCommandResponse> command) {

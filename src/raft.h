@@ -167,6 +167,10 @@ public:
     void CleanUp(const std::shared_ptr<INode>& replyTo);
 
 private:
+    void Forward(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+    void OnReadRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+    void OnWriteRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+
     std::shared_ptr<TRaft> Raft;
     std::shared_ptr<IRsm> Rsm;
     TNodeDict Nodes;
