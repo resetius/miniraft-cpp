@@ -41,6 +41,7 @@ using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TVolatileState {
     uint64_t CommitIndex = 0;
+    uint64_t CommitSeqno = 0;
     uint32_t LeaderId = 0;
     std::unordered_map<uint32_t, uint64_t> NextIndex;
     std::unordered_map<uint32_t, uint64_t> MatchIndex;
@@ -54,7 +55,7 @@ struct TVolatileState {
     std::vector<uint64_t> Indices;
 
     TVolatileState& Vote(uint32_t id);
-    TVolatileState& CommitAdvance(int nservers, const IState& state);
+    TVolatileState& CommitAdvance(int nservers, const IState& state, uint64_t seqno = 0);
     TVolatileState& SetCommitIndex(int index);
     TVolatileState& SetElectionDue(ITimeSource::Time);
     TVolatileState& SetNextIndex(uint32_t id, uint64_t nextIndex);
@@ -89,6 +90,8 @@ public:
     uint64_t Append(TMessageHolder<TLogEntry> entry);
     uint32_t GetLeaderId() const;
     uint64_t GetLastIndex() const;
+    uint64_t ApproveRead();
+    uint64_t CommitSeqno() const;
 
 // ut
     const auto& GetState() const {
@@ -146,6 +149,7 @@ private:
     int Nservers;
     std::shared_ptr<IState> State;
     std::unique_ptr<TVolatileState> VolatileState;
+    uint64_t Seqno = 0; // for matching responses
 
     EState StateName;
     uint32_t Seed = 31337;
@@ -167,16 +171,22 @@ public:
     void CleanUp(const std::shared_ptr<INode>& replyTo);
 
 private:
+    void Forward(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+    void OnReadRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+    void OnWriteRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+
     std::shared_ptr<TRaft> Raft;
     std::shared_ptr<IRsm> Rsm;
     TNodeDict Nodes;
 
     struct TWaiting {
         uint64_t Index;
+        uint64_t Seqno = 0;
         TMessageHolder<TCommandRequest> Command;
         std::shared_ptr<INode> ReplyTo;
     };
     std::queue<TWaiting> Waiting;
+    std::queue<TWaiting> StrongWaiting;
     std::queue<TWaiting> WaitingStateChange;
 
     struct TAnswer {
