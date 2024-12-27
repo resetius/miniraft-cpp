@@ -122,7 +122,7 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
         Nodes.insert(client);
         while (true) {
             auto mes = co_await TMessageReader(client->Sock()).Read();
-            // client request 
+            // client request
             if (auto maybeCommandRequest = mes.template Maybe<TCommandRequest>()) {
                 RequestProcessor->OnCommandRequest(std::move(maybeCommandRequest.Cast()), client);
             } else if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
@@ -170,6 +170,9 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
     while (true) {
         bool error = false;
         try {
+            if (!node->IsConnected()) {
+                throw std::runtime_error("Not connected");
+            }
             auto mes = co_await TMessageReader(node->Sock()).Read();
             if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
                 RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()));
