@@ -410,10 +410,11 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
 }
 
 uint64_t TRaft::ApproveRead() {
+    int seqno = Seqno;
     for (auto& [id, node] : Nodes) {
         node->Send(CreateAppendEntries(id));
     }
-    return VolatileState->CommitSeqno;
+    return seqno;
 }
 
 uint64_t TRaft::CommitSeqno() const {
