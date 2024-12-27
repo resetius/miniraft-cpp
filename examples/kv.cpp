@@ -1,7 +1,7 @@
 #include <string_view>
 
-#include <server.h>
-#include <persist.h>
+#include <miniraft/server.h>
+#include <miniraft/persist.h>
 
 #include "kv.h"
 

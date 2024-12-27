@@ -5,10 +5,10 @@
 #include <memory>
 #include <functional>
 
-#include <messages.h>
-#include <raft.h>
-#include <timesource.h>
-#include <persist.h>
+#include <miniraft/messages.h>
+#include <miniraft/raft.h>
+#include <miniraft/timesource.h>
+#include <miniraft/persist.h>
 #include <coroio/all.hpp>
 
 #include <stdarg.h>
@@ -718,7 +718,7 @@ void test_disk_state_restore1(void**) {
     assert_int_equal(state->CurrentTerm, 1);
     assert_int_equal(state->VotedFor, 0);
     assert_int_equal(state->LastLogIndex, 1);
- 
+
     std::vector<TMessageHolder<TLogEntry>> log2;
     for (int i = 0; i < state->LastLogIndex; i++) {
         auto entry = state->Get(i);
@@ -752,7 +752,7 @@ void test_disk_state_restore(void**) {
     assert_int_equal(state->CurrentTerm, 10);
     assert_int_equal(state->VotedFor, 2);
     assert_int_equal(state->LastLogIndex, 9);
- 
+
     std::vector<TMessageHolder<TLogEntry>> log2;
     for (int i = 0; i < state->LastLogIndex; i++) {
         auto entry = state->Get(i);

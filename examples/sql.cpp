@@ -1,9 +1,9 @@
 #include <sqlite3.h>
 #include <iostream>
 
-#include <raft.h>
-#include <persist.h>
-#include <server.h>
+#include <miniraft/raft.h>
+#include <miniraft/persist.h>
+#include <miniraft/server.h>
 
 struct TSqlEntry {
     uint32_t QuerySize = 0;
@@ -18,7 +18,7 @@ struct TWriteSql: public TCommandRequest, public TSqlEntry
 {
 };
 
-struct TReadSql: public TCommandRequest, public TSqlEntry 
+struct TReadSql: public TCommandRequest, public TSqlEntry
 {
 };
 
@@ -66,7 +66,7 @@ TSql::TSql(const std::string& path, int serverId)
 {
     std::string dbPath = path + "." + std::to_string(serverId);
     if (sqlite3_open(dbPath.c_str(), &Db) != SQLITE_OK) {
-        std::cerr << "Cannot open db: `" << dbPath << "', " 
+        std::cerr << "Cannot open db: `" << dbPath << "', "
             << "error: " << sqlite3_errmsg(Db)
             << std::endl;
         throw std::runtime_error("Cannot open db");
@@ -83,7 +83,7 @@ TSql::~TSql()
 {
     if (Db) {
         if (sqlite3_close(Db) != SQLITE_OK) {
-            std::cerr << "Failed to close db, error:" << sqlite3_errmsg(Db) << std::endl; 
+            std::cerr << "Failed to close db, error:" << sqlite3_errmsg(Db) << std::endl;
         }
     }
 }
@@ -121,7 +121,7 @@ bool TSql::Execute(const std::string& q) {
     std::cerr << "OK" << std::endl;
     return true;
 }
- 
+
 TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
     auto readSql = message.Cast<TReadSql>();
     if (!Execute(std::string(readSql->Query, readSql->QuerySize))) {
@@ -214,7 +214,7 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket) {
             size_t pos = strLine.find(' ');
             auto prefix = strLine.substr(0, pos);
             TMessageHolder<TMessage> req;
-        
+
             int flags = 0;
             if (!strcasecmp(prefix.data(), "create") || !strcasecmp(prefix.data(), "insert") || !strcasecmp(prefix.data(), "update")) {
                 auto mes = NewHoldedMessage<TWriteSql>(sizeof(TWriteSql) + strLine.size());
@@ -252,7 +252,7 @@ void usage(const char* prog) {
     exit(0);
 }
 
-int main(int argc, char** argv) 
+int main(int argc, char** argv)
 {
     signal(SIGPIPE, SIG_IGN);
     std::vector<THost> hosts;

@@ -5,10 +5,10 @@
 #include <memory>
 #include <functional>
 
-#include <messages.h>
-#include <raft.h>
-#include <server.h>
-#include <timesource.h>
+#include <miniraft/messages.h>
+#include <miniraft/raft.h>
+#include <miniraft/server.h>
+#include <miniraft/timesource.h>
 #include <coroio/all.hpp>
 
 #include <stdarg.h>

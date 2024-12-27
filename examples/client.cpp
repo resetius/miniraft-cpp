@@ -1,8 +1,8 @@
 #include <coroio/ssl.hpp>
 #include <coroio/socket.hpp>
 
-#include <messages.h>
-#include <server.h>
+#include <miniraft/messages.h>
+#include <miniraft/server.h>
 
 #include <vector>
 #include <queue>
