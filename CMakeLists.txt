@@ -9,14 +9,5 @@ enable_testing()
 
 add_subdirectory(coroio/coroio)
 add_subdirectory(src)
-
-add_executable(server server/server.cpp)
-add_executable(client client/client.cpp)
-
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-target_link_libraries(server miniraft coroio)
-target_link_libraries(client miniraft coroio)
-
 add_subdirectory(examples)
 add_subdirectory(test)

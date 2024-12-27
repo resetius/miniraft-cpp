@@ -10,6 +10,8 @@ macro(target name source)
     endif()
 endmacro()
 
+target(debug_client client.cpp)
+target(debug_server server.cpp)
 target(kv kv.cpp)
 
 if (SQLite3_FOUND)
