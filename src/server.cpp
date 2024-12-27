@@ -175,8 +175,8 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
             }
             auto mes = co_await TMessageReader(node->Sock()).Read();
             if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
+                std::cerr << "Response\n";
                 RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()));
-                RequestProcessor->ProcessWaiting();
                 DrainNodes();
             } else {
                 std::cerr << "Wrong message type: " << mes->Type << std::endl;

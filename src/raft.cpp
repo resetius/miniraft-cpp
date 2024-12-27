@@ -652,6 +652,7 @@ void TRequestProcessor::ProcessWaiting() {
     while (!Waiting.empty() && Waiting.back().Index <= lastApplied) {
         auto w = Waiting.back(); Waiting.pop();
         TMessageHolder<TCommandResponse> reply;
+        auto cookie = w.Command->Cookie;;
         if (w.Command->Flags & TCommandRequest::EWrite) {
             while (!WriteAnswers.empty() && WriteAnswers.front().Index < w.Index) {
                 WriteAnswers.pop();
@@ -663,7 +664,7 @@ void TRequestProcessor::ProcessWaiting() {
         } else {
             reply = Rsm->Read(std::move(w.Command), w.Index).Cast<TCommandResponse>();
         }
-        reply->Cookie = w.Command->Cookie;
+        reply->Cookie = cookie;
         w.ReplyTo->Send(std::move(reply));
     }
 
@@ -672,8 +673,9 @@ void TRequestProcessor::ProcessWaiting() {
         auto w = StrongWaiting.back(); StrongWaiting.pop();
         TMessageHolder<TCommandResponse> reply;
         assert (!(w.Command->Flags & TCommandRequest::EWrite));
+        auto cookie = w.Command->Cookie;
         reply = Rsm->Read(std::move(w.Command), w.Index).Cast<TCommandResponse>();
-        reply->Cookie = w.Command->Cookie;
+        reply->Cookie = cookie;
         w.ReplyTo->Send(std::move(reply));
     }
 }
