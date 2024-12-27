@@ -9,9 +9,9 @@
 
 #include <coroio/all.hpp>
 
-#include "timesource.h"
-#include "messages.h"
-#include "raft.h"
+#include <miniraft/timesource.h>
+#include <miniraft/messages.h>
+#include <miniraft/raft.h>
 
 template<typename TSocket>
 class TMessageReader {

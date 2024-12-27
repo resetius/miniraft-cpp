@@ -9,5 +9,6 @@ enable_testing()
 
 add_subdirectory(coroio/coroio)
 add_subdirectory(miniraft)
+add_subdirectory(miniraft/net)
 add_subdirectory(examples)
 add_subdirectory(test)

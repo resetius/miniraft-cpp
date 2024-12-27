@@ -4,9 +4,10 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
-#include "raft.h"
+#include <miniraft/raft.h>
+#include <miniraft/messages.h>
+
 #include "server.h"
-#include "messages.h"
 
 template<typename TSocket>
 NNet::TValueTask<void> TMessageWriter<TSocket>::Write(TMessageHolder<TMessage> message) {

@@ -3,7 +3,7 @@
 
 #include <miniraft/raft.h>
 #include <miniraft/persist.h>
-#include <miniraft/server.h>
+#include <miniraft/net/server.h>
 
 struct TSqlEntry {
     uint32_t QuerySize = 0;

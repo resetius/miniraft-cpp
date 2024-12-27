@@ -2,7 +2,7 @@
 #include <coroio/socket.hpp>
 
 #include <miniraft/messages.h>
-#include <miniraft/server.h>
+#include <miniraft/net/server.h>
 
 #include <vector>
 #include <queue>

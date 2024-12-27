@@ -7,7 +7,7 @@
 
 #include <miniraft/messages.h>
 #include <miniraft/raft.h>
-#include <miniraft/server.h>
+#include <miniraft/net/server.h>
 #include <miniraft/timesource.h>
 #include <coroio/all.hpp>
 

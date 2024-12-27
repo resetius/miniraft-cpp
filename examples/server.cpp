@@ -2,7 +2,7 @@
 #include <csignal>
 #include <miniraft/timesource.h>
 #include <miniraft/raft.h>
-#include <miniraft/server.h>
+#include <miniraft/net/server.h>
 
 void usage(const char* prog) {
     std::cerr << prog << " --id myid --node ip:port:id [--node ip:port:id ...]" << "\n";
