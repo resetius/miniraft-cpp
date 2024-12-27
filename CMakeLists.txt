@@ -13,7 +13,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(CMOCKA REQUIRED cmocka)
 find_package(SQLite3)
 
-add_subdirectory(coroio)
+add_subdirectory(coroio/coroio)
 
 add_library(miniraft
     src/messages.cpp
@@ -30,7 +30,7 @@ add_executable(server server/server.cpp)
 add_executable(client client/client.cpp)
 add_executable(kv examples/kv.cpp)
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/coroio)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(server miniraft coroio)
 target_link_libraries(client miniraft coroio)
