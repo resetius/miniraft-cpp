@@ -29,7 +29,7 @@ TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message, uint
     if (readKv->KeySize == 0) {
         std::string data;
         for (auto& [k, v] : H) {
-            data += k + "=" + v + ",";
+            data += k + " = " + v + "\n";
         }
         auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + data.size());
         memcpy(res->Data, data.data(), data.size());
@@ -89,6 +89,7 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
     const char* sep = " \t\r\n";
 
     try {
+        std::cout << "> " << std::flush;
         while ((line = co_await lineReader.Read())) {
             std::string strLine;
             strLine += std::string_view(line.Part1.data(), line.Part1.size());
@@ -138,8 +139,11 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
             auto res = reply.template Cast<TCommandResponse>();
             auto len = res->Len - sizeof(TCommandResponse);
             std::string_view data(res->Data, len);
-            std::cout << "Ok, commitIndex: " << res->Index << " "
-                      << data << "\n";
+            std::cout << "Ok, commitIndex: " << res->Index << "\n";
+            if (!data.empty()) {
+                std::cout << data << "\n";
+            }
+            std::cout << "> " << std::flush;
         }
     } catch (const std::exception& ex) {
         std::cout << "Exception: " << ex.what() << "\n";
