@@ -24,6 +24,7 @@ struct IRsm {
     virtual TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) = 0;
     virtual TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) = 0;
     virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) = 0;
+    virtual void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) = 0;
 
     uint64_t LastAppliedIndex = 0;
 };
@@ -32,6 +33,7 @@ struct TDummyRsm: public IRsm {
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
+    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override { }
 
 private:
     std::vector<TMessageHolder<TLogEntry>> Log;

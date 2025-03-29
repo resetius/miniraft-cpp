@@ -88,6 +88,23 @@ struct TAppendEntriesResponse: public TMessageEx {
 
 static_assert(sizeof(TAppendEntriesResponse) == sizeof(TMessageEx) + 16);
 
+struct TInstallSnapshotRequest: public TMessageEx {
+    static constexpr EMessageType MessageType = EMessageType::INSTALL_SNAPSHOT_REQUEST;
+    uint64_t LastIncludedIndex;
+    uint64_t LastIncludedTerm;
+    uint32_t LeaderId;
+    uint32_t Nentries = 0;
+};
+
+static_assert(sizeof(TInstallSnapshotRequest) == sizeof(TMessageEx) + 24);
+
+struct TInstallSnapshotResponse: public TMessageEx {
+    static constexpr EMessageType MessageType = EMessageType::INSTALL_SNAPSHOT_RESPONSE;
+    uint32_t Success;
+    uint32_t Padding = 0;
+};
+static_assert(sizeof(TInstallSnapshotResponse) == sizeof(TMessageEx) + 8);
+
 struct TCommandRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
     enum EFlags {

@@ -10,6 +10,9 @@ public:
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
+    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override {
+        throw std::runtime_error("Not implemented");
+    }
 
 private:
     std::unordered_map<std::string, std::string> H;
