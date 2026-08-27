@@ -31,6 +31,47 @@ TMessageHolder<TLogEntry> MakeEntry(const char* text) {
 
 } // namespace
 
+void test_message_send_recv(void**) {
+    auto mes = MakeEntry("MESSAGE");
+
+    NNet::TLoop<NNet::TPoll> loop;
+    NNet::TSocket socket(NNet::TAddress{"127.0.0.1", 8890}, loop.Poller());
+    socket.Bind();
+    socket.Listen();
+
+    NNet::TSocket client(NNet::TAddress{"127.0.0.1", 8890}, loop.Poller());
+
+    NNet::TVoidSuspendedTask h1 = [](NNet::TSocket& client, TMessageHolder<TLogEntry> mes) -> NNet::TVoidSuspendedTask
+    {
+        co_await client.Connect();
+        co_await client.WriteSome(mes.RawData.get(), mes->Len);
+        co_return;
+    }(client, mes);
+
+    TMessageHolder<TMessage> received;
+    NNet::TVoidSuspendedTask h2 = [](NNet::TSocket& server, TMessageHolder<TMessage>& received) -> NNet::TVoidSuspendedTask
+    {
+        auto client = std::move(co_await server.Accept());
+        uint32_t type, len;
+        co_await client.ReadSome(&type, sizeof(type));
+        co_await client.ReadSome(&len, sizeof(len));
+        received = NewHoldedMessage<TMessage>(type, len);
+        co_await client.ReadSome(received->Value, len - sizeof(TMessage));
+        co_return;
+    }(socket, received);
+
+    while (!(h1.done() && h2.done())) {
+        loop.Step();
+    }
+
+    auto maybeCasted = received.Maybe<TLogEntry>();
+    assert_true(maybeCasted);
+    auto casted = maybeCasted.Cast();
+    assert_string_equal(mes->Data, casted->Data);
+
+    h1.destroy(); h2.destroy();
+}
+
 void test_read_write(void**) {
     auto mes = MakeEntry("MESSAGE");
 
@@ -114,6 +155,7 @@ void test_read_write_payload(void**) {
 
 int main() {
     const struct CMUnitTest tests[] = {
+        cmocka_unit_test(test_message_send_recv),
         cmocka_unit_test(test_read_write),
         cmocka_unit_test(test_read_write_payload),
     };

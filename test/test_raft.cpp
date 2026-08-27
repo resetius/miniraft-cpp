@@ -9,7 +9,6 @@
 #include <miniraft/raft.h>
 #include <miniraft/timesource.h>
 #include <miniraft/persist.h>
-#include <coroio/all.hpp>
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -17,8 +16,6 @@
 extern "C" {
 #include <cmocka.h>
 }
-
-using namespace NNet;
 
 namespace {
 
@@ -140,52 +137,6 @@ void test_message_cast(void** state) {
     assert_true(mes.RawData == casted3.RawData);
     assert_true(mes->Len == casted3->Len);
 }
-
-void test_message_send_recv(void** state) {
-    const char* text = "MESSAGE";
-    auto mes = NewHoldedMessage<TLogEntry>(
-        static_cast<uint32_t>(TLogEntry::MessageType),
-        sizeof(TLogEntry) + strlen(text) + 1
-    );
-    strcpy(mes.Mes->Data, text);
-
-    TLoop<TPoll> loop;
-    TSocket socket(TAddress{"127.0.0.1", 8888}, loop.Poller());
-    socket.Bind();
-    socket.Listen();
-
-    TSocket client(TAddress{"127.0.0.1", 8888}, loop.Poller());
-
-    TVoidSuspendedTask h1 = [](TSocket& client, TMessageHolder<TLogEntry> mes) -> TVoidSuspendedTask
-    {
-        co_await client.Connect();
-        auto r = co_await client.WriteSome(mes.RawData.get(), mes->Len);
-        co_return;
-    }(client, mes);
-
-    TMessageHolder<TMessage> received;
-    TVoidSuspendedTask h2 = [](TSocket& server, TMessageHolder<TMessage>& received) -> TVoidSuspendedTask
-    {
-        auto client = std::move(co_await server.Accept());
-        uint32_t type, len;
-        auto r = co_await client.ReadSome(&type, sizeof(type));
-        r = co_await client.ReadSome(&len, sizeof(len));
-        received = NewHoldedMessage<TMessage>(type, len);
-        r = co_await client.ReadSome(received->Value, len - sizeof(TMessage));
-        co_return;
-    }(socket, received);
-
-    while (!(h1.done() && h2.done())) {
-        loop.Step();
-    }
-
-    auto maybeCasted = received.Maybe<TLogEntry>();
-    assert_true(maybeCasted);
-    auto casted = maybeCasted.Cast();
-    assert_string_equal(mes->Data, casted->Data);
-
-    h1.destroy(); h2.destroy();
-};
 
 void test_initial(void**) {
     auto raft = MakeRaft();
@@ -808,7 +759,6 @@ int main() {
         cmocka_unit_test(test_empty),
         cmocka_unit_test(test_message_create),
         cmocka_unit_test(test_message_cast),
-        cmocka_unit_test(test_message_send_recv),
         cmocka_unit_test(test_initial),
         cmocka_unit_test(test_numbers),
         cmocka_unit_test(test_become),
