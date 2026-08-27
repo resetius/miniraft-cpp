@@ -272,6 +272,47 @@ void test_follower_append_entries_small_term(void**) {
     assert_false(reply->Success);
 }
 
+void test_stale_append_entries_does_not_postpone_election(void**) {
+    std::vector<TMessageHolder<TMessage>> messages;
+    auto onSend = [&](const TMessageHolder<TMessage>& message) {
+        messages.push_back(message);
+    };
+    auto ts = std::make_shared<TFakeTimeSource>();
+    auto raft = MakeRaft(onSend, 3);
+    // start an election, current term becomes 2, election due is in the future
+    raft->ProcessTimeout(ts->Now());
+    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+    auto term = raft->GetState()->CurrentTerm;
+    auto electionDue = raft->GetVolatileState()->ElectionDue;
+    assert_true(electionDue > ts->Now());
+
+    // a stale leader keeps sending append entries with an outdated term
+    for (int i = 0; i < 10; i++) {
+        ts->Advance(std::chrono::milliseconds(100));
+        auto mes = NewHoldedMessage(TMessageEx {
+            .Src = 2,
+            .Dst = 1,
+            .Term = term - 1,
+        }, TAppendEntriesRequest {
+            .PrevLogIndex = 0,
+            .PrevLogTerm = 0,
+            .LeaderCommit = 0,
+            .LeaderId = 2,
+            .Nentries = 0,
+        });
+        raft->Process(ts->Now(), mes);
+        raft->ProcessTimeout(ts->Now());
+        assert_true(raft->GetVolatileState()->ElectionDue == electionDue);
+        assert_int_equal(raft->GetState()->CurrentTerm, term);
+    }
+
+    // the original deadline still starts the next election round
+    ts->Advance(std::chrono::duration_cast<std::chrono::milliseconds>(electionDue - ts->Now()));
+    raft->ProcessTimeout(ts->Now());
+    assert_int_equal(raft->GetState()->CurrentTerm, term + 1);
+    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+}
+
 void test_follower_append_entries_7a(void**) {
     // leader: 1,1,1,4,4,5,5,6,6,6
     std::vector<TMessageHolder<TMessage>> messages;
@@ -774,6 +815,7 @@ int main() {
         cmocka_unit_test(test_become_same_func),
         cmocka_unit_test(test_follower_to_candidate_on_timeout),
         cmocka_unit_test(test_follower_append_entries_small_term),
+        cmocka_unit_test(test_stale_append_entries_does_not_postpone_election),
         cmocka_unit_test(test_follower_append_entries_7a),
         cmocka_unit_test(test_follower_append_entries_7b),
         cmocka_unit_test(test_follower_append_entries_7c),

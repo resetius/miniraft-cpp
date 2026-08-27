@@ -189,8 +189,6 @@ void TRaft::OnRequestVote(TMessageHolder<TRequestVoteResponse> message) {
 
 void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message) {
     if (message->Term < State->CurrentTerm) {
-        VolatileState->ElectionDue = MakeElection(now);
-
         auto reply = NewHoldedMessage(
             TMessageEx {
                 .Src = Id,
