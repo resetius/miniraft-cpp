@@ -14,6 +14,7 @@ struct TStateFields {
 struct IState: TStateFields {
     virtual void RemoveLast() = 0;
     virtual void Append(TMessageHolder<TLogEntry>) = 0;
+    // index starts from 1
     virtual TMessageHolder<TLogEntry> Get(int64_t index) const = 0;
     virtual void Commit() = 0;
     virtual ~IState() = default;
@@ -25,7 +26,7 @@ struct IState: TStateFields {
         if (index < 1 || index > LastLogIndex) {
             return 0;
         } else {
-            return Get(index-1)->Term;
+            return Get(index)->Term;
         }
     }
 };
@@ -58,7 +59,7 @@ struct TState: IState {
     }
 
     TMessageHolder<TLogEntry> Get(int64_t index) const override {
-        return Log[index];
+        return Log[index-1];
     }
 
     void Commit() override { }

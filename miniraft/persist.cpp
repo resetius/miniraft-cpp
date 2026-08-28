@@ -18,7 +18,7 @@ TDiskState::TDiskState(const std::string& name, uint32_t id)
         Commit();
     }
     if (LastLogIndex > 0) {
-        LastLogTerm = Get(LastLogIndex-1)->Term;
+        LastLogTerm = Get(LastLogIndex)->Term;
     }
 }
 
@@ -72,7 +72,7 @@ void TDiskState::RemoveLast()
 void TDiskState::Append(TMessageHolder<TLogEntry> entry)
 {
     uint64_t offset = 0;
-    if (Get(LastLogIndex-1)) { // TODO: optimize
+    if (Get(LastLogIndex)) { // TODO: optimize
         offset = Entries.tellg();
     }
 
@@ -86,12 +86,12 @@ void TDiskState::Append(TMessageHolder<TLogEntry> entry)
 
 TMessageHolder<TLogEntry> TDiskState::Get(int64_t index) const
 {
-    if (index >= LastLogIndex || index < 0) {
+    if (index > LastLogIndex || index < 1) {
         return {};
     }
 
     uint64_t offset = 0;
-    Index.seekg(index * sizeof(offset));
+    Index.seekg((index-1) * sizeof(offset));
     if (!Index.read((char*)&offset, sizeof(offset))) {
         return {};
     }

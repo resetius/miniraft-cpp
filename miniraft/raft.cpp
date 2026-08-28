@@ -305,7 +305,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     if (lastIndex - prevIndex > 0) {
         mes.InitPayload(lastIndex - prevIndex);
         uint32_t j = 0;
-        for (auto i = prevIndex; i < lastIndex; i++) {
+        for (auto i = prevIndex+1; i <= lastIndex; i++) {
             mes.Payload[j++] = State->Get(i);
         }
     }
@@ -632,7 +632,7 @@ void TRequestProcessor::ProcessCommitted() {
     auto commitIndex = Raft->GetVolatileState()->CommitIndex;
     auto& state = Raft->GetState();
     for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
-        auto entry = state->Get(i-1);
+        auto entry = state->Get(i);
         if (entry->Flags == TLogEntry::EStub) {
             continue;
         }

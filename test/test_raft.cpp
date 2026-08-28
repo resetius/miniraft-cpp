@@ -682,7 +682,7 @@ void test_disk_state(void**) {
     assert_int_equal(state.LastLogIndex, 9);
 
     std::vector<TMessageHolder<TLogEntry>> log2;
-    for (int i = 0; i < state.LastLogIndex; i++) {
+    for (int i = 1; i <= state.LastLogIndex; i++) {
         auto entry = state.Get(i);
         log2.emplace_back(entry);
     }
@@ -712,7 +712,7 @@ void test_disk_state_restore1(void**) {
     assert_int_equal(state->LastLogIndex, 1);
 
     std::vector<TMessageHolder<TLogEntry>> log2;
-    for (int i = 0; i < state->LastLogIndex; i++) {
+    for (int i = 1; i <= state->LastLogIndex; i++) {
         auto entry = state->Get(i);
         log2.emplace_back(entry);
     }
@@ -746,7 +746,7 @@ void test_disk_state_restore(void**) {
     assert_int_equal(state->LastLogIndex, 9);
 
     std::vector<TMessageHolder<TLogEntry>> log2;
-    for (int i = 0; i < state->LastLogIndex; i++) {
+    for (int i = 1; i <= state->LastLogIndex; i++) {
         auto entry = state->Get(i);
         log2.emplace_back(entry);
     }
