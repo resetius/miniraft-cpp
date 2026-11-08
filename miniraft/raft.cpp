@@ -361,6 +361,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
             State->VotedFor = 0;
             State->Commit();
             StateName = EState::FOLLOWER;
+            VolatileState->LeaderId = 0;
             if (VolatileState->ElectionDue <= now || VolatileState->ElectionDue == ITimeSource::Max) {
                 VolatileState->ElectionDue = MakeElection(now);
             }
@@ -473,6 +474,7 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
 
             auto nextVolatileState = std::make_unique<TVolatileState>(TVolatileState {
                 .CommitIndex = VolatileState->CommitIndex,
+                .LeaderId = Id,
                 .NextIndex = nextIndex,
                 .RpcDue = rpcDue,
                 .ElectionDue = ITimeSource::Max,
@@ -524,6 +526,7 @@ uint64_t TRaft::GetLastIndex() const {
 }
 
 void TRequestProcessor::CheckStateChange() {
+    PruneRequests();
     if (WaitingStateChange.empty()) {
         return;
     }
@@ -531,7 +534,8 @@ void TRequestProcessor::CheckStateChange() {
     auto stateName = Raft->CurrentStateName();
     auto leaderId = Raft->GetLeaderId();
 
-    if (stateName == EState::CANDIDATE || leaderId == 0) {
+    if (stateName == EState::CANDIDATE || (stateName != EState::LEADER &&
+        (leaderId == 0 || leaderId == Raft->GetId() || !Nodes.contains(leaderId)))) {
         return;
     }
 
@@ -557,13 +561,13 @@ void TRequestProcessor::Forward(TMessageHolder<TCommandRequest> command, const s
 
     auto stateName = Raft->CurrentStateName();
     auto leaderId = Raft->GetLeaderId();
-    if (stateName == EState::CANDIDATE || leaderId == 0) {
+    if (stateName == EState::CANDIDATE || leaderId == 0 ||
+        leaderId == Raft->GetId() || !Nodes.contains(leaderId)) {
         WaitingStateChange.emplace(TWaiting{0, 0, std::move(command), replyTo});
         return;
     }
 
     if (stateName == EState::FOLLOWER) {
-        assert(leaderId != Raft->GetId());
         // Forward
         command->Cookie = std::max<uint32_t>(1, ForwardCookie);
         Nodes[leaderId]->Send(std::move(command));
@@ -585,8 +589,10 @@ void TRequestProcessor::OnReadRequest(TMessageHolder<TCommandRequest> command, c
     // stale read, default read (from leader)
     if (!(flags & TCommandRequest::EConsistent) &&
         ((flags & TCommandRequest::EStale) || stateName == EState::LEADER)) {
-        assert(Waiting.empty() || Waiting.back().Index <= Raft->GetLastIndex());
-        Waiting.emplace(TWaiting{Raft->GetLastIndex(), 0, std::move(command), replyTo});
+        const bool stale = flags & TCommandRequest::EStale;
+        const auto index = stale ? Raft->GetVolatileState()->CommitIndex : Raft->GetLastIndex();
+        const auto term = stale ? 0 : Raft->GetState()->CurrentTerm;
+        Waiting.emplace(TWaiting{index, 0, std::move(command), replyTo, term});
         return;
     }
 
@@ -595,7 +601,6 @@ void TRequestProcessor::OnReadRequest(TMessageHolder<TCommandRequest> command, c
     }
 
     // Consistent read
-    RejectObsoleteStrongReads();
     const auto term = Raft->GetState()->CurrentTerm;
     const auto index = Raft->GetLastIndex();
     auto seqno = Raft->ApproveRead();
@@ -603,14 +608,33 @@ void TRequestProcessor::OnReadRequest(TMessageHolder<TCommandRequest> command, c
     StrongWaiting.emplace(TWaiting{index, seqno, std::move(command), replyTo, term});
 }
 
-void TRequestProcessor::RejectObsoleteStrongReads() {
-    while (!StrongWaiting.empty() &&
-        (Raft->CurrentStateName() != EState::LEADER ||
-         StrongWaiting.front().Term != Raft->GetState()->CurrentTerm)) {
-        auto waiting = std::move(StrongWaiting.front());
-        StrongWaiting.pop();
-        if (waiting.ReplyTo) waiting.ReplyTo->Send(NewHoldedMessage(
-            TCommandResponse{.Cookie = waiting.Command->Cookie, .ErrorCode = 1}));
+void TRequestProcessor::PruneRequests(const std::shared_ptr<INode>& disconnected) {
+    const auto term = Raft->GetState()->CurrentTerm;
+    const bool leader = Raft->CurrentStateName() == EState::LEADER;
+    if (!disconnected) {
+        if (RequestsTerm == term && RequestsLeader == leader) return;
+        RequestsTerm = term;
+        RequestsLeader = leader;
+    }
+    for (auto* queue : {&Waiting, &StrongWaiting, &WaitingStateChange}) {
+        std::queue<TWaiting> retained;
+        while (!queue->empty()) {
+            auto waiting = std::move(queue->front());
+            queue->pop();
+            const bool remove = disconnected ? waiting.ReplyTo == disconnected :
+                waiting.Term != 0 && (!leader || waiting.Term != term);
+            if (!remove) {
+                retained.push(std::move(waiting));
+                continue;
+            }
+            if (waiting.Command->Flags & TCommandRequest::EWrite) {
+                PendingWriteTerms.erase(waiting.Index);
+                WriteAnswers.erase(waiting.Index);
+            }
+            if (!disconnected && waiting.ReplyTo) waiting.ReplyTo->Send(NewHoldedMessage(
+                TCommandResponse{.Cookie = waiting.Command->Cookie, .ErrorCode = 1}));
+        }
+        queue->swap(retained);
     }
 }
 
@@ -620,11 +644,11 @@ void TRequestProcessor::OnWriteRequest(TMessageHolder<TCommandRequest> command, 
     assert((flags & TCommandRequest::EWrite));
 
     if (stateName == EState::LEADER) {
+        const auto term = Raft->GetState()->CurrentTerm;
         uint64_t index = Raft->Append(std::move(Rsm->Prepare(command)));
         if (replyTo) {
-            assert(Waiting.empty() || Waiting.back().Index <= index);
-            // TODO: cleanup these queues on state change
-            Waiting.emplace(TWaiting{index, 0, std::move(command), replyTo});
+            PendingWriteTerms[index] = term;
+            Waiting.emplace(TWaiting{index, 0, std::move(command), replyTo, term});
         }
     } else {
         Forward(std::move(command), replyTo);
@@ -632,6 +656,7 @@ void TRequestProcessor::OnWriteRequest(TMessageHolder<TCommandRequest> command, 
 }
 
 void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
+    PruneRequests();
     auto flags = command->Flags;
 
     if (!(flags & TCommandRequest::EWrite)) {
@@ -657,6 +682,8 @@ void TRequestProcessor::OnCommandResponse(TMessageHolder<TCommandResponse> comma
 }
 
 void TRequestProcessor::CleanUp(const std::shared_ptr<INode>& replyTo) {
+    if (!replyTo) return;
+    PruneRequests(replyTo);
     auto jt = Client2Cookie.find(replyTo);
     if (jt == Client2Cookie.end()) {
         return;
@@ -668,6 +695,7 @@ void TRequestProcessor::CleanUp(const std::shared_ptr<INode>& replyTo) {
 }
 
 void TRequestProcessor::ProcessCommitted() {
+    PruneRequests();
     auto commitIndex = Raft->GetVolatileState()->CommitIndex;
     auto& state = Raft->GetState();
     for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
@@ -676,28 +704,39 @@ void TRequestProcessor::ProcessCommitted() {
             continue;
         }
         auto reply = Rsm->Write(entry, i);
-        WriteAnswers.emplace(TAnswer {
-            .Index = i,
-            .Reply = reply ? reply : NewHoldedMessage(TCommandResponse {.Index = i})
-        });
+        auto pending = PendingWriteTerms.find(i);
+        if (pending != PendingWriteTerms.end() && pending->second == entry->Term) {
+            WriteAnswers.emplace(i, TAnswer {
+                .Term = entry->Term,
+                .Reply = reply ? reply : NewHoldedMessage(TCommandResponse {.Index = i})
+            });
+        }
     }
     Rsm->LastAppliedIndex = commitIndex;
 }
 
 void TRequestProcessor::ProcessWaiting() {
+    PruneRequests();
     auto lastApplied = Rsm->LastAppliedIndex;
-    while (!Waiting.empty() && Waiting.front().Index <= lastApplied) {
+    while (!Waiting.empty()) {
+        if (Waiting.front().Term != 0 && (Raft->CurrentStateName() != EState::LEADER ||
+            Waiting.front().Term != Raft->GetState()->CurrentTerm)) {
+            PruneRequests();
+            continue;
+        }
+        if (Waiting.front().Index > lastApplied) break;
         auto w = Waiting.front(); Waiting.pop();
         TMessageHolder<TCommandResponse> reply;
-        auto cookie = w.Command->Cookie;;
+        auto cookie = w.Command->Cookie;
         if (w.Command->Flags & TCommandRequest::EWrite) {
-            while (!WriteAnswers.empty() && WriteAnswers.front().Index < w.Index) {
-                WriteAnswers.pop();
+            auto answer = WriteAnswers.find(w.Index);
+            if (answer != WriteAnswers.end() && answer->second.Term == w.Term) {
+                reply = answer->second.Reply.Cast<TCommandResponse>();
+            } else {
+                reply = NewHoldedMessage(TCommandResponse{.ErrorCode = 1});
             }
-            assert(!WriteAnswers.empty());
-            auto answer = std::move(WriteAnswers.front()); WriteAnswers.pop();
-            assert(answer.Index == w.Index);
-            reply = std::move(answer.Reply.Cast<TCommandResponse>());
+            PendingWriteTerms.erase(w.Index);
+            WriteAnswers.erase(w.Index);
         } else {
             reply = Rsm->Read(std::move(w.Command), w.Index).Cast<TCommandResponse>();
         }
@@ -706,8 +745,12 @@ void TRequestProcessor::ProcessWaiting() {
     }
 
     while (!StrongWaiting.empty()) {
-        RejectObsoleteStrongReads();
-        if (StrongWaiting.empty() || StrongWaiting.front().Index > lastApplied ||
+        if (Raft->CurrentStateName() != EState::LEADER ||
+            StrongWaiting.front().Term != Raft->GetState()->CurrentTerm) {
+            PruneRequests();
+            continue;
+        }
+        if (StrongWaiting.front().Index > lastApplied ||
             StrongWaiting.front().Seqno > Raft->CommitSeqno()) break;
         auto w = StrongWaiting.front(); StrongWaiting.pop();
         TMessageHolder<TCommandResponse> reply;

@@ -252,6 +252,9 @@ NNet::TVoidTask TRaftServer<TSocket>::Idle() {
     auto sleep = std::chrono::milliseconds(100);
     while (true) {
         Raft->ProcessTimeout(TimeSource->Now());
+        RequestProcessor->CheckStateChange();
+        RequestProcessor->ProcessCommitted();
+        RequestProcessor->ProcessWaiting();
         DrainNodes();
         auto t1 = TimeSource->Now();
         if (t1 > t0 + dt) {
