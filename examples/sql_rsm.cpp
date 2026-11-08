@@ -2,6 +2,7 @@
 #include "payload_validation.h"
 #include <iostream>
 #include <climits>
+#include <charconv>
 
 namespace {
 int ReadAuthorization(void*, int action, const char*, const char* second, const char*, const char*) {
@@ -17,13 +18,37 @@ int ReadAuthorization(void*, int action, const char*, const char* second, const 
     }
     return SQLITE_DENY;
 }
-struct TReadPolicy {
-    sqlite3* Db;
-    explicit TReadPolicy(sqlite3* db) : Db(db) {
-        if (sqlite3_set_authorizer(Db, ReadAuthorization, nullptr) != SQLITE_OK)
-            throw TMessageError("Cannot install SQL read policy");
+int WriteAuthorization(void*, int action, const char* first, const char* second, const char* database, const char* context) {
+    const auto metadata = [](const char* name) {
+        return name && sqlite3_stricmp(name, "raft_metadata_") == 0;
+    };
+    if (metadata(first) || ((action == SQLITE_CREATE_TRIGGER || action == SQLITE_DROP_TRIGGER ||
+        action == SQLITE_ALTER_TABLE || action == SQLITE_CREATE_INDEX || action == SQLITE_DROP_INDEX) && metadata(second))) return SQLITE_DENY;
+    if (database && sqlite3_stricmp(database, "main") != 0) return SQLITE_DENY;
+    switch (action) {
+    case SQLITE_INSERT: case SQLITE_UPDATE: case SQLITE_DELETE:
+    case SQLITE_CREATE_TABLE: case SQLITE_CREATE_INDEX: case SQLITE_CREATE_VIEW: case SQLITE_CREATE_TRIGGER:
+    case SQLITE_DROP_TABLE: case SQLITE_DROP_INDEX: case SQLITE_DROP_VIEW: case SQLITE_DROP_TRIGGER:
+    case SQLITE_REINDEX: case SQLITE_ANALYZE:
+        return SQLITE_OK;
+    default:
+        return ReadAuthorization(nullptr, action, first, second, database, context);
     }
-    ~TReadPolicy() { sqlite3_set_authorizer(Db, nullptr, nullptr); }
+}
+using TAuthorizer = int (*)(void*, int, const char*, const char*, const char*, const char*);
+struct TSqlPolicy {
+    sqlite3* Db;
+    explicit TSqlPolicy(sqlite3* db, TAuthorizer authorize) : Db(db) {
+        if (sqlite3_set_authorizer(Db, authorize, nullptr) != SQLITE_OK)
+            throw TMessageError("Cannot install SQL policy");
+    }
+    ~TSqlPolicy() { sqlite3_set_authorizer(Db, nullptr, nullptr); }
+};
+struct TTransactionCleanup {
+    sqlite3* Db;
+    ~TTransactionCleanup() {
+        if (!sqlite3_get_autocommit(Db)) sqlite3_exec(Db, "ROLLBACK", nullptr, nullptr, nullptr);
+    }
 };
 using TStatement = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
 }
@@ -31,7 +56,7 @@ using TStatement = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
 void TSql::ExecuteRead(const std::string& q) {
     if (q.size() > INT_MAX || q.find('\0') != std::string::npos)
         throw TMessageError("Invalid SQL read text");
-    TReadPolicy policy(Db); // retained through prepare, stepping and finalization
+    TSqlPolicy policy(Db, ReadAuthorization); // retained through prepare, stepping and finalization
     sqlite3_stmt* raw = nullptr;
     const char* tail = nullptr;
     int rc = sqlite3_prepare_v2(Db, q.data(), int(q.size()), &raw, &tail);
@@ -59,22 +84,38 @@ void TSql::ExecuteRead(const std::string& q) {
 void TSql::Validate(TMessageHolder<TCommandRequest> message) const {
     auto query = message.Cast<TReadSql>();
     ValidatePayloadRange(message, query->Query, query->QuerySize);
+    if (memchr(query->Query, 0, query->QuerySize)) throw TMessageError("Invalid SQL query text");
 }
 
 TSql::TSql(const std::string& path, int serverId)
 {
     std::string dbPath = path == ":memory:" ? path : path + "." + std::to_string(serverId);
-    if (sqlite3_open(dbPath.c_str(), &Db) != SQLITE_OK) {
-        std::cerr << "Cannot open db: `" << dbPath << "', "
-            << "error: " << sqlite3_errmsg(Db)
-            << std::endl;
-        throw std::runtime_error("Cannot open db");
+    const int opened = sqlite3_open(dbPath.c_str(), &Db);
+    // Constructors that fail must also close the connection and release its locks.
+    std::unique_ptr<sqlite3, decltype(&sqlite3_close)> cleanup(Db, sqlite3_close);
+    if (opened != SQLITE_OK) throw std::runtime_error("Cannot open SQL database");
+    RequireExecute("CREATE TABLE IF NOT EXISTS raft_metadata_ (key TEXT PRIMARY KEY, value TEXT)");
+    sqlite3_stmt* raw = nullptr;
+    const int prepared = sqlite3_prepare_v2(Db,
+        "SELECT value FROM raft_metadata_ WHERE key='LastAppliedIndex'", -1, &raw, nullptr);
+    TStatement statement(raw, sqlite3_finalize);
+    if (prepared != SQLITE_OK || !statement) throw std::runtime_error("Cannot read SQL application progress");
+    int rc = sqlite3_step(statement.get());
+    if (rc == SQLITE_ROW) {
+        if (sqlite3_column_type(statement.get(), 0) != SQLITE_TEXT)
+            throw std::runtime_error("Invalid SQL application progress");
+        const auto* text = reinterpret_cast<const char*>(sqlite3_column_text(statement.get(), 0));
+        if (!text) throw std::runtime_error("Cannot read SQL application progress");
+        const auto length = sqlite3_column_bytes(statement.get(), 0);
+        uint64_t index = 0;
+        const auto parsed = std::from_chars(text, text + length, index);
+        if (parsed.ec != std::errc{} || parsed.ptr != text + length)
+            throw std::runtime_error("Invalid SQL application progress");
+        LastAppliedIndex = index;
+        rc = sqlite3_step(statement.get());
     }
-    Execute(R"__(CREATE TABLE IF NOT EXISTS raft_metadata_ (key TEXT PRIMARY KEY, value TEXT))__");
-    Execute(R"__(SELECT value FROM raft_metadata_ WHERE key = 'LastAppliedIndex')__");
-    if (!Result.Empty()) {
-        LastAppliedIndex = std::stoi(*Result.Rows[0].Values[0]);
-    }
+    if (rc != SQLITE_DONE) throw std::runtime_error("Invalid SQL application progress");
+    cleanup.release();
     std::cerr << "LastAppliedIndex: " << LastAppliedIndex << std::endl;
 }
 
@@ -106,19 +147,18 @@ int TSql::Process(void* self, int ncols, char** values, char** cols) {
     return 0;
 }
 
-bool TSql::Execute(const std::string& q) {
+int TSql::Execute(const std::string& q) {
     char* err = nullptr;
-    std::cerr << "Execute: " << q << std::endl;
     Result.Clear();
     LastError.clear();
-    if (sqlite3_exec(Db, q.c_str(), Process, this, &err) != SQLITE_OK) {
-        std::cerr << "Cannot apply changes, error: " << err << std::endl;
-        LastError = err;
-        sqlite3_free(err);
-        return false;
-    }
-    std::cerr << "OK" << std::endl;
-    return true;
+    const int rc = sqlite3_exec(Db, q.c_str(), nullptr, nullptr, &err);
+    if (rc != SQLITE_OK) LastError = err ? err : sqlite3_errmsg(Db);
+    sqlite3_free(err);
+    return rc;
+}
+
+void TSql::RequireExecute(const std::string& q) {
+    if (Execute(q) != SQLITE_OK) throw std::runtime_error("SQL state update failed: " + LastError);
 }
 
 TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
@@ -146,32 +186,41 @@ TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uin
 }
 
 TMessageHolder<TMessage> TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
-    // TODO: index + 1 == LastAppliedIndex
-
-    std::string err;
-    if (LastAppliedIndex < index) {
-        auto entry = message.Cast<TSqlLogEntry>();
-        ValidatePayloadRange(message, entry->Query, entry->QuerySize);
-        std::cerr << "Execute write of size: " << entry->QuerySize << std::endl;
-        std::string updateLastApplied;
-        updateLastApplied += "INSERT INTO raft_metadata_ (key, value) VALUES ('LastAppliedIndex','" + std::to_string(index) + "')\n";
-        updateLastApplied += "ON CONFLICT(key) DO UPDATE SET value = '" + std::to_string(index) + "';\n";
-        std::string q = "BEGIN TRANSACTION;\n";
-        q += std::string(entry->Query, entry->QuerySize);
-        if (q.back() != ';') {
-            q += ";\n";
-        }
-        q += updateLastApplied;
-        q += "COMMIT;";
-        if (Execute(q)) {
-            LastAppliedIndex = index;
-        } else {
-            err = LastError;
-            Execute("ROLLBACK;");
-            Execute(updateLastApplied); // need to update LastAppliedIndex in order not to execute failed query aqain
-        }
+    if (index <= LastAppliedIndex) return Reply({}, index);
+    auto entry = message.Cast<TSqlLogEntry>();
+    ValidatePayloadRange(message, entry->Query, entry->QuerySize);
+    const std::string query(entry->Query, entry->QuerySize);
+    if (query.find('\0') != std::string::npos) throw TMessageError("Invalid SQL write text");
+    if (!sqlite3_get_autocommit(Db)) throw std::runtime_error("SQL application transaction already active");
+    TTransactionCleanup transaction{Db};
+    RequireExecute("BEGIN IMMEDIATE");
+    int rc;
+    std::string error;
+    {
+        // Only the payload runs under this policy. It cannot end the transaction
+        // or access the progress table, including through views and triggers.
+        TSqlPolicy policy(Db, WriteAuthorization);
+        rc = Execute(query);
+        error = LastError;
     }
-    return Reply(err, index);
+    if (rc != SQLITE_OK) {
+        if (!sqlite3_get_autocommit(Db)) RequireExecute("ROLLBACK");
+        switch (rc & 0xff) {
+        case SQLITE_ERROR: case SQLITE_AUTH: case SQLITE_CONSTRAINT: case SQLITE_MISMATCH:
+            break; // SQL/application rejection: consume this entry without its effects.
+        default:
+            throw std::runtime_error("SQL application execution failed: " + error);
+        }
+        // Some errors (including OR ROLLBACK) already rolled back the transaction.
+        // Start a new one to record the rejected entry; never ignore failure here.
+        RequireExecute("BEGIN IMMEDIATE");
+    }
+    const auto progress = std::to_string(index);
+    RequireExecute("INSERT INTO raft_metadata_ (key, value) VALUES ('LastAppliedIndex','" + progress +
+        "') ON CONFLICT(key) DO UPDATE SET value='" + progress + "'");
+    RequireExecute("COMMIT");
+    LastAppliedIndex = index;
+    return Reply(error, index);
 }
 
 TMessageHolder<TMessage> TSql::Reply(const std::string& ans, uint64_t index)
@@ -187,6 +236,7 @@ TMessageHolder<TMessage> TSql::Reply(const std::string& ans, uint64_t index)
 TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command) {
     auto write = command.Cast<TWriteSql>();
     ValidatePayloadRange(command, write->Query, write->QuerySize);
+    if (memchr(write->Query, 0, write->QuerySize)) throw TMessageError("Invalid SQL write text");
     auto dataSize = command->Len - sizeof(TCommandRequest);
     auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
     memcpy(entry->Data, command->Data, dataSize);
