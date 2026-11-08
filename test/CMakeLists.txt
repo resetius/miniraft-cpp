@@ -13,5 +13,8 @@ endmacro()
 
 if (CMOCKA_FOUND)
 ut(test_raft test_raft.cpp miniraft)
+ut(test_correctness test_correctness.cpp miniraft)
+if(MINIRAFT_BUILD_NETWORK)
 ut(test_read_write test_read_write.cpp miniraft.net)
+endif()
 endif ()

@@ -80,7 +80,9 @@ TVolatileState& TVolatileState::CommitAdvance(int nservers, const IState& state,
         Indices.push_back(0);
     }
     std::sort(Indices.begin(), Indices.end());
-    auto commitIndex = std::max(CommitIndex, Indices[nservers / 2]);
+    // Ascending order: a strict majority must have replicated this index.
+    // For even cluster sizes, the upper median would accept only half.
+    auto commitIndex = std::max(CommitIndex, Indices[(nservers - 1) / 2]);
     if (state.LogTerm(commitIndex) == state.CurrentTerm) {
         CommitSeqno = std::max(CommitSeqno, seqno);
         CommitIndex = commitIndex;
@@ -647,8 +649,8 @@ void TRequestProcessor::ProcessCommitted() {
 
 void TRequestProcessor::ProcessWaiting() {
     auto lastApplied = Rsm->LastAppliedIndex;
-    while (!Waiting.empty() && Waiting.back().Index <= lastApplied) {
-        auto w = Waiting.back(); Waiting.pop();
+    while (!Waiting.empty() && Waiting.front().Index <= lastApplied) {
+        auto w = Waiting.front(); Waiting.pop();
         TMessageHolder<TCommandResponse> reply;
         auto cookie = w.Command->Cookie;;
         if (w.Command->Flags & TCommandRequest::EWrite) {
@@ -667,8 +669,8 @@ void TRequestProcessor::ProcessWaiting() {
     }
 
     auto seqno = Raft->CommitSeqno();
-    while (!StrongWaiting.empty() && StrongWaiting.back().Index <= lastApplied && StrongWaiting.back().Seqno <= seqno) {
-        auto w = StrongWaiting.back(); StrongWaiting.pop();
+    while (!StrongWaiting.empty() && StrongWaiting.front().Index <= lastApplied && StrongWaiting.front().Seqno <= seqno) {
+        auto w = StrongWaiting.front(); StrongWaiting.pop();
         TMessageHolder<TCommandResponse> reply;
         assert (!(w.Command->Flags & TCommandRequest::EWrite));
         auto cookie = w.Command->Cookie;

@@ -1,0 +1,34 @@
+name: Consensus correctness
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libcmocka-dev
+      - name: Configure core without networking dependencies
+        run: >-
+          cmake -S . -B build/core
+          -DMINIRAFT_BUILD_NETWORK=OFF
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+      - run: cmake --build build/core --parallel 2
+      - run: ctest --test-dir build/core --output-on-failure
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y libcmocka-dev liburing-dev libssl-dev libsqlite3-dev
+      - name: Configure full build with ASan and UBSan
+        run: >-
+          cmake -S . -B build/full -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - run: cmake --build build/full --parallel 2
+      - run: ctest --test-dir build/full --output-on-failure
