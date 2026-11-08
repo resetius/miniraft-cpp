@@ -22,6 +22,8 @@ struct INode {
 // CommandRequest -> Read? -> CurrentIndex (fixate) >= CommittedIndex -> CommandResponse
 struct IRsm {
     virtual ~IRsm() = default;
+    // Check application wire shape before queueing/forwarding; must not mutate state.
+    virtual void Validate(TMessageHolder<TCommandRequest>) const {}
     virtual TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) = 0;
     virtual TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) = 0;
     virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) = 0;
@@ -30,6 +32,7 @@ struct IRsm {
 };
 
 struct TDummyRsm: public IRsm {
+    void Validate(TMessageHolder<TCommandRequest> message) const override;
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;

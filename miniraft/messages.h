@@ -227,8 +227,8 @@ void ValidateMessageTree(const TMessageHolder<TMessage>& message, const TMessage
 
 template<typename T>
 requires std::derived_from<T, TMessage>
-T* NewMessage(uint32_t type, uint32_t len) {
-    if (len < sizeof(T)) throw std::invalid_argument("Message allocation is smaller than its type");
+T* NewMessage(uint32_t type, size_t len) {
+    if (len < sizeof(T) || len > UINT32_MAX) throw std::invalid_argument("Invalid message allocation size");
     char* data = new char[len];
     T* mes =  new (data) T;
     mes->Type = type;
@@ -238,7 +238,7 @@ T* NewMessage(uint32_t type, uint32_t len) {
 
 template<typename T>
 requires std::derived_from<T, TMessage>
-TMessageHolder<T> NewHoldedMessage(uint32_t type, uint32_t len)
+TMessageHolder<T> NewHoldedMessage(uint32_t type, size_t len)
 {
     T* mes = NewMessage<T>(type, len);
     return TMessageHolder<T>(mes, std::shared_ptr<char[]>(reinterpret_cast<char*>(mes)));
@@ -250,7 +250,7 @@ TMessageHolder<T> NewHoldedMessage() {
 }
 
 template<typename T>
-TMessageHolder<T> NewHoldedMessage(uint32_t size) {
+TMessageHolder<T> NewHoldedMessage(size_t size) {
     return NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), size);
 }
 
