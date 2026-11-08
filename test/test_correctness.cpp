@@ -172,6 +172,52 @@ TMessageHolder<TLogEntry> LogValue(const std::string& value) {
     return entry;
 }
 
+void test_forwarded_write_and_strong_read_complete_through_real_raft(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    std::deque<TMessageHolder<TCommandRequest>> requests;
+    std::deque<TMessageHolder<TCommandResponse>> responses;
+    auto peer = std::make_shared<TEndpoint>([&](auto message) {
+        requests.push_back(message.template Cast<TCommandRequest>());
+    });
+    auto returnPath = std::make_shared<TEndpoint>([&](auto message) {
+        responses.push_back(message.template Cast<TCommandResponse>());
+    });
+    auto leaderRsm = std::make_shared<TEchoRsm>();
+    auto originRsm = std::make_shared<TEchoRsm>();
+    TRequestProcessor leader(cluster.Nodes[0], leaderRsm, {});
+    TRequestProcessor origin(cluster.Nodes[1], originRsm, TNodeDict{{1, peer}});
+    std::vector<uint32_t> cookies;
+    auto client = std::make_shared<TEndpoint>([&](auto message) {
+        auto response = message.template Cast<TCommandResponse>();
+        assert_int_equal(response->ErrorCode, 0);
+        cookies.push_back(response->Cookie);
+    });
+    for (uint32_t cookie : {42, 77}) {
+        auto command = NewHoldedMessage<TCommandRequest>(sizeof(TCommandRequest) + 5);
+        command->Cookie = cookie;
+        command->Flags = cookie == 42 ? TCommandRequest::EWrite : TCommandRequest::EConsistent;
+        memcpy(command->Data, "value", 5);
+        origin.OnCommandRequest(command, client);
+        assert_int_equal(requests.size(), 1);
+        leader.OnCommandRequest(requests.front(), returnPath);
+        requests.pop_front();
+        cluster.Replicate(1, true, true);
+        leader.ProcessCommitted();
+        leader.ProcessWaiting();
+        assert_int_equal(responses.size(), 1);
+        origin.OnCommandResponse(responses.front(), peer);
+        origin.OnCommandResponse(responses.front(), peer);
+        responses.pop_front();
+        assert_int_equal(cookies.back(), cookie);
+    }
+    assert_int_equal(cookies.size(), 2);
+    assert_int_equal(leaderRsm->Applied.size(), 1);
+    assert_string_equal(leaderRsm->Applied[0].c_str(), "value");
+    assert_true(originRsm->Applied.empty());
+}
+
 void test_replaced_write_never_receives_another_commands_reply(void**) {
     TCluster cluster(3);
     cluster.Elect(1);
@@ -682,6 +728,7 @@ int main() {
         cmocka_unit_test(test_follower_application_does_not_retain_unused_replies),
         cmocka_unit_test(test_write_replaced_by_noop_is_rejected_without_application_reply),
         cmocka_unit_test(test_stale_read_does_not_wait_for_uncommitted_tail),
+        cmocka_unit_test(test_forwarded_write_and_strong_read_complete_through_real_raft),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
