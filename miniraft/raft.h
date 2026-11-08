@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <queue>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,10 +41,13 @@ private:
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TVolatileState {
+    struct TAppendRpc { uint64_t Seqno, LastIndex; };
+    static constexpr size_t MaxPendingAppendRpcs = 256;
     uint64_t CommitIndex = 0;
     // Successful current-term RPC acknowledgements, separately from log indices.
     std::unordered_map<uint32_t, uint64_t> ReadAckSeqno;
     std::unordered_map<uint32_t, uint64_t> LastSentSeqno;
+    std::unordered_map<uint32_t, std::deque<TAppendRpc>> PendingAppendRpcs;
     uint32_t LeaderId = 0;
     std::unordered_map<uint32_t, uint64_t> NextIndex;
     std::unordered_map<uint32_t, uint64_t> MatchIndex;
@@ -58,7 +62,7 @@ struct TVolatileState {
 
     TVolatileState& Vote(uint32_t id);
     TVolatileState& CommitAdvance(int nservers, const IState& state);
-    TVolatileState& SetCommitIndex(int index);
+    TVolatileState& SetCommitIndex(uint64_t index);
     TVolatileState& SetElectionDue(ITimeSource::Time);
     TVolatileState& SetNextIndex(uint32_t id, uint64_t nextIndex);
     TVolatileState& SetMatchIndex(uint32_t id, uint64_t matchIndex);
@@ -146,6 +150,7 @@ private:
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
     ITimeSource::Time MakeElection(ITimeSource::Time now);
     uint64_t NextSeqno();
+    bool ValidateRpc(TMessageHolder<TMessage> message) const;
 
     uint32_t Id;
     TNodeDict Nodes;

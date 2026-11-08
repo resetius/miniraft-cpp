@@ -272,14 +272,14 @@ void test_follower_append_entries_7a(void**) {
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3, TState{
-        /*.CurrentTerm =*/ 1,
+        /*.CurrentTerm =*/ 6,
         /*.VotedFor =*/ 2,
         /*.Log =*/ MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6})
     });
     auto mes = NewHoldedMessage(TMessageEx {
         .Src = 2,
         .Dst = 1,
-        .Term = 1,
+        .Term = 6,
     }, TAppendEntriesRequest {
         .PrevLogIndex = 9,
         .PrevLogTerm = 6,
@@ -305,14 +305,14 @@ void test_follower_append_entries_7b(void**) {
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3, TState{
-        /*.CurrentTerm =*/ 1,
+        /*.CurrentTerm =*/ 6,
         /*.VotedFor =*/ 2,
         /*.Log =*/ MakeLog<TLogEntry>({1,1,1,4})
     });
     auto mes = NewHoldedMessage(TMessageEx {
         .Src = 2,
         .Dst = 1,
-        .Term = 1,
+        .Term = 6,
     }, TAppendEntriesRequest {
         .PrevLogIndex = 4,
         .PrevLogTerm = 4,
@@ -338,14 +338,14 @@ void test_follower_append_entries_7c(void**) {
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3, TState{
-        /*.CurrentTerm =*/ 1,
+        /*.CurrentTerm =*/ 6,
         /*.VotedFor =*/ 2,
         /*.Log =*/ MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6,6,6})
     });
     auto mes = NewHoldedMessage(TMessageEx {
         .Src = 2,
         .Dst = 1,
-        .Term = 1,
+        .Term = 6,
     }, TAppendEntriesRequest {
         .PrevLogIndex = 9,
         .PrevLogTerm = 6,
@@ -371,7 +371,7 @@ void test_follower_append_entries_7f(void**) {
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3, TState{
-        /*.CurrentTerm =*/ 1,
+        /*.CurrentTerm =*/ 3,
         /*.VotedFor =*/ 2,
         /*.Log =*/ MakeLog<TLogEntry>({1,1,1,2,2,2,3,3,3,3,3})
     });
@@ -465,8 +465,8 @@ void test_candidate_vote_request_small_term(void**) {
         .Dst = 1,
         .Term = 0,
     }, TRequestVoteRequest {
-        .LastLogIndex = 1,
-        .LastLogTerm = 1,
+        .LastLogIndex = 0,
+        .LastLogTerm = 0,
         .CandidateId = 2,
     });
     raft->Process(ts->Now(), std::move(req));
@@ -557,7 +557,7 @@ void test_candidate_vote_after_start(void**) {
 
     // request with higher term => follower
     req = NewHoldedMessage(TMessageEx {
-        .Src = 2,
+        .Src = 3,
         .Dst = 1,
         .Term = 3,
     }, TRequestVoteRequest {

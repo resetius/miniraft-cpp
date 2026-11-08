@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
+#include <iterator>
 
 #include <string.h>
 #include <assert.h>
@@ -129,7 +130,7 @@ TVolatileState& TVolatileState::SetLeaderId(uint32_t id) {
     return *this;
 }
 
-TVolatileState& TVolatileState::SetCommitIndex(int index)
+TVolatileState& TVolatileState::SetCommitIndex(uint64_t index)
 {
     CommitIndex = index;
     return *this;
@@ -145,7 +146,10 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
     , VolatileState(std::make_unique<TVolatileState>())
     , StateName(EState::FOLLOWER)
 {
-    for (auto [id, _] : Nodes) {
+    if (node <= 0 || !State) throw std::invalid_argument("Raft requires a positive ID and state");
+    for (const auto& [id, peer] : Nodes) {
+        if (id == 0 || id == Id || !peer)
+            throw std::invalid_argument("Invalid Raft peer configuration");
         VolatileState->NextIndex[id] = 1;
     }
 }
@@ -230,7 +234,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
         }
 
         matchIndex = index;
-        commitIndex = std::max(commitIndex, message->LeaderCommit);
+        commitIndex = std::max(commitIndex, std::min(message->LeaderCommit, matchIndex));
     }
 
     auto reply = NewHoldedMessage(
@@ -253,6 +257,17 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
 
     auto nodeId = message->Src;
     if (!Nodes.contains(nodeId)) return;
+    auto pending = VolatileState->PendingAppendRpcs.find(nodeId);
+    if (pending == VolatileState->PendingAppendRpcs.end()) return;
+    auto& requests = pending->second;
+    auto request = std::find_if(requests.begin(), requests.end(), [&](const auto& rpc) {
+        return rpc.Seqno == message->Seqno;
+    });
+    if (request == requests.end() ||
+        (message->Success && message->MatchIndex != request->LastIndex)) return;
+    // A newer response supersedes older RPCs. Reordered/duplicate failures
+    // must not undo progress or repeatedly increase backoff.
+    requests.erase(requests.begin(), std::next(request));
     if (message->Success) {
         if (message->Seqno > 0 && message->Seqno <= VolatileState->LastSentSeqno[nodeId]) {
             auto& acknowledged = VolatileState->ReadAckSeqno[nodeId];
@@ -261,7 +276,7 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
         auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], message->MatchIndex);
         (*VolatileState)
             .SetMatchIndex(nodeId, matchIndex)
-            .SetNextIndex(nodeId, message->MatchIndex+1)
+            .SetNextIndex(nodeId, matchIndex+1)
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
@@ -272,7 +287,7 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             ? VolatileState->NextIndex[nodeId] - backOff
             : 0;
         (*VolatileState)
-            .SetNextIndex(nodeId, std::max((uint64_t)1, nextIndex))
+            .SetNextIndex(nodeId, std::max(VolatileState->MatchIndex[nodeId] + 1, nextIndex))
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1)
             .SetBackOff(nodeId, std::min(32768, backOff << 1));
@@ -325,6 +340,9 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
         for (uint32_t i = 0; i < entries.size(); ++i) mes.Payload[i] = entries[i];
     }
     VolatileState->LastSentSeqno[nodeId] = mes->Seqno;
+    auto& pending = VolatileState->PendingAppendRpcs[nodeId];
+    pending.push_back({mes->Seqno, lastIndex});
+    if (pending.size() > TVolatileState::MaxPendingAppendRpcs) pending.pop_front();
     return mes;
 }
 
@@ -363,6 +381,7 @@ void TRaft::Become(EState newStateName) {
 }
 
 void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo) {
+    if (!ValidateRpc(message)) return;
     if (message.IsEx()) {
         auto messageEx = message.Cast<TMessageEx>();
         if (messageEx->Term > State->CurrentTerm) {
@@ -389,6 +408,46 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
         break;
     default:
         throw std::logic_error("Unknown state");
+    }
+}
+
+bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
+    if (!message || !message.IsEx()) return false;
+    try { ValidateMessageTree(message); } catch (const TMessageError&) { return false; }
+    auto header = message.Cast<TMessageEx>();
+    if (header->Dst != Id || !Nodes.contains(header->Src)) return false;
+    constexpr uint64_t maxIndex = INT64_MAX;
+    switch (EMessageType(message->Type)) {
+    case EMessageType::REQUEST_VOTE_REQUEST: {
+        auto vote = message.Cast<TRequestVoteRequest>();
+        return vote->CandidateId == header->Src && vote->LastLogIndex <= maxIndex &&
+            vote->LastLogTerm <= header->Term &&
+            ((vote->LastLogIndex == 0) == (vote->LastLogTerm == 0));
+    }
+    case EMessageType::REQUEST_VOTE_RESPONSE:
+        return message.Cast<TRequestVoteResponse>()->VoteGranted <= 1;
+    case EMessageType::APPEND_ENTRIES_RESPONSE: {
+        auto reply = message.Cast<TAppendEntriesResponse>();
+        return reply->Success <= 1 && reply->MatchIndex <= maxIndex &&
+            (reply->Success ? reply->MatchIndex <= State->LastLogIndex : reply->MatchIndex == 0);
+    }
+    case EMessageType::APPEND_ENTRIES_REQUEST: {
+        auto append = message.Cast<TAppendEntriesRequest>();
+        if (append->LeaderId != header->Src || append->PrevLogIndex > maxIndex ||
+            append->LeaderCommit > maxIndex || append->Nentries > maxIndex - append->PrevLogIndex ||
+            append->PrevLogTerm > header->Term ||
+            ((append->PrevLogIndex == 0) != (append->PrevLogTerm == 0))) return false;
+        auto previousTerm = append->PrevLogTerm;
+        for (uint32_t i = 0; i < message.PayloadSize; ++i) {
+            auto entry = message.Payload[i].Cast<TLogEntry>();
+            if (!entry->Term || entry->Term < previousTerm || entry->Term > header->Term) return false;
+            previousTerm = entry->Term;
+            const auto index = append->PrevLogIndex + i + 1;
+            if (index <= VolatileState->CommitIndex && State->LogTerm(index) != entry->Term) return false;
+        }
+        return true;
+    }
+    default: return false;
     }
 }
 
@@ -456,6 +515,7 @@ uint64_t TRaft::NextSeqno() {
 void TRaft::ProcessTimeout(ITimeSource::Time now) {
     if (StateName == EState::CANDIDATE || StateName == EState::FOLLOWER) {
         if (VolatileState->ElectionDue <= now) {
+            if (State->CurrentTerm == UINT64_MAX) throw std::overflow_error("Raft term exhausted");
             auto nextVolatileState = std::make_unique<TVolatileState>();
             for (auto [id, _] : Nodes) {
                 nextVolatileState->NextIndex[id] = 1;
@@ -521,6 +581,7 @@ ITimeSource::Time TRaft::MakeElection(ITimeSource::Time now) {
 }
 
 uint64_t TRaft::Append(TMessageHolder<TLogEntry> entry) {
+    if (State->LastLogIndex >= uint64_t(INT64_MAX)) throw std::overflow_error("Raft log index exhausted");
     if (!entry || entry->Type != uint32_t(EMessageType::LOG_ENTRY))
         throw TMessageError("Invalid proposed log entry");
     ValidateMessageHeader(entry->Type, entry->Len);
