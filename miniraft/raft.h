@@ -179,7 +179,7 @@ private:
     void Forward(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void OnReadRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void OnWriteRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
-    void RejectObsoleteStrongReads();
+    void PruneRequests(const std::shared_ptr<INode>& disconnected = {});
 
     std::shared_ptr<TRaft> Raft;
     std::shared_ptr<IRsm> Rsm;
@@ -190,6 +190,7 @@ private:
         uint64_t Seqno = 0;
         TMessageHolder<TCommandRequest> Command;
         std::shared_ptr<INode> ReplyTo;
+        // Zero is reserved for requests not owned by a leadership term.
         uint64_t Term = 0;
     };
     std::queue<TWaiting> Waiting;
@@ -197,10 +198,15 @@ private:
     std::queue<TWaiting> WaitingStateChange;
 
     struct TAnswer {
-        uint64_t Index;
+        uint64_t Term;
         TMessageHolder<TMessage> Reply;
     };
-    std::queue<TAnswer> WriteAnswers;
+    // Retain application replies only for live local writes, matched by index
+    // and term. An overwritten index must never redeem an older request.
+    std::unordered_map<uint64_t, uint64_t> PendingWriteTerms;
+    std::unordered_map<uint64_t, TAnswer> WriteAnswers;
+    uint64_t RequestsTerm = 0;
+    bool RequestsLeader = false;
     uint32_t ForwardCookie = 1;
     std::unordered_map<uint32_t, std::shared_ptr<INode>> Cookie2Client;
     std::unordered_map<std::shared_ptr<INode>, std::unordered_set<uint32_t>> Client2Cookie;

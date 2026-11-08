@@ -24,8 +24,13 @@ TVoidSuspendedTask ClientReader(TPoller& poller, TSocket& socket) {
             auto commandResponse = response.template Cast<TCommandResponse>();
             auto len = commandResponse->Len - sizeof(TCommandResponse);
             std::string_view data(commandResponse->Data, len);
-            std::cout << "Ok, commitIndex: " << commandResponse->Index << " "
-                      << data << " " << dt.count() << "\n";
+            if (commandResponse->ErrorCode) {
+                std::cout << "Request failed (error " << commandResponse->ErrorCode
+                          << "). A write may still have committed.\n";
+            } else {
+                std::cout << "Ok, commitIndex: " << commandResponse->Index << " "
+                          << data << " " << dt.count() << "\n";
+            }
             inflight --;
         }
     } catch (const std::exception& ex) {

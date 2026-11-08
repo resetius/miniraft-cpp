@@ -139,9 +139,12 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
             auto res = reply.template Cast<TCommandResponse>();
             auto len = res->Len - sizeof(TCommandResponse);
             std::string_view data(res->Data, len);
-            std::cout << "Ok, commitIndex: " << res->Index << "\n";
-            if (!data.empty()) {
-                std::cout << data << "\n";
+            if (res->ErrorCode) {
+                std::cout << "Request failed (error " << res->ErrorCode
+                          << "). A write may still have committed.\n";
+            } else {
+                std::cout << "Ok, commitIndex: " << res->Index << "\n";
+                if (!data.empty()) std::cout << data << "\n";
             }
             std::cout << "> " << std::flush;
         }

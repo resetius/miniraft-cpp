@@ -115,6 +115,271 @@ struct TReadClient {
     void Poll() { Processor.ProcessCommitted(); Processor.ProcessWaiting(); }
 };
 
+struct TEchoRsm : IRsm {
+    std::vector<std::string> Applied;
+    std::weak_ptr<char[]> LastReply;
+    TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest>, uint64_t index) override {
+        return NewHoldedMessage(TCommandResponse{.Index = index});
+    }
+    TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> command) override {
+        const auto size = command->Len - sizeof(TCommandRequest);
+        auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + size);
+        memcpy(entry->Data, command->Data, size);
+        return entry;
+    }
+    TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> entry, uint64_t index) override {
+        const auto size = entry->Len - sizeof(TLogEntry);
+        Applied.emplace_back(entry->Data, size);
+        LastAppliedIndex = index;
+        auto reply = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + size);
+        reply->Index = index;
+        memcpy(reply->Data, entry->Data, size);
+        LastReply = reply.RawData;
+        return reply;
+    }
+};
+struct TWriteClient {
+    struct TReply { uint32_t Cookie, Error; std::string Data; };
+    std::vector<TReply> Replies;
+    std::shared_ptr<TEchoRsm> Rsm = std::make_shared<TEchoRsm>();
+    TRequestProcessor Processor;
+    std::shared_ptr<TEndpoint> Endpoint;
+    explicit TWriteClient(std::shared_ptr<TRaft> raft)
+        : Processor(raft, Rsm, {})
+        , Endpoint(std::make_shared<TEndpoint>([this](auto message) {
+            auto response = message.template Cast<TCommandResponse>();
+            Replies.push_back({response->Cookie, response->ErrorCode,
+                std::string(response->Data, response->Len - sizeof(TCommandResponse))});
+        })) {}
+    void Write(uint32_t cookie, const std::string& value) {
+        auto command = NewHoldedMessage<TCommandRequest>(sizeof(TCommandRequest) + value.size());
+        command->Cookie = cookie;
+        command->Flags = TCommandRequest::EWrite;
+        memcpy(command->Data, value.data(), value.size());
+        Processor.OnCommandRequest(command, Endpoint);
+    }
+    void Read(uint32_t cookie, uint32_t flags = 0) {
+        auto command = NewHoldedMessage<TCommandRequest>();
+        command->Cookie = cookie;
+        command->Flags = flags;
+        Processor.OnCommandRequest(command, Endpoint);
+    }
+    void Poll() { Processor.ProcessCommitted(); Processor.ProcessWaiting(); }
+};
+TMessageHolder<TLogEntry> LogValue(const std::string& value) {
+    auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + value.size());
+    memcpy(entry->Data, value.data(), value.size());
+    return entry;
+}
+
+void test_replaced_write_never_receives_another_commands_reply(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    cluster.Nodes[0]->Append(LogValue("uncommitted-padding"));
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(11, "lost-command"); // index 3, old term
+    cluster.Isolated = {1};
+    cluster.Elect(2); // new-term no-op at index 2
+    cluster.Nodes[1]->Append(LogValue("replacement-command")); // index 3, new term
+    cluster.Replicate(2);
+    cluster.Isolated.clear();
+    cluster.Replicate(2);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Cookie, 11);
+    assert_int_equal(client.Replies[0].Error, 1);
+    assert_true(client.Replies[0].Data.empty());
+    assert_int_equal(client.Rsm->Applied.size(), 1);
+    assert_string_equal(client.Rsm->Applied[0].c_str(), "replacement-command");
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+}
+
+void test_stepdown_rejects_write_without_waiting_for_application(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(11, "pending");
+    cluster.Elect(2);
+    client.Processor.CheckStateChange();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 1);
+}
+
+void test_committed_but_unanswered_write_has_unknown_outcome_on_stepdown(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(11, "committed");
+    cluster.Replicate(1);
+    client.Processor.ProcessCommitted(); // application reply cached, not sent
+    assert_false(client.Rsm->LastReply.expired());
+    cluster.Elect(2);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 1);
+    assert_int_equal(client.Rsm->Applied.size(), 1);
+    assert_string_equal(client.Rsm->Applied[0].c_str(), "committed");
+    assert_true(client.Rsm->LastReply.expired());
+    client.Poll();
+    assert_int_equal(client.Rsm->Applied.size(), 1);
+    assert_int_equal(client.Replies.size(), 1);
+}
+
+void test_old_write_is_rejected_after_unobserved_reelection(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(11, "lost");
+    cluster.Elect(2);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    client.Write(22, "new");
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Cookie, 11);
+    assert_int_equal(client.Replies[0].Error, 1);
+    cluster.Replicate(1);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 2);
+    assert_int_equal(client.Replies[1].Cookie, 22);
+    assert_int_equal(client.Replies[1].Error, 0);
+    assert_string_equal(client.Replies[1].Data.c_str(), "new");
+}
+
+void test_default_read_of_lost_tail_is_rejected_on_stepdown(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    cluster.Nodes[0]->Append(LogValue("lost-1"));
+    cluster.Nodes[0]->Append(LogValue("lost-2"));
+    TWriteClient client(cluster.Nodes[0]);
+    client.Read(11);
+    cluster.Elect(2);
+    client.Processor.CheckStateChange();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 1);
+}
+
+void test_request_waiting_for_leader_runs_when_local_node_is_elected(void**) {
+    for (uint32_t count : {1, 3}) {
+        TCluster cluster(count);
+        TWriteClient client(cluster.Nodes[0]);
+        client.Write(0, "waiting-for-election");
+        cluster.Elect(1);
+        client.Processor.CheckStateChange();
+        assert_int_equal(cluster.Nodes[0]->GetLastIndex(), 2);
+        cluster.Replicate(1);
+        client.Poll();
+        assert_int_equal(client.Replies.size(), 1);
+        assert_int_equal(client.Replies[0].Error, 0);
+        assert_string_equal(client.Replies[0].Data.c_str(), "waiting-for-election");
+    }
+}
+
+void test_write_replaced_by_noop_is_rejected_without_application_reply(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(11, "lost");
+    cluster.Elect(2);
+    cluster.Replicate(2);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Cookie, 11);
+    assert_int_equal(client.Replies[0].Error, 1);
+    assert_true(client.Rsm->Applied.empty());
+}
+
+void test_stale_read_does_not_wait_for_uncommitted_tail(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    cluster.Nodes[0]->Append(LogValue("uncommitted"));
+    TWriteClient client(cluster.Nodes[0]);
+    client.Read(11, TCommandRequest::EStale);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 0);
+    assert_true(client.Rsm->Applied.empty());
+}
+
+void test_disconnect_removes_local_write_and_read_waiters(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(11, "still-may-commit");
+    client.Read(22);
+    client.Read(33, TCommandRequest::EConsistent);
+    std::vector<uint32_t> otherReplies;
+    auto other = std::make_shared<TEndpoint>([&](auto message) {
+        auto reply = message.template Cast<TCommandResponse>();
+        assert_int_equal(reply->ErrorCode, 0);
+        otherReplies.push_back(reply->Cookie);
+    });
+    auto command = NewHoldedMessage<TCommandRequest>(sizeof(TCommandRequest) + 5);
+    command->Cookie = 44;
+    command->Flags = TCommandRequest::EWrite;
+    memcpy(command->Data, "other", 5);
+    client.Processor.OnCommandRequest(command, other);
+    std::weak_ptr<INode> endpoint = client.Endpoint;
+    client.Processor.CleanUp(client.Endpoint);
+    client.Endpoint.reset();
+    assert_true(endpoint.expired());
+    cluster.Replicate(1);
+    client.Poll();
+    assert_true(client.Replies.empty());
+    assert_int_equal(client.Rsm->Applied.size(), 2);
+    assert_int_equal(otherReplies.size(), 1);
+    assert_int_equal(otherReplies[0], 44);
+    assert_true(client.Rsm->LastReply.expired());
+}
+
+void test_disconnect_removes_requests_waiting_for_leader(void**) {
+    TCluster cluster(3);
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(0, "disconnected-before-election");
+    std::weak_ptr<INode> endpoint = client.Endpoint;
+    client.Processor.CleanUp(client.Endpoint);
+    client.Endpoint.reset();
+    assert_true(endpoint.expired());
+    cluster.Elect(1);
+    client.Processor.CheckStateChange();
+    assert_int_equal(cluster.Nodes[0]->GetLastIndex(), 1);
+}
+
+void test_disconnect_releases_cached_write_reply(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TWriteClient client(cluster.Nodes[0]);
+    client.Write(11, "committed");
+    cluster.Replicate(1);
+    client.Processor.ProcessCommitted();
+    assert_false(client.Rsm->LastReply.expired());
+    client.Processor.CleanUp(client.Endpoint);
+    assert_true(client.Rsm->LastReply.expired());
+    client.Poll();
+    assert_true(client.Replies.empty());
+}
+
+void test_follower_application_does_not_retain_unused_replies(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TWriteClient follower(cluster.Nodes[1]);
+    cluster.Nodes[0]->Append(LogValue("background-command"));
+    cluster.Replicate(1);
+    follower.Processor.ProcessCommitted();
+    assert_int_equal(follower.Rsm->Applied.size(), 1);
+    assert_true(follower.Rsm->LastReply.expired());
+}
+
 void test_strong_reads_require_fresh_majority_in_all_cluster_sizes(void**) {
     for (uint32_t count = 1; count <= 8; ++count) {
         TCluster cluster(count);
@@ -405,6 +670,18 @@ int main() {
         cmocka_unit_test(test_delayed_pre_read_replies_cannot_confirm_new_read),
         cmocka_unit_test(test_new_leader_waits_for_current_term_commit_and_application),
         cmocka_unit_test(test_old_term_read_is_rejected_after_reelection),
+        cmocka_unit_test(test_replaced_write_never_receives_another_commands_reply),
+        cmocka_unit_test(test_stepdown_rejects_write_without_waiting_for_application),
+        cmocka_unit_test(test_committed_but_unanswered_write_has_unknown_outcome_on_stepdown),
+        cmocka_unit_test(test_old_write_is_rejected_after_unobserved_reelection),
+        cmocka_unit_test(test_default_read_of_lost_tail_is_rejected_on_stepdown),
+        cmocka_unit_test(test_request_waiting_for_leader_runs_when_local_node_is_elected),
+        cmocka_unit_test(test_disconnect_removes_local_write_and_read_waiters),
+        cmocka_unit_test(test_disconnect_removes_requests_waiting_for_leader),
+        cmocka_unit_test(test_disconnect_releases_cached_write_reply),
+        cmocka_unit_test(test_follower_application_does_not_retain_unused_replies),
+        cmocka_unit_test(test_write_replaced_by_noop_is_rejected_without_application_reply),
+        cmocka_unit_test(test_stale_read_does_not_wait_for_uncommitted_tail),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
