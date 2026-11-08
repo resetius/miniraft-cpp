@@ -68,7 +68,7 @@ TVolatileState& TVolatileState::Vote(uint32_t nodeId)
     return *this;
 }
 
-TVolatileState& TVolatileState::CommitAdvance(int nservers, const IState& state,  uint64_t seqno)
+TVolatileState& TVolatileState::CommitAdvance(int nservers, const IState& state)
 {
     auto lastIndex = state.LastLogIndex;
     Indices.clear(); Indices.reserve(nservers);
@@ -84,7 +84,6 @@ TVolatileState& TVolatileState::CommitAdvance(int nservers, const IState& state,
     // For even cluster sizes, the upper median would accept only half.
     auto commitIndex = std::max(CommitIndex, Indices[(nservers - 1) / 2]);
     if (state.LogTerm(commitIndex) == state.CurrentTerm) {
-        CommitSeqno = std::max(CommitSeqno, seqno);
         CommitIndex = commitIndex;
     }
     return *this;
@@ -253,7 +252,12 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     }
 
     auto nodeId = message->Src;
+    if (!Nodes.contains(nodeId)) return;
     if (message->Success) {
+        if (message->Seqno > 0 && message->Seqno <= VolatileState->LastSentSeqno[nodeId]) {
+            auto& acknowledged = VolatileState->ReadAckSeqno[nodeId];
+            acknowledged = std::max(acknowledged, message->Seqno);
+        }
         auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], message->MatchIndex);
         (*VolatileState)
             .SetMatchIndex(nodeId, matchIndex)
@@ -261,7 +265,7 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
-            .CommitAdvance(Nservers, *State, message->Seqno);
+            .CommitAdvance(Nservers, *State);
     } else {
         auto backOff = std::max(VolatileState->BackOff[nodeId], 1);
         auto nextIndex = VolatileState->NextIndex[nodeId] > backOff
@@ -295,7 +299,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     }
 
     auto mes = NewHoldedMessage(
-        TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm, .Seqno = Seqno++},
+        TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm, .Seqno = NextSeqno()},
         TAppendEntriesRequest {
             .PrevLogIndex = prevIndex,
             .PrevLogTerm = State->LogTerm(prevIndex),
@@ -311,6 +315,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
             mes.Payload[j++] = State->Get(i);
         }
     }
+    VolatileState->LastSentSeqno[nodeId] = mes->Seqno;
     return mes;
 }
 
@@ -410,7 +415,10 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
 }
 
 uint64_t TRaft::ApproveRead() {
-    int seqno = Seqno;
+    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can approve a read");
+    // Reserve a unique barrier even for a single-node cluster. Every request
+    // emitted below is newer than this barrier; old replies cannot satisfy it.
+    const uint64_t seqno = NextSeqno();
     for (auto& [id, node] : Nodes) {
         node->Send(CreateAppendEntries(id));
     }
@@ -418,7 +426,21 @@ uint64_t TRaft::ApproveRead() {
 }
 
 uint64_t TRaft::CommitSeqno() const {
-    return VolatileState->CommitSeqno;
+    if (StateName != EState::LEADER || VolatileState->CommitIndex == 0 ||
+        State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm) return 0;
+    std::vector<uint64_t> acknowledgements{Seqno - 1}; // leader's own confirmation
+    acknowledgements.reserve(Nservers);
+    for (const auto& [id, _] : Nodes) {
+        auto it = VolatileState->ReadAckSeqno.find(id);
+        acknowledgements.push_back(it == VolatileState->ReadAckSeqno.end() ? 0 : it->second);
+    }
+    std::sort(acknowledgements.begin(), acknowledgements.end());
+    return acknowledgements[(Nservers - 1) / 2];
+}
+
+uint64_t TRaft::NextSeqno() {
+    if (Seqno == UINT64_MAX) throw std::overflow_error("Raft RPC sequence exhausted");
+    return Seqno++;
 }
 
 void TRaft::ProcessTimeout(ITimeSource::Time now) {
@@ -561,7 +583,8 @@ void TRequestProcessor::OnReadRequest(TMessageHolder<TCommandRequest> command, c
     assert(!(flags & TCommandRequest::EWrite));
 
     // stale read, default read (from leader)
-    if ((flags & TCommandRequest::EStale) || (!(flags & TCommandRequest::EConsistent) && stateName == EState::LEADER)) {
+    if (!(flags & TCommandRequest::EConsistent) &&
+        ((flags & TCommandRequest::EStale) || stateName == EState::LEADER)) {
         assert(Waiting.empty() || Waiting.back().Index <= Raft->GetLastIndex());
         Waiting.emplace(TWaiting{Raft->GetLastIndex(), 0, std::move(command), replyTo});
         return;
@@ -572,9 +595,23 @@ void TRequestProcessor::OnReadRequest(TMessageHolder<TCommandRequest> command, c
     }
 
     // Consistent read
+    RejectObsoleteStrongReads();
+    const auto term = Raft->GetState()->CurrentTerm;
+    const auto index = Raft->GetLastIndex();
     auto seqno = Raft->ApproveRead();
-    assert(StrongWaiting.empty() || (StrongWaiting.back().Index <= Raft->GetLastIndex() && StrongWaiting.back().Seqno <= seqno));
-    StrongWaiting.emplace(TWaiting{Raft->GetLastIndex(), seqno, std::move(command), replyTo});
+    assert(StrongWaiting.empty() || (StrongWaiting.back().Index <= index && StrongWaiting.back().Seqno <= seqno));
+    StrongWaiting.emplace(TWaiting{index, seqno, std::move(command), replyTo, term});
+}
+
+void TRequestProcessor::RejectObsoleteStrongReads() {
+    while (!StrongWaiting.empty() &&
+        (Raft->CurrentStateName() != EState::LEADER ||
+         StrongWaiting.front().Term != Raft->GetState()->CurrentTerm)) {
+        auto waiting = std::move(StrongWaiting.front());
+        StrongWaiting.pop();
+        if (waiting.ReplyTo) waiting.ReplyTo->Send(NewHoldedMessage(
+            TCommandResponse{.Cookie = waiting.Command->Cookie, .ErrorCode = 1}));
+    }
 }
 
 void TRequestProcessor::OnWriteRequest(TMessageHolder<TCommandRequest> command, const std::shared_ptr<INode>& replyTo) {
@@ -668,8 +705,10 @@ void TRequestProcessor::ProcessWaiting() {
         w.ReplyTo->Send(std::move(reply));
     }
 
-    auto seqno = Raft->CommitSeqno();
-    while (!StrongWaiting.empty() && StrongWaiting.front().Index <= lastApplied && StrongWaiting.front().Seqno <= seqno) {
+    while (!StrongWaiting.empty()) {
+        RejectObsoleteStrongReads();
+        if (StrongWaiting.empty() || StrongWaiting.front().Index > lastApplied ||
+            StrongWaiting.front().Seqno > Raft->CommitSeqno()) break;
         auto w = StrongWaiting.front(); StrongWaiting.pop();
         TMessageHolder<TCommandResponse> reply;
         assert (!(w.Command->Flags & TCommandRequest::EWrite));

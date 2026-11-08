@@ -41,7 +41,9 @@ using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TVolatileState {
     uint64_t CommitIndex = 0;
-    uint64_t CommitSeqno = 0;
+    // Successful current-term RPC acknowledgements, separately from log indices.
+    std::unordered_map<uint32_t, uint64_t> ReadAckSeqno;
+    std::unordered_map<uint32_t, uint64_t> LastSentSeqno;
     uint32_t LeaderId = 0;
     std::unordered_map<uint32_t, uint64_t> NextIndex;
     std::unordered_map<uint32_t, uint64_t> MatchIndex;
@@ -55,7 +57,7 @@ struct TVolatileState {
     std::vector<uint64_t> Indices;
 
     TVolatileState& Vote(uint32_t id);
-    TVolatileState& CommitAdvance(int nservers, const IState& state, uint64_t seqno = 0);
+    TVolatileState& CommitAdvance(int nservers, const IState& state);
     TVolatileState& SetCommitIndex(int index);
     TVolatileState& SetElectionDue(ITimeSource::Time);
     TVolatileState& SetNextIndex(uint32_t id, uint64_t nextIndex);
@@ -91,6 +93,8 @@ public:
     uint32_t GetLeaderId() const;
     uint64_t GetLastIndex() const;
     uint64_t ApproveRead();
+    // Highest barrier confirmed by a fresh majority in this leadership term.
+    // Zero means no confirmation (including before a current-term commit).
     uint64_t CommitSeqno() const;
 
 // ut
@@ -141,6 +145,7 @@ private:
     TMessageHolder<TRequestVoteRequest> CreateVote(uint32_t nodeId);
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
     ITimeSource::Time MakeElection(ITimeSource::Time now);
+    uint64_t NextSeqno();
 
     uint32_t Id;
     TNodeDict Nodes;
@@ -149,7 +154,7 @@ private:
     int Nservers;
     std::shared_ptr<IState> State;
     std::unique_ptr<TVolatileState> VolatileState;
-    uint64_t Seqno = 0; // for matching responses
+    uint64_t Seqno = 1; // zero is reserved for an unconfirmed read
 
     EState StateName;
     uint32_t Seed = 31337;
@@ -174,6 +179,7 @@ private:
     void Forward(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void OnReadRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void OnWriteRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
+    void RejectObsoleteStrongReads();
 
     std::shared_ptr<TRaft> Raft;
     std::shared_ptr<IRsm> Rsm;
@@ -184,6 +190,7 @@ private:
         uint64_t Seqno = 0;
         TMessageHolder<TCommandRequest> Command;
         std::shared_ptr<INode> ReplyTo;
+        uint64_t Term = 0;
     };
     std::queue<TWaiting> Waiting;
     std::queue<TWaiting> StrongWaiting;

@@ -72,7 +72,205 @@ struct TCluster {
             }
         }
     }
+    TMessageHolder<TMessage> DeliverOne(uint32_t src, uint32_t dst) {
+        for (auto it = Packets.begin(); it != Packets.end(); ++it) {
+            auto ex = it->Cast<TMessageEx>();
+            if (ex->Src == src && ex->Dst == dst) {
+                auto message = *it;
+                Packets.erase(it);
+                Nodes.at(dst - 1)->Process(Now, message);
+                return message;
+            }
+        }
+        fail_msg("Expected a queued packet from %u to %u", src, dst);
+        return {};
+    }
+    void RoundTrip(uint32_t leader, uint32_t peer, bool duplicate = false) {
+        DeliverOne(leader, peer);
+        auto response = DeliverOne(peer, leader);
+        if (duplicate) Nodes.at(leader - 1)->Process(Now, response);
+    }
 };
+
+struct TReadClient {
+    struct TReply { uint32_t Cookie; uint32_t Error; };
+    std::vector<TReply> Replies;
+    std::shared_ptr<TDummyRsm> Rsm = std::make_shared<TDummyRsm>();
+    TRequestProcessor Processor;
+    std::shared_ptr<TEndpoint> Endpoint;
+    explicit TReadClient(std::shared_ptr<TRaft> raft)
+        : Processor(raft, Rsm, {})
+        , Endpoint(std::make_shared<TEndpoint>([this](auto message) {
+            auto response = message.template Cast<TCommandResponse>();
+            Replies.push_back({response->Cookie, response->ErrorCode});
+        })) {}
+    void Read(uint32_t cookie, uint32_t flags = TCommandRequest::EConsistent) {
+        auto command = NewHoldedMessage<TCommandRequest>(sizeof(TCommandRequest) + sizeof(int64_t));
+        int64_t index = 0;
+        memcpy(command->Data, &index, sizeof(index));
+        command->Cookie = cookie;
+        command->Flags = flags;
+        Processor.OnCommandRequest(command, Endpoint);
+    }
+    void Poll() { Processor.ProcessCommitted(); Processor.ProcessWaiting(); }
+};
+
+void test_strong_reads_require_fresh_majority_in_all_cluster_sizes(void**) {
+    for (uint32_t count = 1; count <= 8; ++count) {
+        TCluster cluster(count);
+        cluster.Elect(1);
+        cluster.Replicate(1);
+        TReadClient client(cluster.Nodes[0]);
+        client.Read(11);
+        client.Poll();
+        assert_int_equal(client.Replies.size(), count == 1 ? 1 : 0);
+        for (uint32_t peer = 2; peer <= count; ++peer) {
+            cluster.RoundTrip(1, peer, true);
+            client.Poll();
+            assert_int_equal(client.Replies.size(), peer >= count / 2 + 1 ? 1 : 0);
+        }
+        assert_int_equal(client.Replies[0].Cookie, 11);
+        assert_int_equal(client.Replies[0].Error, 0);
+    }
+}
+
+void test_stale_leader_with_one_follower_cannot_serve_strong_read(void**) {
+    TCluster cluster(5);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    // The majority elects a new leader and commits a later entry while the
+    // old leader remains connected to one old-term follower.
+    cluster.Isolated = {1, 2};
+    cluster.Elect(3);
+    auto latest = cluster.Nodes[2]->Append(NewHoldedMessage<TLogEntry>());
+    cluster.Replicate(3);
+    assert_true(cluster.Nodes[2]->GetVolatileState()->CommitIndex >= latest);
+    cluster.Isolated.clear();
+    TReadClient client(cluster.Nodes[0]);
+    client.Read(11);
+    cluster.RoundTrip(1, 2, true);
+    client.Poll();
+    assert_true(client.Replies.empty());
+    // A current-term leader's follower reveals the higher term. Pending reads
+    // must fail, rather than serving the old leader's state.
+    cluster.RoundTrip(1, 3);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 1);
+}
+
+void test_new_read_cannot_reuse_previous_read_quorum(void**) {
+    TCluster cluster(5);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TReadClient client(cluster.Nodes[0]);
+    client.Read(11);
+    cluster.RoundTrip(1, 2);
+    cluster.RoundTrip(1, 3);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    client.Read(22);
+    cluster.RoundTrip(1, 2, true);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    cluster.RoundTrip(1, 3);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 2);
+    assert_int_equal(client.Replies[1].Cookie, 22);
+}
+
+void test_ready_read_is_cancelled_on_leadership_change(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TReadClient client(cluster.Nodes[0]);
+    client.Read(11);
+    cluster.RoundTrip(1, 2);
+    cluster.Elect(2); // Lose leadership before the application processes reads.
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 1);
+}
+
+void test_consistent_flag_takes_precedence_over_stale(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TReadClient client(cluster.Nodes[0]);
+    client.Read(11, TCommandRequest::EConsistent | TCommandRequest::EStale);
+    client.Poll();
+    assert_true(client.Replies.empty());
+    cluster.RoundTrip(1, 2);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 0);
+}
+
+void test_delayed_pre_read_replies_cannot_confirm_new_read(void**) {
+    TCluster cluster(5);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    cluster.Nodes[0]->ProcessTimeout(cluster.Now += TTimeout::Election);
+    for (uint32_t peer = 2; peer <= 5; ++peer) cluster.DeliverOne(1, peer);
+    TReadClient client(cluster.Nodes[0]);
+    client.Read(11);
+    for (uint32_t peer = 2; peer <= 5; ++peer) cluster.DeliverOne(peer, 1);
+    client.Poll();
+    assert_true(client.Replies.empty());
+    cluster.RoundTrip(1, 2, true);
+    client.Poll();
+    assert_true(client.Replies.empty());
+    cluster.RoundTrip(1, 3);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+}
+
+void test_new_leader_waits_for_current_term_commit_and_application(void**) {
+    TCluster cluster(3);
+    for (auto& node : cluster.Nodes) {
+        node->GetState()->Append(NewHoldedMessage<TLogEntry>());
+        const_cast<TVolatileState*>(node->GetVolatileState())->CommitIndex = 1;
+    }
+    cluster.Elect(1);
+    // First RPCs probe the old prefix; the new-term no-op is not committed yet.
+    assert_int_equal(cluster.Nodes[0]->GetVolatileState()->CommitIndex, 1);
+    assert_int_equal(cluster.Nodes[0]->CommitSeqno(), 0);
+    TReadClient client(cluster.Nodes[0]);
+    client.Read(11);
+    client.Poll();
+    assert_true(client.Replies.empty());
+    cluster.RoundTrip(1, 2);
+    assert_int_equal(cluster.Nodes[0]->GetVolatileState()->CommitIndex, 2);
+    // Fresh confirmation alone is insufficient until the local state machine
+    // has applied the read's target prefix.
+    client.Processor.ProcessWaiting();
+    assert_true(client.Replies.empty());
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Error, 0);
+}
+
+void test_old_term_read_is_rejected_after_reelection(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    TReadClient client(cluster.Nodes[0]);
+    client.Read(11);
+    cluster.Elect(2);
+    cluster.Elect(1);
+    cluster.Replicate(1);
+    // No application poll observed the intermediate follower state. The term
+    // tag must still reject the old operation before accepting another read.
+    client.Read(22);
+    assert_int_equal(client.Replies.size(), 1);
+    assert_int_equal(client.Replies[0].Cookie, 11);
+    assert_int_equal(client.Replies[0].Error, 1);
+    cluster.RoundTrip(1, 2);
+    client.Poll();
+    assert_int_equal(client.Replies.size(), 2);
+    assert_int_equal(client.Replies[1].Cookie, 22);
+    assert_int_equal(client.Replies[1].Error, 0);
+}
 
 void test_majority_all_cluster_sizes(void**) {
     for (int count = 1; count <= 8; ++count) {
@@ -90,7 +288,8 @@ void test_majority_all_cluster_sizes(void**) {
 void CheckRequests(uint32_t flags, bool partial) {
     auto state = std::make_shared<TState>();
     auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
-    raft->Become(EState::LEADER);
+    if (flags & TCommandRequest::EConsistent) raft->ProcessTimeout(ITimeSource::Time{});
+    else raft->Become(EState::LEADER);
     auto rsm = std::make_shared<TDummyRsm>();
     TRequestProcessor processor(raft, rsm, {});
     std::vector<uint32_t> replies;
@@ -198,6 +397,14 @@ int main() {
         cmocka_unit_test(test_loss_reorder_duplicate_and_recovery),
         cmocka_unit_test(test_partition_leader_replacement_and_heal),
         cmocka_unit_test(test_even_cluster_partition_requires_majority),
+        cmocka_unit_test(test_strong_reads_require_fresh_majority_in_all_cluster_sizes),
+        cmocka_unit_test(test_stale_leader_with_one_follower_cannot_serve_strong_read),
+        cmocka_unit_test(test_new_read_cannot_reuse_previous_read_quorum),
+        cmocka_unit_test(test_ready_read_is_cancelled_on_leadership_change),
+        cmocka_unit_test(test_consistent_flag_takes_precedence_over_stale),
+        cmocka_unit_test(test_delayed_pre_read_replies_cannot_confirm_new_read),
+        cmocka_unit_test(test_new_leader_waits_for_current_term_commit_and_application),
+        cmocka_unit_test(test_old_term_read_is_rejected_after_reelection),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
