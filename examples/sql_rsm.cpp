@@ -3,6 +3,8 @@
 #include <iostream>
 #include <climits>
 #include <charconv>
+#include <algorithm>
+#include <string_view>
 
 namespace {
 int ReadAuthorization(void*, int action, const char*, const char* second, const char*, const char*) {
@@ -50,12 +52,34 @@ struct TTransactionCleanup {
         if (!sqlite3_get_autocommit(Db)) sqlite3_exec(Db, "ROLLBACK", nullptr, nullptr, nullptr);
     }
 };
+struct TReadBudget {
+    sqlite3* Db;
+    uint32_t Remaining;
+    const int Interval;
+    const int PreviousLength;
+    TReadBudget(sqlite3* db, uint32_t maxSteps)
+        : Db(db), Remaining(maxSteps), Interval(std::min<uint32_t>(maxSteps, 1000)),
+          PreviousLength(sqlite3_limit(db, SQLITE_LIMIT_LENGTH, TMessageLimits{}.MaxFrameBytes)) {
+        sqlite3_progress_handler(Db, Interval, Progress, this);
+    }
+    ~TReadBudget() {
+        sqlite3_progress_handler(Db, 0, nullptr, nullptr);
+        sqlite3_limit(Db, SQLITE_LIMIT_LENGTH, PreviousLength);
+    }
+    static int Progress(void* context) noexcept {
+        auto& budget = *static_cast<TReadBudget*>(context);
+        if (budget.Remaining <= uint32_t(budget.Interval)) return 1;
+        budget.Remaining -= budget.Interval;
+        return 0;
+    }
+};
 using TStatement = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
 }
 
-void TSql::ExecuteRead(const std::string& q) {
+std::string TSql::ExecuteRead(const std::string& q) {
     if (q.size() > INT_MAX || q.find('\0') != std::string::npos)
         throw TMessageError("Invalid SQL read text");
+    TReadBudget budget(Db, ReadLimits.MaxVmSteps);
     TSqlPolicy policy(Db, ReadAuthorization); // retained through prepare, stepping and finalization
     sqlite3_stmt* raw = nullptr;
     const char* tail = nullptr;
@@ -67,18 +91,41 @@ void TSql::ExecuteRead(const std::string& q) {
     rc = sqlite3_prepare_v2(Db, tail, int(q.data() + q.size() - tail), &raw, nullptr);
     TStatement extra(raw, sqlite3_finalize);
     if (rc != SQLITE_OK || extra) throw TMessageError("Multiple SQL read statements are not permitted");
-    Result.Clear();
-    LastError.clear();
+    std::string text;
+    const auto append = [&](std::string_view part) {
+        if (part.size() > ReadLimits.MaxResultBytes - text.size())
+            throw TMessageError("SQL read output budget exceeded");
+        text.append(part);
+    };
+    bool firstRow = true;
     while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
         const int count = sqlite3_column_count(statement.get());
-        std::vector<char*> values(count), columns(count);
-        for (int i = 0; i < count; ++i) {
-            values[i] = const_cast<char*>(reinterpret_cast<const char*>(sqlite3_column_text(statement.get(), i)));
-            columns[i] = const_cast<char*>(sqlite3_column_name(statement.get(), i));
+        if (firstRow) {
+            for (int i = 0; i < count; ++i) {
+                const char* name = sqlite3_column_name(statement.get(), i);
+                if (!name) throw TMessageError("Cannot read SQL column name");
+                append(name);
+                if (i + 1 < count) append(",");
+            }
+            append("\n");
+            firstRow = false;
         }
-        Process(this, count, values.data(), columns.data());
+        for (int i = 0; i < count; ++i) {
+            if (sqlite3_column_type(statement.get(), i) == SQLITE_NULL) {
+                append("null");
+            } else {
+                const auto* value = reinterpret_cast<const char*>(sqlite3_column_text(statement.get(), i));
+                if (!value) throw TMessageError("Cannot read SQL column value");
+                const auto length = sqlite3_column_bytes(statement.get(), i);
+                append(std::string_view(value, length));
+            }
+            if (i + 1 < count) append(",");
+        }
+        append("\n");
     }
-    if (rc != SQLITE_DONE) throw TMessageError("SQL read execution failed");
+    if (rc != SQLITE_DONE) throw TMessageError("SQL read failed or exceeded its execution budget");
+    if (firstRow) append("\n"); // Preserve the legacy empty-result format.
+    return text;
 }
 
 void TSql::Validate(TMessageHolder<TCommandRequest> message) const {
@@ -87,8 +134,12 @@ void TSql::Validate(TMessageHolder<TCommandRequest> message) const {
     if (memchr(query->Query, 0, query->QuerySize)) throw TMessageError("Invalid SQL query text");
 }
 
-TSql::TSql(const std::string& path, int serverId)
+TSql::TSql(const std::string& path, int serverId, TSqlReadLimits readLimits)
+    : ReadLimits(readLimits)
 {
+    if (!ReadLimits.MaxVmSteps ||
+        ReadLimits.MaxResultBytes > TMessageLimits{}.MaxFrameBytes - sizeof(TCommandResponse))
+        throw std::invalid_argument("Invalid SQL read limits");
     std::string dbPath = path == ":memory:" ? path : path + "." + std::to_string(serverId);
     const int opened = sqlite3_open(dbPath.c_str(), &Db);
     // Constructors that fail must also close the connection and release its locks.
@@ -128,28 +179,8 @@ TSql::~TSql()
     }
 }
 
-int TSql::Process(void* self, int ncols, char** values, char** cols) {
-    TSql* this_ = (TSql*)self;
-    if (this_->Result.Cols.empty()) {
-        for (int i = 0; i < ncols; i++) {
-            this_->Result.Cols.emplace_back(cols[i]);
-        }
-    }
-    TRow row;
-    for (int i = 0; i < ncols; i++) {
-        if (values[i]) {
-            row.Values.emplace_back(values[i]);
-        } else {
-            row.Values.emplace_back(std::nullopt);
-        }
-    }
-    this_->Result.Rows.emplace_back(std::move(row));
-    return 0;
-}
-
 int TSql::Execute(const std::string& q) {
     char* err = nullptr;
-    Result.Clear();
     LastError.clear();
     const int rc = sqlite3_exec(Db, q.c_str(), nullptr, nullptr, &err);
     if (rc != SQLITE_OK) LastError = err ? err : sqlite3_errmsg(Db);
@@ -164,25 +195,7 @@ void TSql::RequireExecute(const std::string& q) {
 TMessageHolder<TMessage> TSql::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
     auto readSql = message.Cast<TReadSql>();
     ValidatePayloadRange(message, readSql->Query, readSql->QuerySize);
-    ExecuteRead(std::string(readSql->Query, readSql->QuerySize));
-    std::string text;
-    for (int i = 0; i < Result.Cols.size(); i++) {
-        text += Result.Cols[i];
-        if (i != Result.Cols.size() - 1) {
-            text += ",";
-        }
-    }
-    text += "\n";
-    for (int j = 0; j < Result.Rows.size(); j++) {
-        for (int i = 0; i < Result.Cols.size(); i++) {
-            text += Result.Rows[j].Values[i] ? *Result.Rows[j].Values[i] : "null";
-            if (i != Result.Cols.size() - 1) {
-                text += ",";
-            }
-        }
-        text += "\n";
-    }
-    return Reply(text, index);
+    return Reply(ExecuteRead(std::string(readSql->Query, readSql->QuerySize)), index);
 }
 
 TMessageHolder<TMessage> TSql::Write(TMessageHolder<TLogEntry> message, uint64_t index) {

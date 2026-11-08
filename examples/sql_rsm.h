@@ -1,6 +1,5 @@
 #pragma once
 #include <sqlite3.h>
-#include <optional>
 #include <miniraft/raft.h>
 
 struct TSqlEntry {
@@ -20,28 +19,16 @@ struct TReadSql: public TCommandRequest, public TSqlEntry
 {
 };
 
-struct TRow {
-    std::vector<std::optional<std::string>> Values;
-};
-
-struct TResult {
-    std::vector<std::string> Cols;
-    std::vector<TRow> Rows;
-
-    void Clear() {
-        Cols.clear();
-        Rows.clear();
-    }
-
-    bool Empty() {
-        return Cols.empty();
-    }
+struct TSqlReadLimits {
+    // Approximate SQLite VM instruction budget, checked at intervals <= 1000.
+    uint32_t MaxVmSteps = 1'000'000;
+    size_t MaxResultBytes = TMessageLimits{}.MaxFrameBytes - sizeof(TCommandResponse);
 };
 
 class TSql: public IRsm {
 public:
     void Validate(TMessageHolder<TCommandRequest> message) const override;
-    TSql(const std::string& path, int serverId);
+    TSql(const std::string& path, int serverId, TSqlReadLimits readLimits = {});
     ~TSql();
 
     // select
@@ -54,11 +41,10 @@ public:
 private:
     int Execute(const std::string& q);
     void RequireExecute(const std::string& q);
-    void ExecuteRead(const std::string& q);
-    static int Process(void* self, int ncols, char** values, char** cols);
+    std::string ExecuteRead(const std::string& q);
     TMessageHolder<TMessage> Reply(const std::string& ans, uint64_t index);
 
-    TResult Result;
+    TSqlReadLimits ReadLimits;
     std::string LastError;
     sqlite3* Db = nullptr;
 };
