@@ -170,7 +170,9 @@ public:
 
     void CheckStateChange();
     void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
-    void OnCommandResponse(TMessageHolder<TCommandResponse> message);
+    // Unattributed responses are ignored; pass the configured outbound peer.
+    void OnCommandResponse(TMessageHolder<TCommandResponse> message, const std::shared_ptr<INode>& peer = {});
+    void OnPeerDisconnected(const std::shared_ptr<INode>& peer);
     void ProcessCommitted();
     void ProcessWaiting();
     void CleanUp(const std::shared_ptr<INode>& replyTo);
@@ -180,6 +182,7 @@ private:
     void OnReadRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void OnWriteRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);
     void PruneRequests(const std::shared_ptr<INode>& disconnected = {});
+    void CancelForwarded(const std::shared_ptr<INode>& disconnected = {}, bool peerFailure = false);
 
     std::shared_ptr<TRaft> Raft;
     std::shared_ptr<IRsm> Rsm;
@@ -206,9 +209,15 @@ private:
     std::unordered_map<uint64_t, uint64_t> PendingWriteTerms;
     std::unordered_map<uint64_t, TAnswer> WriteAnswers;
     uint64_t RequestsTerm = 0;
-    bool RequestsLeader = false;
-    uint32_t ForwardCookie = 1;
-    std::unordered_map<uint32_t, std::shared_ptr<INode>> Cookie2Client;
-    std::unordered_map<std::shared_ptr<INode>, std::unordered_set<uint32_t>> Client2Cookie;
+    EState RequestsState = EState::NONE;
+    uint32_t RequestsLeaderId = 0;
+    struct TForwarded {
+        std::shared_ptr<INode> Client, Peer;
+        uint32_t OriginalCookie, LeaderId;
+        uint64_t Term;
+    };
+    // Never reuse a wire cookie within this processor, including after failure.
+    uint64_t NextForwardCookie = 1;
+    std::unordered_map<uint32_t, TForwarded> Forwarded;
 };
 

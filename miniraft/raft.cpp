@@ -553,7 +553,7 @@ void TRequestProcessor::Forward(TMessageHolder<TCommandRequest> command, const s
         return;
     }
 
-    if (command->Cookie) {
+    if (command->Flags & TCommandRequest::EForwarded) {
         // already forwarded
         replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
         return;
@@ -568,12 +568,19 @@ void TRequestProcessor::Forward(TMessageHolder<TCommandRequest> command, const s
     }
 
     if (stateName == EState::FOLLOWER) {
-        // Forward
-        command->Cookie = std::max<uint32_t>(1, ForwardCookie);
-        Nodes[leaderId]->Send(std::move(command));
-        Cookie2Client[ForwardCookie] = replyTo;
-        Client2Cookie[replyTo].emplace(ForwardCookie);
-        ForwardCookie++;
+        if (NextForwardCookie > UINT32_MAX) {
+            replyTo->Send(NewHoldedMessage(TCommandResponse{.Cookie = command->Cookie, .ErrorCode = 1}));
+            return;
+        }
+        const auto cookie = uint32_t(NextForwardCookie++);
+        auto forwarded = NewHoldedMessage<TCommandRequest>(command->Len);
+        memcpy(forwarded.Mes, command.Mes, command->Len);
+        forwarded->Cookie = cookie;
+        forwarded->Flags |= TCommandRequest::EForwarded;
+        auto peer = Nodes.at(leaderId);
+        Forwarded.emplace(cookie, TForwarded{replyTo, peer, command->Cookie,
+                                            leaderId, Raft->GetState()->CurrentTerm});
+        peer->Send(std::move(forwarded));
         return;
     }
 
@@ -610,11 +617,14 @@ void TRequestProcessor::OnReadRequest(TMessageHolder<TCommandRequest> command, c
 
 void TRequestProcessor::PruneRequests(const std::shared_ptr<INode>& disconnected) {
     const auto term = Raft->GetState()->CurrentTerm;
-    const bool leader = Raft->CurrentStateName() == EState::LEADER;
+    const auto state = Raft->CurrentStateName();
+    const bool leader = state == EState::LEADER;
+    const auto leaderId = Raft->GetLeaderId();
     if (!disconnected) {
-        if (RequestsTerm == term && RequestsLeader == leader) return;
+        if (RequestsTerm == term && RequestsState == state && RequestsLeaderId == leaderId) return;
         RequestsTerm = term;
-        RequestsLeader = leader;
+        RequestsState = state;
+        RequestsLeaderId = leaderId;
     }
     for (auto* queue : {&Waiting, &StrongWaiting, &WaitingStateChange}) {
         std::queue<TWaiting> retained;
@@ -635,6 +645,22 @@ void TRequestProcessor::PruneRequests(const std::shared_ptr<INode>& disconnected
                 TCommandResponse{.Cookie = waiting.Command->Cookie, .ErrorCode = 1}));
         }
         queue->swap(retained);
+    }
+    CancelForwarded(disconnected);
+}
+
+void TRequestProcessor::CancelForwarded(const std::shared_ptr<INode>& disconnected, bool peerFailure) {
+    for (auto it = Forwarded.begin(); it != Forwarded.end();) {
+        const auto& route = it->second;
+        const bool remove = disconnected ?
+            (peerFailure ? route.Peer == disconnected : route.Client == disconnected) :
+            Raft->CurrentStateName() != EState::FOLLOWER ||
+            route.Term != Raft->GetState()->CurrentTerm || route.LeaderId != Raft->GetLeaderId();
+        if (!remove) { ++it; continue; }
+        auto pending = std::move(it->second);
+        it = Forwarded.erase(it);
+        if (!disconnected || peerFailure) pending.Client->Send(NewHoldedMessage(
+            TCommandResponse{.Cookie = pending.OriginalCookie, .ErrorCode = 1}));
     }
 }
 
@@ -666,32 +692,26 @@ void TRequestProcessor::OnCommandRequest(TMessageHolder<TCommandRequest> command
     }
 }
 
-void TRequestProcessor::OnCommandResponse(TMessageHolder<TCommandResponse> command) {
-    // forwarded
-    auto it = Cookie2Client.find(command->Cookie);
-    if (it == Cookie2Client.end()) {
-        return;
-    }
-    it->second->Send(std::move(command));
-    auto jt = Client2Cookie.find(it->second);
-    jt->second.erase(command->Cookie);
-    if (jt->second.empty()) {
-        Client2Cookie.erase(jt);
-    }
-    Cookie2Client.erase(it);
+void TRequestProcessor::OnCommandResponse(TMessageHolder<TCommandResponse> command,
+                                         const std::shared_ptr<INode>& peer) {
+    PruneRequests();
+    auto it = Forwarded.find(command->Cookie);
+    if (it == Forwarded.end() || !peer || it->second.Peer != peer) return;
+    auto pending = std::move(it->second);
+    Forwarded.erase(it);
+    auto reply = NewHoldedMessage<TCommandResponse>(command->Len);
+    memcpy(reply.Mes, command.Mes, command->Len);
+    reply->Cookie = pending.OriginalCookie;
+    pending.Client->Send(std::move(reply));
+}
+
+void TRequestProcessor::OnPeerDisconnected(const std::shared_ptr<INode>& peer) {
+    if (peer) CancelForwarded(peer, true);
 }
 
 void TRequestProcessor::CleanUp(const std::shared_ptr<INode>& replyTo) {
     if (!replyTo) return;
     PruneRequests(replyTo);
-    auto jt = Client2Cookie.find(replyTo);
-    if (jt == Client2Cookie.end()) {
-        return;
-    }
-    for (auto cookie : jt->second) {
-        Cookie2Client.erase(cookie);
-    }
-    Client2Cookie.erase(jt);
 }
 
 void TRequestProcessor::ProcessCommitted() {

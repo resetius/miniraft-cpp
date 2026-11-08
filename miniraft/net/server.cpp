@@ -127,7 +127,7 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
             if (auto maybeCommandRequest = mes.template Maybe<TCommandRequest>()) {
                 RequestProcessor->OnCommandRequest(std::move(maybeCommandRequest.Cast()), client);
             } else if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
-                RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()));
+                RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()), client);
             } else {
                 Raft->Process(TimeSource->Now(), std::move(mes), client);
             }
@@ -176,7 +176,7 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
             }
             auto mes = co_await TMessageReader(node->Sock()).Read();
             if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
-                RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()));
+                RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()), node);
                 DrainNodes();
             } else {
                 std::cerr << "Wrong message type: " << mes->Type << std::endl;
@@ -187,6 +187,8 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
             error = true;
         }
         if (error) {
+            RequestProcessor->OnPeerDisconnected(node);
+            DrainNodes();
             co_await Poller.Sleep(std::chrono::milliseconds(1000));
         }
     }

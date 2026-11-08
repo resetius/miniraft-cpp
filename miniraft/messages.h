@@ -97,6 +97,7 @@ struct TCommandRequest: public TMessage {
         // read semantics, default: read from leader w/o ping check, possible stale reads if there are 2 leaders
         EStale = 2, // stale read, can read from follower
         EConsistent = 4, // strong consistent read (wait for pings, low latency, no stale read)
+        EForwarded = 8, // internal one-hop marker, independent of client cookies
     };
     uint32_t Flags = ENone;
     uint32_t Cookie = 0;
