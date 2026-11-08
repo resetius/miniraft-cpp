@@ -298,6 +298,18 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
         lastIndex = prevIndex;
     }
 
+    const TMessageLimits limits;
+    uint64_t bytes = sizeof(TAppendEntriesRequest);
+    std::vector<TMessageHolder<TLogEntry>> entries;
+    for (auto i = prevIndex + 1; i <= lastIndex && entries.size() < limits.MaxEntries; ++i) {
+        auto entry = State->Get(i);
+        ValidateMessageHeader(entry->Type, entry->Len, limits);
+        if (entry->Len > limits.MaxBatchBytes - bytes) break;
+        bytes += entry->Len;
+        entries.push_back(std::move(entry));
+    }
+    lastIndex = prevIndex + entries.size();
+
     auto mes = NewHoldedMessage(
         TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm, .Seqno = NextSeqno()},
         TAppendEntriesRequest {
@@ -308,12 +320,9 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
             .Nentries = static_cast<uint32_t>(lastIndex - prevIndex),
         });
 
-    if (lastIndex - prevIndex > 0) {
-        mes.InitPayload(lastIndex - prevIndex);
-        uint32_t j = 0;
-        for (auto i = prevIndex+1; i <= lastIndex; i++) {
-            mes.Payload[j++] = State->Get(i);
-        }
+    if (!entries.empty()) {
+        mes.InitPayload(entries.size());
+        for (uint32_t i = 0; i < entries.size(); ++i) mes.Payload[i] = entries[i];
     }
     VolatileState->LastSentSeqno[nodeId] = mes->Seqno;
     return mes;
@@ -512,6 +521,9 @@ ITimeSource::Time TRaft::MakeElection(ITimeSource::Time now) {
 }
 
 uint64_t TRaft::Append(TMessageHolder<TLogEntry> entry) {
+    if (!entry || entry->Type != uint32_t(EMessageType::LOG_ENTRY))
+        throw TMessageError("Invalid proposed log entry");
+    ValidateMessageHeader(entry->Type, entry->Len);
     entry->Term = State->CurrentTerm;
     State->Append(std::move(entry));
     return State->LastLogIndex;

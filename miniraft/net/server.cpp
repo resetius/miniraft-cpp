@@ -10,44 +10,6 @@
 #include "server.h"
 
 template<typename TSocket>
-NNet::TValueTask<void> TMessageWriter<TSocket>::Write(TMessageHolder<TMessage> message) {
-    co_await NNet::TByteWriter(Socket).Write(message.Mes, message->Len);
-
-    auto payload = std::move(message.Payload);
-    for (uint32_t i = 0; i < message.PayloadSize; ++i) {
-        co_await Write(std::move(payload[i]));
-    }
-
-    co_return;
-}
-
-template<typename TSocket>
-NNet::TValueTask<TMessageHolder<TMessage>> TMessageReader<TSocket>::Read() {
-    decltype(TMessage::Type) type;
-    decltype(TMessage::Len) len;
-    auto s = co_await Socket.ReadSome(&type, sizeof(type));
-    if (s != sizeof(type)) {
-        throw std::runtime_error("Connection closed");
-    }
-    s = co_await Socket.ReadSome(&len, sizeof(len));
-    if (s != sizeof(len)) {
-        throw std::runtime_error("Connection closed");
-    }
-    auto mes = NewHoldedMessage<TMessage>(type, len);
-    co_await NNet::TByteReader(Socket).Read(mes->Value, len - sizeof(TMessage));
-    auto maybeAppendEntries = mes.Maybe<TAppendEntriesRequest>();
-    if (maybeAppendEntries) {
-        auto appendEntries = maybeAppendEntries.Cast();
-        auto nentries = appendEntries->Nentries;
-        mes.InitPayload(nentries);
-        for (uint32_t i = 0; i < nentries; i++) {
-            mes.Payload[i] = co_await Read();
-        }
-    }
-    co_return mes;
-}
-
-template<typename TSocket>
 void TNode<TSocket>::Send(TMessageHolder<TMessage> message) {
     Messages.emplace_back(std::move(message));
 }
@@ -80,6 +42,15 @@ NNet::TVoidSuspendedTask TNode<TSocket>::DoDrain() {
         Connect();
     }
     co_return;
+}
+
+template<typename TSocket>
+void TNode<TSocket>::Disconnect() {
+    Connected = false;
+    if (Drainer) { Drainer.destroy(); Drainer = {}; }
+    if (Connector) { Connector.destroy(); Connector = {}; }
+    std::destroy_at(&Socket);
+    std::construct_at(&Socket);
 }
 
 template<typename TSocket>
@@ -170,6 +141,7 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
     // read forwarded replies
     while (true) {
         bool error = false;
+        const bool wasConnected = node->IsConnected();
         try {
             if (!node->IsConnected()) {
                 throw std::runtime_error("Not connected");
@@ -188,6 +160,7 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
         }
         if (error) {
             RequestProcessor->OnPeerDisconnected(node);
+            if (wasConnected) node->Disconnect();
             DrainNodes();
             co_await Poller.Sleep(std::chrono::milliseconds(1000));
         }

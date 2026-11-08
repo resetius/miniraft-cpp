@@ -16,27 +16,61 @@
 template<typename TSocket>
 class TMessageReader {
 public:
-    TMessageReader(TSocket& socket)
-        : Socket(socket)
-    { }
+    TMessageReader(TSocket& socket, TMessageLimits limits = {})
+        : Socket(socket), Limits(limits) { ValidateMessageLimits(Limits); }
 
-    NNet::TValueTask<TMessageHolder<TMessage>> Read();
+    NNet::TValueTask<TMessageHolder<TMessage>> Read() {
+        if (Failed) throw TMessageError("Cannot reuse a failed frame reader");
+        try {
+            uint64_t remaining = Limits.MaxBatchBytes;
+            co_return co_await ReadFrame(false, remaining);
+        } catch (...) {
+            Failed = true;
+            throw;
+        }
+    }
 
 private:
+    NNet::TValueTask<TMessageHolder<TMessage>> ReadFrame(bool logOnly, uint64_t& remaining) {
+        TMessage header;
+        co_await NNet::TByteReader(Socket).Read(&header, sizeof(header));
+        ValidateMessageHeader(header.Type, header.Len, Limits);
+        if (logOnly && header.Type != uint32_t(EMessageType::LOG_ENTRY))
+            throw TMessageError("AppendEntries children must be log entries");
+        if (header.Len > remaining) throw TMessageError("Message batch exceeds byte limit");
+        remaining -= header.Len;
+        auto message = NewHoldedMessage<TMessage>(header.Type, header.Len);
+        co_await NNet::TByteReader(Socket).Read(message->Value, header.Len - sizeof(TMessage));
+        if (header.Type == uint32_t(EMessageType::APPEND_ENTRIES_REQUEST)) {
+            const auto count = message.template Cast<TAppendEntriesRequest>()->Nentries;
+            if (count > Limits.MaxEntries || uint64_t(count) * sizeof(TLogEntry) > remaining)
+                throw TMessageError("AppendEntries count exceeds limits");
+            message.InitPayload(count);
+            for (uint32_t i = 0; i < count; ++i)
+                message.Payload[i] = co_await ReadFrame(true, remaining);
+        }
+        co_return message;
+    }
     TSocket& Socket;
+    TMessageLimits Limits;
+    bool Failed = false;
 };
 
 template<typename TSocket>
 class TMessageWriter {
 public:
-    TMessageWriter(TSocket& socket)
-        : Socket(socket)
-    { }
+    TMessageWriter(TSocket& socket, TMessageLimits limits = {})
+        : Socket(socket), Limits(limits) { ValidateMessageLimits(Limits); }
 
-    NNet::TValueTask<void> Write(TMessageHolder<TMessage> message);
-
+    NNet::TValueTask<void> Write(TMessageHolder<TMessage> message) {
+        ValidateMessageTree(message, Limits);
+        co_await NNet::TByteWriter(Socket).Write(message.Mes, message->Len);
+        for (uint32_t i = 0; i < message.PayloadSize; ++i)
+            co_await Write(message.Payload[i]);
+    }
 private:
     TSocket& Socket;
+    TMessageLimits Limits;
 };
 
 struct THost {
@@ -87,6 +121,8 @@ public:
 
     void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
+    // Called after a failed outbound read, once its reader has unwound.
+    void Disconnect();
     bool IsConnected() { return Connected; }
     TSocket& Sock() {
         return Socket;
