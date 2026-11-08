@@ -1,5 +1,11 @@
 # MiniRaft-CPP
 
+This fork's first milestone fixes strict-majority commit selection and FIFO
+request completion, and adds deterministic consensus failure tests.
+See the [correctness baseline and review](docs/correctness-baseline.md) for
+validation, build instructions and remaining production release gates.
+The milestone is experimental; durable crash recovery is not established.
+
 [![Number of GitHub stars](https://img.shields.io/github/stars/resetius/miniraft-cpp)](https://github.com/resetius/miniraft-cpp/stargazers)
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/resetius/miniraft-cpp)
 [![GitHub license which is BSD-2-Clause license](https://img.shields.io/github/license/resetius/miniraft-cpp)](https://github.com/resetius/miniraft-cpp)
