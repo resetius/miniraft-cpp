@@ -1,5 +1,6 @@
 #pragma once
 #include <chrono>
+#include <concepts>
 #include <memory>
 #include <vector>
 
@@ -7,6 +8,17 @@
 #include <stdint.h>
 #include <string.h>
 #include <typeinfo>
+#include <stdexcept>
+
+struct TMessageLimits {
+    uint32_t MaxFrameBytes = 16 * 1024 * 1024;
+    uint64_t MaxBatchBytes = 64 * 1024 * 1024;
+    uint32_t MaxEntries = 4096;
+};
+
+struct TMessageError : std::runtime_error { using std::runtime_error::runtime_error; };
+void ValidateMessageLimits(const TMessageLimits& limits);
+void ValidateMessageHeader(uint32_t type, uint32_t length, const TMessageLimits& limits = {});
 
 enum class EMessageType : uint32_t {
     NONE = 0,
@@ -128,7 +140,7 @@ struct TMessageHolder {
     T* Mes;
     std::shared_ptr<char[]> RawData;
 
-    uint32_t PayloadSize;
+    uint32_t PayloadSize = 0;
     std::shared_ptr<TMessageHolder<TMessage>[]> Payload;
 
     TMessageHolder()
@@ -174,12 +186,15 @@ struct TMessageHolder {
     }
 
     bool IsEx() const {
-        return (2 <= Mes->Type && Mes->Type <= 5);
+        return Mes && Mes->Len >= sizeof(TMessageEx) && (2 <= Mes->Type && Mes->Type <= 5);
     }
 
     template<typename U>
     requires std::derived_from<U, T>
     TMessageHolder<U> Cast() {
+        if (!Mes || Mes->Len < sizeof(U) ||
+            (U::MessageType != EMessageType::NONE && Mes->Type != uint32_t(U::MessageType)))
+            throw std::bad_cast();
         return TMessageHolder<U>(static_cast<U*>(Mes), RawData, PayloadSize, Payload);
     }
 
@@ -201,16 +216,19 @@ struct TMessageHolder {
             }
         };
 
-        return Mes->Type == static_cast<uint32_t>(U::MessageType)
+        return Mes && Mes->Len >= sizeof(U) && Mes->Type == static_cast<uint32_t>(U::MessageType)
             ? Maybe { *this }
             : Maybe { };
     }
 };
 
+// Validate the complete frame/batch before emitting any bytes.
+void ValidateMessageTree(const TMessageHolder<TMessage>& message, const TMessageLimits& limits = {});
+
 template<typename T>
 requires std::derived_from<T, TMessage>
 T* NewMessage(uint32_t type, uint32_t len) {
-    assert(len >= sizeof(TMessage));
+    if (len < sizeof(T)) throw std::invalid_argument("Message allocation is smaller than its type");
     char* data = new char[len];
     T* mes =  new (data) T;
     mes->Type = type;
@@ -233,7 +251,6 @@ TMessageHolder<T> NewHoldedMessage() {
 
 template<typename T>
 TMessageHolder<T> NewHoldedMessage(uint32_t size) {
-    assert(size >= sizeof(T));
     return NewHoldedMessage<T>(static_cast<uint32_t>(T::MessageType), size);
 }
 
