@@ -28,6 +28,8 @@ struct IRsm {
     virtual TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) = 0;
     virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) = 0;
 
+    // Durable RSMs restore this atomically with application data before constructing
+    // TRequestProcessor. It must identify committed progress in the same Raft log.
     uint64_t LastAppliedIndex = 0;
 };
 
@@ -136,6 +138,8 @@ public:
     }
 
 private:
+    friend class TRequestProcessor;
+    void RestoreAppliedIndex(uint64_t index);
     void Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message);
     void Follower(ITimeSource::Time now, TMessageHolder<TMessage> message);
     void Leader(ITimeSource::Time now, TMessageHolder<TMessage> message);
@@ -170,11 +174,8 @@ private:
 
 class TRequestProcessor {
 public:
-    TRequestProcessor(std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, const TNodeDict& nodes)
-        : Raft(raft)
-        , Rsm(rsm)
-        , Nodes(nodes)
-    { }
+    // Construct after restoring the RSM and before accepting network traffic.
+    TRequestProcessor(std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, const TNodeDict& nodes);
 
     void CheckStateChange();
     void OnCommandRequest(TMessageHolder<TCommandRequest> message, const std::shared_ptr<INode>& replyTo);

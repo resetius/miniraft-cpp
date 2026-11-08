@@ -614,6 +614,21 @@ uint64_t TRaft::GetLastIndex() const {
     return State->LastLogIndex;
 }
 
+void TRaft::RestoreAppliedIndex(uint64_t index) {
+    if (index > uint64_t(INT64_MAX) || index > State->LastLogIndex)
+        throw std::invalid_argument("Application progress exceeds recovered Raft log");
+    // A correctly recovered application marker is evidence of commitment.
+    // Protect its prefix immediately, before any AppendEntries can be handled.
+    VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
+}
+
+TRequestProcessor::TRequestProcessor(std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, const TNodeDict& nodes)
+    : Raft(std::move(raft)), Rsm(std::move(rsm)), Nodes(nodes)
+{
+    if (!Raft || !Rsm) throw std::invalid_argument("Request processor requires Raft and application state");
+    Raft->RestoreAppliedIndex(Rsm->LastAppliedIndex);
+}
+
 void TRequestProcessor::CheckStateChange() {
     PruneRequests();
     if (WaitingStateChange.empty()) {
@@ -807,6 +822,8 @@ void TRequestProcessor::CleanUp(const std::shared_ptr<INode>& replyTo) {
 void TRequestProcessor::ProcessCommitted() {
     PruneRequests();
     auto commitIndex = Raft->GetVolatileState()->CommitIndex;
+    // Never rewind application progress, or overflow LastAppliedIndex + 1.
+    if (commitIndex <= Rsm->LastAppliedIndex) return;
     auto& state = Raft->GetState();
     for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
         auto entry = state->Get(i);

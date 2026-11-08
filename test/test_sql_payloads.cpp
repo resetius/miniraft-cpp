@@ -1,4 +1,5 @@
 #include "../examples/sql_rsm.h"
+#include <miniraft/persist.h>
 #include <filesystem>
 #include <chrono>
 #include <stdarg.h>
@@ -386,6 +387,44 @@ void test_sql_read_value_limit_is_restored_before_writes(void**) {
     assert_int_equal(sql.LastAppliedIndex, 3);
 }
 
+void test_sql_and_raft_restart_do_not_reapply_committed_insert(void**) {
+    TDatabase file;
+    const auto logPath = file.Path + "-raft";
+    {
+        auto state = std::make_shared<TDiskState>(logPath, 1);
+        auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+        auto sql = std::make_shared<TSql>(file.Path, 1);
+        TRequestProcessor processor(raft, sql, {});
+        auto now = ITimeSource::Time{};
+        raft->ProcessTimeout(now);
+        for (const auto query : {"CREATE TABLE t (value TEXT)", "INSERT INTO t VALUES ('once')"}) {
+            auto command = Query(query);
+            command->Flags = TCommandRequest::EWrite;
+            processor.OnCommandRequest(command, {});
+            now += std::chrono::milliseconds(500);
+            raft->ProcessTimeout(now);
+            processor.ProcessCommitted();
+        }
+        assert_int_equal(sql->LastAppliedIndex, 3);
+        assert_true(ReadText(*sql, "SELECT count(*) AS n FROM t") == "n\n1\n");
+    }
+    {
+        auto state = std::make_shared<TDiskState>(logPath, 1);
+        auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+        auto sql = std::make_shared<TSql>(file.Path, 1);
+        assert_int_equal(sql->LastAppliedIndex, 3);
+        TRequestProcessor processor(raft, sql, {});
+        processor.ProcessCommitted(); // server timer can fire before any leader is known
+        const auto beforeElection = sql->LastAppliedIndex;
+        raft->ProcessTimeout(ITimeSource::Time{});
+        processor.ProcessCommitted();
+        processor.ProcessCommitted();
+        assert_true(ReadText(*sql, "SELECT count(*) AS n FROM t") == "n\n1\n");
+        assert_int_equal(beforeElection, 3);
+        assert_int_equal(sql->LastAppliedIndex, 4); // new-term stub advanced framework progress
+    }
+}
+
 }
 int main() {
     const CMUnitTest tests[] = {
@@ -419,6 +458,7 @@ int main() {
         cmocka_unit_test(test_sql_read_preserves_nul_bytes_and_counts_their_length),
         cmocka_unit_test(test_sql_read_rejects_invalid_limits),
         cmocka_unit_test(test_sql_read_value_limit_is_restored_before_writes),
+        cmocka_unit_test(test_sql_and_raft_restart_do_not_reapply_committed_insert),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

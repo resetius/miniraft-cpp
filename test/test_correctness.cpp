@@ -34,6 +34,17 @@ struct TCluster {
             Nodes.push_back(std::make_shared<TRaft>(std::make_shared<TState>(), id, peers));
         }
     }
+    void Restart(uint32_t id) {
+        auto state = Nodes.at(id - 1)->GetState();
+        TNodeDict peers;
+        for (uint32_t dst = 1; dst <= Nodes.size(); ++dst) {
+            if (dst != id) peers[dst] = std::make_shared<TEndpoint>([this](auto m) {
+                Packets.push_back(std::move(m));
+            });
+        }
+        // Retain stable term/vote/log; discard all Raft volatile state.
+        Nodes.at(id - 1) = std::make_shared<TRaft>(state, id, peers);
+    }
     void Drain(bool reverse = false, bool duplicate = false) {
         size_t budget = 10000;
         while (!Packets.empty()) {
@@ -718,10 +729,136 @@ void test_follower_restarted_without_storage_catches_up(void**) {
     assert_true(cluster.Nodes[0]->GetVolatileState()->CommitIndex >= committed);
     cluster.AssertCommittedPrefix();
 }
+
+std::shared_ptr<TEchoRsm> RecoverApplication(const TEchoRsm& old) {
+    auto recovered = std::make_shared<TEchoRsm>();
+    recovered->Applied = old.Applied;
+    recovered->LastAppliedIndex = old.LastAppliedIndex;
+    return recovered;
+}
+void test_recovered_application_progress_is_not_rewound(void**) {
+    TCluster cluster(1);
+    cluster.Elect(1);
+    cluster.Nodes[0]->Append(LogValue("once"));
+    cluster.Replicate(1);
+    auto original = std::make_shared<TEchoRsm>();
+    { TRequestProcessor processor(cluster.Nodes[0], original, {}); processor.ProcessCommitted(); }
+    auto recovered = RecoverApplication(*original);
+    cluster.Restart(1);
+    TRequestProcessor processor(cluster.Nodes[0], recovered, {});
+    processor.ProcessCommitted(); // timer before the first post-restart election
+    assert_int_equal(recovered->LastAppliedIndex, original->LastAppliedIndex);
+    cluster.Elect(1);
+    processor.ProcessCommitted();
+    processor.ProcessCommitted();
+    assert_true(recovered->Applied == std::vector<std::string>{"once"});
+}
+void test_application_progress_never_decreases_on_lower_commit_input(void**) {
+    TCluster cluster(1);
+    cluster.Elect(1);
+    auto recovered = std::make_shared<TEchoRsm>();
+    recovered->LastAppliedIndex = 1;
+    TRequestProcessor processor(cluster.Nodes[0], recovered, {});
+    // Defensive check even if an embedder violates commit-index monotonicity.
+    const_cast<TVolatileState*>(cluster.Nodes[0]->GetVolatileState())->CommitIndex = 0;
+    processor.ProcessCommitted();
+    assert_int_equal(recovered->LastAppliedIndex, 1);
+}
+void test_recovered_applied_prefix_is_protected_and_suffix_can_change(void**) {
+    TCluster cluster(2);
+    auto state = cluster.Nodes[0]->GetState();
+    state->CurrentTerm = 2;
+    for (const std::string value : {"applied", "uncommitted"}) {
+        auto entry = LogValue(value);
+        entry->Term = 2;
+        state->Append(entry);
+    }
+    auto recovered = std::make_shared<TEchoRsm>();
+    recovered->Applied = {"applied"};
+    recovered->LastAppliedIndex = 1;
+    TRequestProcessor processor(cluster.Nodes[0], recovered, {});
+    auto request = [&](uint64_t prev, uint64_t prevTerm, const std::string& value) {
+        auto message = NewHoldedMessage(TMessageEx{.Src = 2, .Dst = 1, .Term = 3},
+            TAppendEntriesRequest{.PrevLogIndex = prev, .PrevLogTerm = prevTerm,
+                .LeaderCommit = 2, .LeaderId = 2, .Nentries = 1});
+        message.InitPayload(1);
+        auto entry = LogValue(value);
+        entry->Term = 3;
+        message.Payload[0] = entry;
+        return message;
+    };
+    cluster.Nodes[0]->Process(cluster.Now, request(0, 0, "overwrite-applied"));
+    assert_int_equal(state->LogTerm(1), 2);
+    assert_int_equal(cluster.Nodes[0]->GetVolatileState()->CommitIndex, 1);
+    cluster.Nodes[0]->Process(cluster.Now, request(1, 2, "replacement"));
+    processor.ProcessCommitted();
+    assert_true(recovered->Applied == (std::vector<std::string>{"applied", "replacement"}));
+    assert_int_equal(recovered->LastAppliedIndex, 2);
+}
+void test_application_ahead_of_recovered_log_is_rejected(void**) {
+    TCluster cluster(1);
+    for (const auto index : {uint64_t(1), UINT64_MAX}) {
+        auto recovered = std::make_shared<TEchoRsm>();
+        recovered->LastAppliedIndex = index;
+        bool rejected = false;
+        try { TRequestProcessor processor(cluster.Nodes[0], recovered, {}); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        assert_true(rejected);
+        assert_true(recovered->LastAppliedIndex == index);
+        assert_int_equal(cluster.Nodes[0]->GetVolatileState()->CommitIndex, 0);
+        assert_int_equal(cluster.Nodes[0]->GetLastIndex(), 0);
+    }
+}
+void test_cluster_restart_preserves_applied_history_and_rebuilds_volatile_application(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    cluster.Nodes[0]->Append(LogValue("first"));
+    cluster.Replicate(1);
+    std::vector<std::shared_ptr<TEchoRsm>> recovered;
+    for (auto& node : cluster.Nodes) {
+        auto rsm = std::make_shared<TEchoRsm>();
+        TRequestProcessor processor(node, rsm, {});
+        processor.ProcessCommitted();
+        recovered.push_back(RecoverApplication(*rsm));
+    }
+    cluster.Nodes[0]->Append(LogValue("old-uncommitted-tail"));
+    // Keep delayed old-term traffic across all node restarts.
+    cluster.Nodes[0]->ProcessTimeout(cluster.Now + std::chrono::seconds(1));
+    auto delayed = std::move(cluster.Packets);
+    cluster.Packets.clear();
+    for (uint32_t id = 1; id <= 3; ++id) cluster.Restart(id);
+    // Node 3 instead uses a volatile application and must rebuild from index zero.
+    recovered[2] = std::make_shared<TEchoRsm>();
+    std::vector<std::unique_ptr<TRequestProcessor>> processors;
+    for (size_t i = 0; i < recovered.size(); ++i) {
+        processors.push_back(std::make_unique<TRequestProcessor>(cluster.Nodes[i], recovered[i], TNodeDict{}));
+        processors.back()->ProcessCommitted();
+    }
+    cluster.Elect(2);
+    // Recovered old-term commitment cannot replace a fresh current-term read quorum.
+    assert_int_equal(cluster.Nodes[1]->CommitSeqno(), 0);
+    cluster.Nodes[1]->Append(LogValue("second"));
+    cluster.Replicate(2, true, true);
+    cluster.Packets = std::move(delayed);
+    cluster.Drain(true, true);
+    cluster.Replicate(2, true, true);
+    for (auto& processor : processors) { processor->ProcessCommitted(); processor->ProcessCommitted(); }
+    for (const auto& rsm : recovered) {
+        assert_true(rsm->Applied == (std::vector<std::string>{"first", "second"}));
+        assert_int_equal(rsm->LastAppliedIndex, cluster.Nodes[1]->GetVolatileState()->CommitIndex);
+    }
+    cluster.AssertCommittedPrefix();
+}
+
 }
 
 int main() {
     const CMUnitTest tests[] = {
+        cmocka_unit_test(test_recovered_application_progress_is_not_rewound),
+        cmocka_unit_test(test_application_progress_never_decreases_on_lower_commit_input),
+        cmocka_unit_test(test_recovered_applied_prefix_is_protected_and_suffix_can_change),
+        cmocka_unit_test(test_application_ahead_of_recovered_log_is_rejected),
+        cmocka_unit_test(test_cluster_restart_preserves_applied_history_and_rebuilds_volatile_application),
         cmocka_unit_test(test_majority_all_cluster_sizes),
         cmocka_unit_test(test_read_fifo),
         cmocka_unit_test(test_strong_read_fifo),
