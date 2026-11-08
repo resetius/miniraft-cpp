@@ -53,6 +53,7 @@ public:
 
 private:
     bool Execute(const std::string& q);
+    void ExecuteRead(const std::string& q);
     static int Process(void* self, int ncols, char** values, char** cols);
     TMessageHolder<TMessage> Reply(const std::string& ans, uint64_t index);
 
