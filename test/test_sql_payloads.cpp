@@ -300,6 +300,92 @@ void test_sql_write_rejects_embedded_nul_before_admission(void**) {
     assert_int_equal(sql.LastAppliedIndex, 0);
 }
 
+const std::string ExpensiveRead = "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) SELECT sum(x) FROM n";
+void test_sql_read_stops_at_work_budget(void**) {
+    TSql sql(":memory:", 1, {.MaxVmSteps = 1000});
+    Reject([&] { sql.Read(Query(ExpensiveRead), 0); });
+    assert_true(ReadText(sql, "SELECT 7 AS v") == "v\n7\n");
+    assert_int_equal(sql.LastAppliedIndex, 0);
+    TSql defaults(":memory:", 1);
+    Reject([&] { defaults.Read(Query(ExpensiveRead), 0); });
+}
+void test_sql_read_output_budget_counts_headers_separators_and_null(void**) {
+    for (const auto& query : {std::string("SELECT 'abc' AS v"), std::string("SELECT NULL AS v"),
+         std::string("SELECT 1 AS a, 2 AS b"), std::string("SELECT 1 AS v WHERE 0")}) {
+        TSql reference(":memory:", 1);
+        const auto expected = ReadText(reference, query);
+        TSql exact(":memory:", 1, {.MaxResultBytes = expected.size()});
+        assert_true(ReadText(exact, query) == expected);
+        TSql shortByOne(":memory:", 1, {.MaxResultBytes = expected.size() - 1});
+        Reject([&] { shortByOne.Read(Query(query), 0); });
+    }
+}
+void test_sql_read_bounds_accumulated_rows_and_cleans_up(void**) {
+    TSql sql(":memory:", 1, {.MaxResultBytes = 64});
+    Reject([&] { sql.Read(Query("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) SELECT x FROM n"), 0); });
+    assert_true(ReadText(sql, "SELECT 8 AS v") == "v\n8\n");
+    assert_true(Apply(sql, "CREATE TABLE t (x); INSERT INTO t VALUES (9)", 1).empty());
+    assert_true(ReadText(sql, "SELECT x FROM t") == "x\n9\n");
+}
+void test_sql_read_budget_failures_recover_through_request_processor(void**) {
+    struct TSink : INode {
+        std::vector<std::pair<uint32_t, uint32_t>> Replies;
+        void Send(TMessageHolder<TMessage> message) override {
+            auto reply = message.Cast<TCommandResponse>();
+            Replies.emplace_back(reply->Cookie, reply->ErrorCode);
+        }
+        void Drain() override {}
+    };
+    auto raft = std::make_shared<TRaft>(std::make_shared<TState>(), 1, TNodeDict{});
+    raft->ProcessTimeout(ITimeSource::Time{});
+    auto sql = std::make_shared<TSql>(":memory:", 1, TSqlReadLimits{.MaxVmSteps = 1000, .MaxResultBytes = 64});
+    TRequestProcessor processor(raft, sql, {});
+    auto client = std::make_shared<TSink>();
+    uint32_t cookie = 1;
+    for (uint32_t flags : {0u, uint32_t(TCommandRequest::EConsistent)}) {
+        for (const auto& query : {ExpensiveRead, std::string("SELECT 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz' AS v"), std::string("SELECT 1 AS v")}) {
+            auto command = Query(query);
+            command->Flags = flags;
+            command->Cookie = cookie++;
+            processor.OnCommandRequest(command, client);
+            processor.ProcessCommitted();
+            processor.ProcessWaiting();
+        }
+    }
+    assert_int_equal(client->Replies.size(), 6);
+    for (size_t i = 0; i < client->Replies.size(); ++i) {
+        assert_int_equal(client->Replies[i].first, i + 1);
+        assert_int_equal(client->Replies[i].second, i % 3 == 2 ? 0 : 2);
+    }
+    assert_int_equal(raft->CurrentStateName(), EState::LEADER);
+}
+void test_sql_read_preserves_nul_bytes_and_counts_their_length(void**) {
+    TSql sql(":memory:", 1, {.MaxResultBytes = 6});
+    assert_true(ReadText(sql, "SELECT CAST(X'610062' AS TEXT) AS v") == std::string("v\na\0b\n", 6));
+    Reject([&] { sql.Read(Query("SELECT CAST(X'61006263' AS TEXT) AS v"), 0); });
+}
+void test_sql_read_rejects_invalid_limits(void**) {
+    for (const auto limits : {TSqlReadLimits{.MaxVmSteps = 0},
+         TSqlReadLimits{.MaxResultBytes = TMessageLimits{}.MaxFrameBytes}}) {
+        bool rejected = false;
+        try { TSql sql(":memory:", 1, limits); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        assert_true(rejected);
+    }
+}
+
+void test_sql_read_value_limit_is_restored_before_writes(void**) {
+    TSql sql(":memory:", 1);
+    const std::string value(9 * 1024 * 1024, 'x');
+    assert_true(Apply(sql, "CREATE TABLE big (v TEXT); INSERT INTO big VALUES ('" + value + "')", 1).empty());
+    Reject([&] { sql.Read(Query("SELECT hex(v) FROM big"), 1); });
+    // Writes retain their previous SQLite length limit, even after a failed read.
+    assert_true(Apply(sql, "UPDATE big SET v=v||v", 2).empty());
+    assert_true(Apply(sql, "UPDATE big SET v=substr(v,1,1)", 3).empty());
+    assert_true(ReadText(sql, "SELECT v FROM big") == "v\nx\n");
+    assert_int_equal(sql.LastAppliedIndex, 3);
+}
+
 }
 int main() {
     const CMUnitTest tests[] = {
@@ -326,6 +412,13 @@ int main() {
         cmocka_unit_test(test_sql_invalid_progress_fails_closed),
         cmocka_unit_test(test_sql_busy_write_does_not_consume_entry),
         cmocka_unit_test(test_sql_write_rejects_embedded_nul_before_admission),
+        cmocka_unit_test(test_sql_read_stops_at_work_budget),
+        cmocka_unit_test(test_sql_read_output_budget_counts_headers_separators_and_null),
+        cmocka_unit_test(test_sql_read_bounds_accumulated_rows_and_cleans_up),
+        cmocka_unit_test(test_sql_read_budget_failures_recover_through_request_processor),
+        cmocka_unit_test(test_sql_read_preserves_nul_bytes_and_counts_their_length),
+        cmocka_unit_test(test_sql_read_rejects_invalid_limits),
+        cmocka_unit_test(test_sql_read_value_limit_is_restored_before_writes),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
