@@ -5,73 +5,7 @@
 
 #include "kv.h"
 
-struct TKvEntry {
-    uint16_t KeySize = 0;
-    uint16_t ValSize = 0;
-    char Data[0];
-};
-
-struct TKvLogEntry: public TLogEntry, public TKvEntry
-{
-};
-
-struct TWriteKv: public TCommandRequest, public TKvEntry
-{
-};
-
-struct TReadKv: public TCommandRequest {
-    uint16_t KeySize = 0;
-    char Data[0];
-};
-
-TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message, uint64_t index) {
-    auto readKv = message.Cast<TReadKv>();
-    if (readKv->KeySize == 0) {
-        std::string data;
-        for (auto& [k, v] : H) {
-            data += k + " = " + v + "\n";
-        }
-        auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + data.size());
-        memcpy(res->Data, data.data(), data.size());
-        res->Index = index;
-        return res;
-    } else {
-        std::string_view k(readKv->Data, readKv->KeySize);
-        auto it = H.find(std::string(k));
-        if (it == H.end()) {
-            auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse));
-            res->Index = index;
-            return res;
-        } else {
-            auto res = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse)+it->second.size());
-            res->Index = index;
-            memcpy(res->Data, it->second.data(), it->second.size());
-            return res;
-        }
-    }
-}
-
-TMessageHolder<TMessage> TKv::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
-    if (LastAppliedIndex < index) {
-        auto entry = message.Cast<TKvLogEntry>();
-        std::string_view k(entry->TKvEntry::Data, entry->KeySize);
-        if (entry->ValSize) {
-            std::string_view v(entry->TKvEntry::Data + entry->KeySize, entry->ValSize);
-            H[std::string(k)] = std::string(v);
-        } else {
-            H.erase(std::string(k));
-        }
-        LastAppliedIndex = index;
-    }
-    return {};
-}
-
-TMessageHolder<TLogEntry> TKv::Prepare(TMessageHolder<TCommandRequest> command) {
-    auto dataSize = command->Len - sizeof(TCommandRequest);
-    auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry)+dataSize);
-    memcpy(entry->Data, command->Data, dataSize);
-    return entry;
-}
+#include "kv_messages.h"
 
 template<typename TPoller, typename TSocket>
 NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
@@ -95,11 +29,13 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
             strLine += std::string_view(line.Part1.data(), line.Part1.size());
             strLine += std::string_view(line.Part2.data(), line.Part2.size());
             auto prefix = strtok((char*)strLine.data(), sep);
+            if (!prefix) { std::cout << "> " << std::flush; continue; }
             TMessageHolder<TMessage> req;
 
             if (!strcmp(prefix, "set")) {
                 auto key = strtok(nullptr, sep);
                 auto val = strtok(nullptr, sep);
+                if (!key || !val) { std::cout << "Expected set <key> <value>\n"; continue; }
                 auto keySize = strlen(key);
                 auto valSize = strlen(val);
                 auto mes = NewHoldedMessage<TWriteKv>(sizeof(TWriteKv) + keySize + valSize);
@@ -111,6 +47,7 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
                 req = mes;
             } else if (!strcmp(prefix, "get")) {
                 auto key = strtok(nullptr, sep);
+                if (!key) { std::cout << "Expected a key\n"; continue; }
                 auto size = strlen(key);
                 auto mes = NewHoldedMessage<TReadKv>(sizeof(TReadKv) + size);
                 mes->Flags = flags;
@@ -123,6 +60,7 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
                 req = mes;
             } else if (!strcmp(prefix, "del")) {
                 auto key = strtok(nullptr, sep);
+                if (!key) { std::cout << "Expected a key\n"; continue; }
                 auto size = strlen(key);
                 auto mes = NewHoldedMessage<TWriteKv>(sizeof(TWriteKv) + size);
                 mes->Flags = TCommandRequest::EWrite;
@@ -132,6 +70,7 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
                 req = mes;
             } else {
                 std::cout << "Cannot parse command: " << strLine << "\n";
+                continue;
             }
 
             co_await TMessageWriter(socket).Write(std::move(req));

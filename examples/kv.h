@@ -7,6 +7,7 @@
 
 class TKv: public IRsm {
 public:
+    void Validate(TMessageHolder<TCommandRequest> message) const override;
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
