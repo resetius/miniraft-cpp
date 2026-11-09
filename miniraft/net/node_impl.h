@@ -70,9 +70,12 @@ NNet::TVoidSuspendedTask TNode<TSocket>::DoConnect() {
     Connected = false;
     while (!Connected) {
         try {
-            auto deadline = NNet::TClock::now() + std::chrono::milliseconds(100); // TODO: broken timeout in coroio
             Socket = SocketFactory(*Address);
-            co_await Socket.Connect(deadline);
+            // The dependency's finite deadline can leave I/O and timer wakeups
+            // registered for the same coroutine after a timeout. Use its default
+            // I/O-only connect until cancellation of both sources is supported.
+            // TCP connect failure timing is therefore controlled by the OS.
+            co_await Socket.Connect();
             std::cout << "Connected " << Name << "\n";
             Connected = true;
         } catch (const std::exception& ex) {
