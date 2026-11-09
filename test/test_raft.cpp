@@ -675,6 +675,8 @@ void test_disk_state(void**) {
     assert_int_equal(state.LastLogIndex, 0);
     assert_int_equal(state.CurrentTerm, 1);
     assert_int_equal(state.VotedFor, 0);
+    state.CurrentTerm = 6;
+    state.Commit();
     auto log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6});
     for (auto entry : log) {
         state.Append(entry);
@@ -730,13 +732,15 @@ void test_disk_state_restore(void**) {
     assert_int_equal(state->LastLogIndex, 0);
     assert_int_equal(state->CurrentTerm, 1);
     assert_int_equal(state->VotedFor, 0);
+    // Raft persists a new current term before appending entries from that term.
+    state->CurrentTerm = 10;
+    state->Commit();
     auto log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6});
     for (auto entry : log) {
         state->Append(entry);
     }
     assert_int_equal(state->LastLogIndex, 9);
     state->VotedFor = 2;
-    state->CurrentTerm = 10;
     state->Commit();
 
     state.reset();
