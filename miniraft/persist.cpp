@@ -51,6 +51,9 @@ TDiskState::TDiskState(const std::string& name, uint32_t id)
             throw std::runtime_error("Invalid Raft log offset: " + indexPath);
         }
         auto entry = Get(i);
+        if (entry->Term < LastLogTerm) {
+            throw std::runtime_error("Decreasing Raft log terms: " + entriesPath);
+        }
         expectedOffset += entry->Len;
         LastLogTerm = entry->Term;
     }
@@ -94,6 +97,10 @@ TMessageHolder<TMessage> TDiskState::Read() const
     auto message = NewHoldedMessage<TMessage>(type, len);
     if (!Entries.read(reinterpret_cast<char*>(message->Value), len - sizeof(TMessage))) {
         Fail("Cannot read Raft log entry");
+    }
+    const auto term = message.Cast<TLogEntry>()->Term;
+    if (!term || term > CurrentTerm) {
+        Fail("Raft log term outside current term range");
     }
     return message;
 }

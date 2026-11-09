@@ -173,6 +173,73 @@ void test_truncate_updates_last_term_and_restarts(void**) {
     assert_int_equal(recovered.Get(1)->Term, 6);
     assert_int_equal(recovered.LastLogTerm, 6);
 }
+void test_zero_log_entry_terms_are_rejected_without_mutation(void**) {
+    for (uint64_t index : {0, 1}) {
+        TFiles files;
+        files.Seed();
+        files.Overwrite("entries", index * sizeof(TLogEntry) + sizeof(TMessage), uint64_t(0));
+        files.RejectRecovery();
+    }
+}
+void test_log_terms_newer_than_current_term_are_rejected(void**) {
+    for (uint64_t term : {uint64_t(8), UINT64_MAX}) {
+        TFiles files;
+        files.Seed();
+        files.Overwrite("entries", sizeof(TLogEntry) + sizeof(TMessage), term);
+        files.RejectRecovery();
+    }
+    TFiles files;
+    files.Seed();
+    files.Overwrite("state", sizeof(uint64_t), uint64_t(4));
+    files.RejectRecovery();
+}
+void test_decreasing_log_terms_are_rejected(void**) {
+    for (uint64_t index : {0, 1}) {
+        TFiles files;
+        files.Seed();
+        files.Overwrite("entries", index * sizeof(TLogEntry) + sizeof(TMessage), uint64_t(index == 0 ? 6 : 1));
+        files.RejectRecovery();
+    }
+}
+void test_equal_and_skipped_terms_and_full_width_current_term_recover(void**) {
+    TFiles files;
+    {
+        TDiskState state(files.Name, 1);
+        state.CurrentTerm = UINT64_MAX;
+        state.VotedFor = 2;
+        for (uint64_t term : {uint64_t(1), uint64_t(1), uint64_t(5), UINT64_MAX, UINT64_MAX}) {
+            auto entry = NewHoldedMessage<TLogEntry>();
+            entry->Term = term;
+            state.Append(entry);
+        }
+    }
+    TDiskState recovered(files.Name, 1);
+    assert_true(recovered.CurrentTerm == UINT64_MAX);
+    assert_true(recovered.LastLogTerm == UINT64_MAX);
+    assert_int_equal(recovered.LastLogIndex, 5);
+    assert_int_equal(recovered.VotedFor, 2);
+    assert_int_equal(recovered.Get(1)->Term, 1);
+    assert_int_equal(recovered.Get(2)->Term, 1);
+    assert_int_equal(recovered.Get(3)->Term, 5);
+}
+void test_invalid_terms_in_logically_removed_suffix_are_ignored(void**) {
+    TFiles files;
+    files.Seed();
+    {
+        TDiskState state(files.Name, 1);
+        state.RemoveLast();
+    }
+    files.Overwrite("entries", sizeof(TLogEntry) + sizeof(TMessage), uint64_t(0));
+    TDiskState recovered(files.Name, 1);
+    assert_int_equal(recovered.LastLogIndex, 1);
+    assert_int_equal(recovered.LastLogTerm, 2);
+    auto entry = NewHoldedMessage<TLogEntry>();
+    entry->Term = 7;
+    recovered.Append(entry);
+    assert_int_equal(recovered.LastLogIndex, 2);
+    assert_int_equal(recovered.Get(2)->Term, 7);
+}
+
 void test_live_storage_failure_is_reported(void**) {
     TFiles files;
     files.Seed();
@@ -182,6 +249,30 @@ void test_live_storage_failure_is_reported(void**) {
     try { state.Get(1); } catch (const std::runtime_error&) { rejected = true; }
     assert_true(rejected);
 }
+#ifndef _WIN32
+void test_live_invalid_log_term_is_fatal(void**) {
+    for (uint64_t term : {uint64_t(0), uint64_t(8)}) {
+        TFiles files;
+        files.Seed();
+        const auto child = fork();
+        assert_true(child >= 0);
+        if (child == 0) {
+            std::set_terminate([] { _exit(73); });
+            try {
+                TDiskState state(files.Name, 1);
+                files.Overwrite("entries", sizeof(TMessage), term);
+                state.Get(1);
+            } catch (...) { _exit(74); }
+            _exit(75);
+        }
+        int status = 0;
+        assert_int_equal(waitpid(child, &status, 0), child);
+        assert_true(WIFEXITED(status));
+        assert_int_equal(WEXITSTATUS(status), 73);
+    }
+}
+
+#endif
 }
 
 int main() {
@@ -197,6 +288,14 @@ int main() {
         cmocka_unit_test(test_invalid_log_count_is_rejected),
         cmocka_unit_test(test_truncate_updates_last_term_and_restarts),
         cmocka_unit_test(test_live_storage_failure_is_reported),
+        cmocka_unit_test(test_zero_log_entry_terms_are_rejected_without_mutation),
+        cmocka_unit_test(test_log_terms_newer_than_current_term_are_rejected),
+        cmocka_unit_test(test_decreasing_log_terms_are_rejected),
+        cmocka_unit_test(test_equal_and_skipped_terms_and_full_width_current_term_recover),
+        cmocka_unit_test(test_invalid_terms_in_logically_removed_suffix_are_ignored),
+#ifndef _WIN32
+        cmocka_unit_test(test_live_invalid_log_term_is_fatal),
+#endif
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
