@@ -121,6 +121,11 @@ public:
 
     void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
+    // Called after a failed outbound read, once its reader has unwound. A stale
+    // reader cannot disconnect a newer connection or its pending connector.
+    void Disconnect() { Disconnect(ConnectionGeneration); }
+    void Disconnect(uint64_t generation);
+    uint64_t GetConnectionGeneration() const { return ConnectionGeneration; }
     bool IsConnected() { return Connected; }
     TSocket& Sock() {
         return Socket;
@@ -138,6 +143,7 @@ private:
     std::function<TSocket(const NNet::TAddress&)> SocketFactory;
     TSocket Socket;
     bool Connected = false;
+    uint64_t ConnectionGeneration = 0;
 
     std::coroutine_handle<> Drainer;
     std::coroutine_handle<> Connector;
@@ -188,3 +194,4 @@ private:
     TVolatileState VolatileFields;
 };
 
+#include "node_impl.h"
