@@ -597,6 +597,7 @@ ITimeSource::Time TRaft::MakeElection(ITimeSource::Time now) {
 }
 
 uint64_t TRaft::Append(TMessageHolder<TLogEntry> entry) {
+    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can propose log entries");
     if (State->LastLogIndex >= uint64_t(INT64_MAX)) throw std::overflow_error("Raft log index exhausted");
     if (!entry || entry->Type != uint32_t(EMessageType::LOG_ENTRY))
         throw TMessageError("Invalid proposed log entry");
