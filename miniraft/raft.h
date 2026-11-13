@@ -98,6 +98,8 @@ public:
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
 
+    // Local proposals require leader state. Role rejection leaves storage and
+    // the supplied entry unchanged; followers receive entries through Process.
     uint64_t Append(TMessageHolder<TLogEntry> entry);
     uint32_t GetLeaderId() const;
     uint64_t GetLastIndex() const;

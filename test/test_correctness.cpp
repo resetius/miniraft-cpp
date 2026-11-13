@@ -183,6 +183,51 @@ TMessageHolder<TLogEntry> LogValue(const std::string& value) {
     return entry;
 }
 
+void test_nonleader_proposal_rejection_preserves_store_and_input(void**) {
+    for (int phase = 0; phase < 3; ++phase) {
+        TCluster cluster(3);
+        auto raft = cluster.Nodes[0];
+        if (phase == 1) {
+            raft->ProcessTimeout(cluster.Now);
+            assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+        } else if (phase == 2) {
+            cluster.Elect(1); cluster.Replicate(1);
+            auto vote = NewHoldedMessage(
+                TMessageEx{.Src = 2, .Dst = 1, .Term = raft->GetState()->CurrentTerm + 1},
+                TRequestVoteRequest{.LastLogIndex = raft->GetLastIndex(),
+                    .LastLogTerm = raft->GetState()->LastLogTerm, .CandidateId = 2});
+            raft->Process(cluster.Now, vote);
+            assert_int_equal(raft->CurrentStateName(), EState::FOLLOWER);
+        }
+        const auto before = static_cast<TStateFields>(*raft->GetState());
+        auto entry = LogValue("must not be proposed"); entry->Term = 77;
+        bool rejected = false;
+        try { raft->Append(entry); } catch (const std::logic_error&) { rejected = true; }
+        assert_true(rejected);
+        assert_true(static_cast<TStateFields>(*raft->GetState()) == before);
+        assert_int_equal(entry->Term, 77);
+    }
+}
+
+void test_follower_proposal_cannot_diverge_same_term_committed_command(void**) {
+    TCluster cluster(3); cluster.Elect(1); cluster.Replicate(1);
+    TWriteClient leader(cluster.Nodes[0]), follower(cluster.Nodes[1]), other(cluster.Nodes[2]);
+    bool rejected = false;
+    try { cluster.Nodes[1]->Append(LogValue("rogue")); }
+    catch (const std::logic_error&) { rejected = true; }
+    leader.Write(77, "valid"); // Same index/term as the unauthorized follower entry on old code.
+    cluster.Replicate(1, true, true);
+    leader.Poll(); follower.Poll(); other.Poll();
+    for (auto* client : {&leader, &follower, &other}) {
+        assert_int_equal(client->Rsm->Applied.size(), 1);
+        assert_string_equal(client->Rsm->Applied[0].c_str(), "valid");
+    }
+    cluster.AssertCommittedPrefix();
+    assert_true(rejected);
+    assert_int_equal(leader.Replies.size(), 1);
+    assert_int_equal(leader.Replies[0].Error, 0);
+}
+
 void test_forwarded_write_and_strong_read_complete_through_real_raft(void**) {
     TCluster cluster(3);
     cluster.Elect(1);
@@ -854,6 +899,8 @@ void test_cluster_restart_preserves_applied_history_and_rebuilds_volatile_applic
 
 int main() {
     const CMUnitTest tests[] = {
+        cmocka_unit_test(test_nonleader_proposal_rejection_preserves_store_and_input),
+        cmocka_unit_test(test_follower_proposal_cannot_diverge_same_term_committed_command),
         cmocka_unit_test(test_recovered_application_progress_is_not_rewound),
         cmocka_unit_test(test_application_progress_never_decreases_on_lower_commit_input),
         cmocka_unit_test(test_recovered_applied_prefix_is_protected_and_suffix_can_change),
