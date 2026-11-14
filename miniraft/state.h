@@ -40,6 +40,9 @@ struct IState: TStateFields {
     virtual bool SupportsVoterBinding() const { return false; }
     virtual std::vector<uint32_t> GetBoundVoters() const { return {}; }
     virtual void BindVoters(const std::vector<uint32_t>&) { throw std::logic_error("Storage voter binding is unsupported"); }
+    // Storage backends can close startup-only migration paths once a Raft
+    // instance has finished validating and attached to this state.
+    virtual void MarkRaftStarted() {}
     virtual ~IState() = default;
 
     uint64_t LogTerm(int64_t index = -1) const {

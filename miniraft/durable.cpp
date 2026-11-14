@@ -97,6 +97,7 @@ struct TDurableState::TImpl {
     std::shared_ptr<const TSnapshot> Snapshot;
     std::vector<uint32_t> Voters;
     bool Recovered = false;
+    bool RaftStarted = false;
     THook Hook;
     std::string File, Temp;
 #ifdef __linux__
@@ -334,6 +335,8 @@ void TDurableState::InstallSnapshot(const TSnapshot& snapshot) {
 
 std::vector<uint32_t> TDurableState::GetBoundVoters() const { return Impl->Voters; }
 
+void TDurableState::MarkRaftStarted() { Impl->RaftStarted = true; }
+
 void TDurableState::BindVoters(const std::vector<uint32_t>& voters) {
     ValidateVoterBinding(*this, Impl->Voters, voters);
     if (Impl->Voters == voters) return;
@@ -343,6 +346,8 @@ void TDurableState::BindVoters(const std::vector<uint32_t>& voters) {
 
 void TDurableState::BindVotersFromTrustedBaseline(const std::vector<uint32_t>& voters) {
     ValidateFixedVoters(voters);
+    if (Impl->RaftStarted)
+        throw std::invalid_argument("Trusted legacy voter migration must happen before Raft startup");
     if (!Impl->Voters.empty()) {
         if (Impl->Voters == voters) return;
         throw std::invalid_argument("Durable voter binding already exists");

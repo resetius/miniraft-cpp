@@ -298,6 +298,7 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
     if (snapshot) {
         VolatileState->CommitIndex = State->SnapshotIndex;
     }
+    State->MarkRaftStarted();
 }
 
 void TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message) {

@@ -570,6 +570,25 @@ void test_trusted_legacy_voter_baseline_refuses_configuration_logs(void**) {
     std::ifstream unchanged(path, std::ios::binary);
     assert_true(std::string(std::istreambuf_iterator<char>(unchanged), {}) == original);
 }
+void test_trusted_legacy_voter_baseline_must_precede_raft_startup(void**) {
+    TFiles files;
+    {
+        TDurableState legacy(files.Name, 1);
+        legacy.CurrentTerm = 2; legacy.VotedFor = 1;
+        legacy.Commit();
+    }
+    const auto path = files.Name + ".durable.1";
+    std::ifstream originalInput(path, std::ios::binary);
+    const std::string original(std::istreambuf_iterator<char>(originalInput), {});
+    auto state = std::make_shared<TDurableState>(files.Name, 1);
+    TRaft raft(state, 1, Peers(1, 3));
+    assert_true(raft.GetVoterIds() == (std::vector<uint32_t>{1, 2, 3}));
+    assert_true(state->GetBoundVoters().empty());
+    Reject([&] { state->BindVotersFromTrustedBaseline({1, 2, 4}); });
+    assert_true(state->GetBoundVoters().empty()); assert_int_equal(state->VotedFor, 1);
+    std::ifstream unchanged(path, std::ios::binary);
+    assert_true(std::string(std::istreambuf_iterator<char>(unchanged), {}) == original);
+}
 void test_trusted_legacy_voter_binding_is_atomic_at_each_publish_stage(void**) {
     using TStage = TDurableState::EStage;
     const std::vector<TStage> stages = {TStage::TempCreated, TStage::Written, TStage::FileSynced,
@@ -740,6 +759,7 @@ int main() {
         cmocka_unit_test(test_durable_v2_snapshot_adoption_preserves_vote_log_and_application),
         cmocka_unit_test(test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2),
         cmocka_unit_test(test_trusted_legacy_voter_baseline_refuses_configuration_logs),
+        cmocka_unit_test(test_trusted_legacy_voter_baseline_must_precede_raft_startup),
         cmocka_unit_test(test_trusted_legacy_voter_binding_is_atomic_at_each_publish_stage),
         cmocka_unit_test(test_legacy_disk_backend_cannot_enable_learner_roles),
         cmocka_unit_test(test_legacy_leader_cannot_stage_online_learner),
