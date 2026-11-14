@@ -18,4 +18,8 @@ live voter reconfiguration. Tests verify that a post-start migration to a
 different set is rejected without changing the binding or file; existing tests
 continue to cover migration before startup and recovered restart behavior.
 
+The [alpha.52 follow-up](legacy-voter-proof-startup.md) closes the remaining
+startup gap: recovered log-only durable stores without a voter binding now fail
+before Raft starts, requiring this migration path or another valid voter proof.
+
 Self-review completed; no independent reviewer approval is claimed.

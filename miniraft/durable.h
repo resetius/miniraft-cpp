@@ -26,6 +26,7 @@ public:
     std::shared_ptr<const TSnapshot> GetSnapshot() const override;
     void InstallSnapshot(const TSnapshot& snapshot) override;
     bool SupportsVoterBinding() const override { return true; }
+    bool HasUnboundRecoveredState() const override;
     std::vector<uint32_t> GetBoundVoters() const override;
     void BindVoters(const std::vector<uint32_t>& voters) override;
     void MarkRaftStarted() override;

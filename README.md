@@ -90,6 +90,8 @@ The [trusted legacy voter binding follow-up](docs/trusted-legacy-voter-binding.m
 adds an explicit migration path when an operator has an independent record of the original set.
 The [migration lifecycle follow-up](docs/trusted-legacy-voter-lifecycle.md)
 enforces that migration happens before Raft attaches to an unbound legacy store.
+The [legacy voter startup proof follow-up](docs/legacy-voter-proof-startup.md)
+requires recovered durable stores to provide voter proof before Raft can start.
 The [stable snapshot runtime follow-up](docs/stable-configuration-snapshot-runtime.md)
 carries that identity through restore, InstallSnapshot, and later compaction.
 The [metadata continuity follow-up](docs/stable-snapshot-metadata-continuity.md)

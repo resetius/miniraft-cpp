@@ -38,6 +38,9 @@ struct IState: TStateFields {
     virtual std::shared_ptr<const TSnapshot> GetSnapshot() const { return {}; }
     virtual void InstallSnapshot(const TSnapshot&) { throw std::logic_error("Storage snapshots are unsupported"); }
     virtual bool SupportsVoterBinding() const { return false; }
+    // True when this backend recovered a persistent image without a stored
+    // voter identity; Raft must obtain proof before serving this state.
+    virtual bool HasUnboundRecoveredState() const { return false; }
     virtual std::vector<uint32_t> GetBoundVoters() const { return {}; }
     virtual void BindVoters(const std::vector<uint32_t>&) { throw std::logic_error("Storage voter binding is unsupported"); }
     // Storage backends can close startup-only migration paths once a Raft

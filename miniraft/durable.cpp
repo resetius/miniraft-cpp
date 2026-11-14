@@ -335,6 +335,10 @@ void TDurableState::InstallSnapshot(const TSnapshot& snapshot) {
 
 std::vector<uint32_t> TDurableState::GetBoundVoters() const { return Impl->Voters; }
 
+bool TDurableState::HasUnboundRecoveredState() const {
+    return Impl->Recovered && Impl->Voters.empty();
+}
+
 void TDurableState::MarkRaftStarted() { Impl->RaftStarted = true; }
 
 void TDurableState::BindVoters(const std::vector<uint32_t>& voters) {

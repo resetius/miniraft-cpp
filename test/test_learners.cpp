@@ -447,10 +447,12 @@ void test_legacy_recovered_vote_outside_voters_preserves_storage(void**) {
 void test_durable_voter_binding_is_atomic_before_first_vote(void**) {
     using TStage = TDurableState::EStage;
     for (auto stage : {TStage::TempCreated, TStage::Written, TStage::FileSynced, TStage::Renamed, TStage::DirectorySynced}) {
-        TFiles files; { TDurableState initial(files.Name, 4); }
+        TFiles files;
         auto child = fork(); assert_true(child >= 0);
         if (!child) {
-            try { auto state = std::make_shared<TDurableState>(files.Name, 4, [&](auto point) { if (point == stage) _exit(90); });
+            bool armed = false;
+            try { auto state = std::make_shared<TDurableState>(files.Name, 4, [&](auto point) { if (armed && point == stage) _exit(90); });
+                armed = true;
                 TRaft raft(state, 4, Peers(4), {4});
             } catch (...) { _exit(91); } _exit(92);
         }
@@ -472,6 +474,7 @@ void test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2(void**) {
         auto recovered = std::make_shared<TDurableState>(files.Name, 1);
         assert_int_equal(recovered->CurrentTerm, 1);
         assert_int_equal(recovered->LastLogIndex, 0);
+        Reject([&] { TRaft missingBaseline(recovered, 1, Peers(1, 3)); });
         recovered->BindVotersFromTrustedBaseline({1, 2, 3});
         assert_true(recovered->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
         TRaft raft(recovered, 1, Peers(1, 3));
@@ -581,13 +584,21 @@ void test_trusted_legacy_voter_baseline_must_precede_raft_startup(void**) {
     std::ifstream originalInput(path, std::ios::binary);
     const std::string original(std::istreambuf_iterator<char>(originalInput), {});
     auto state = std::make_shared<TDurableState>(files.Name, 1);
-    TRaft raft(state, 1, Peers(1, 3));
-    assert_true(raft.GetVoterIds() == (std::vector<uint32_t>{1, 2, 3}));
+    Reject([&] { TRaft missingBaseline(state, 1, Peers(1, 3)); });
     assert_true(state->GetBoundVoters().empty());
-    Reject([&] { state->BindVotersFromTrustedBaseline({1, 2, 4}); });
-    assert_true(state->GetBoundVoters().empty()); assert_int_equal(state->VotedFor, 1);
+    assert_int_equal(state->VotedFor, 1);
     std::ifstream unchanged(path, std::ios::binary);
     assert_true(std::string(std::istreambuf_iterator<char>(unchanged), {}) == original);
+
+    state->BindVotersFromTrustedBaseline({1, 2, 3});
+    auto raft = std::make_shared<TRaft>(state, 1, Peers(1, 3));
+    assert_true(raft->GetVoterIds() == (std::vector<uint32_t>{1, 2, 3}));
+    assert_true(state->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
+    std::ifstream migratedInput(path, std::ios::binary);
+    const std::string migrated(std::istreambuf_iterator<char>(migratedInput), {});
+    Reject([&] { state->BindVotersFromTrustedBaseline({1, 2, 3}); });
+    std::ifstream after(path, std::ios::binary);
+    assert_true(std::string(std::istreambuf_iterator<char>(after), {}) == migrated);
 }
 void test_trusted_legacy_voter_binding_is_atomic_at_each_publish_stage(void**) {
     using TStage = TDurableState::EStage;

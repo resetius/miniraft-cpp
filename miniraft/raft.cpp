@@ -277,6 +277,8 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
     } else if (State->SnapshotIndex || State->SnapshotTerm) {
         throw std::invalid_argument("Compacted state is missing its snapshot");
     }
+    if (State->HasUnboundRecoveredState() && !snapshot)
+        throw std::invalid_argument("Recovered durable state requires voter proof before Raft startup");
     // Reject before binding voters or serving traffic. Current Raft cannot
     // interpret configuration entries, including uncommitted suffix entries.
     auto previousTerm = State->SnapshotTerm;
