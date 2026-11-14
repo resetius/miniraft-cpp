@@ -5,7 +5,12 @@ joint and MRFTS003 stable snapshots so offline tools can validate configuration
 history after restart. A store must already have a voter binding, and
 `snapshot.Voters` must equal that binding. Durable recovery checks the same
 invariant before exposing the image. An unbound store cannot infer its original
-voter set from configuration metadata and continues to reject the snapshot.
+voter set from configuration metadata. The [alpha.50 follow-up](trusted-legacy-voter-binding.md)
+adds an explicit durable migration API that accepts a caller-supplied trusted
+original set, validates it against the recovered vote, snapshot, and retained
+log, then persists the binding before Raft startup. The API does not establish
+that the caller's assertion is true; absent an independent trusted baseline, the
+store still cannot infer its voter set.
 
 The durable file layout is unchanged. The backend persists the snapshot together
 with its existing voter binding; it does not reinterpret that binding from the

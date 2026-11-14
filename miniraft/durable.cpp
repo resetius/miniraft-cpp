@@ -96,6 +96,7 @@ struct TDurableState::TImpl {
     std::vector<TMessageHolder<TLogEntry>> Log;
     std::shared_ptr<const TSnapshot> Snapshot;
     std::vector<uint32_t> Voters;
+    bool Recovered = false;
     THook Hook;
     std::string File, Temp;
 #ifdef __linux__
@@ -201,6 +202,7 @@ TDurableState::TDurableState(const std::string& name, uint32_t id, THook hook)
     // image. Stabilize the selected image and its name before serving requests.
     Sync(file.Value);
     Sync(Impl->Directory.Value);
+    Impl->Recovered = true;
     // A leftover temp is never a recovery candidate, even if its checksum is valid.
 #endif
 }
@@ -337,4 +339,46 @@ void TDurableState::BindVoters(const std::vector<uint32_t>& voters) {
     if (Impl->Voters == voters) return;
     Impl->Voters = voters;
     Commit(); // Bind before acknowledging any vote/replication traffic.
+}
+
+void TDurableState::BindVotersFromTrustedBaseline(const std::vector<uint32_t>& voters) {
+    ValidateFixedVoters(voters);
+    if (!Impl->Voters.empty()) {
+        if (Impl->Voters == voters) return;
+        throw std::invalid_argument("Durable voter binding already exists");
+    }
+    if (!CurrentTerm || LastLogIndex > uint64_t(INT64_MAX) || SnapshotIndex > LastLogIndex ||
+        LastLogIndex - SnapshotIndex != Impl->Log.size())
+        throw std::invalid_argument("Invalid legacy state bounds");
+    if (!Impl->Recovered)
+        throw std::invalid_argument("Trusted legacy baseline is only for recovered state");
+    if (VotedFor && !std::binary_search(voters.begin(), voters.end(), VotedFor))
+        throw std::invalid_argument("Stored vote is outside the trusted voter baseline");
+
+    if (Impl->Snapshot) {
+        const auto& snapshot = *Impl->Snapshot;
+        ValidateSnapshot(snapshot);
+        if (snapshot.HasConfigurationMetadata() || snapshot.Index != SnapshotIndex ||
+            snapshot.Term != SnapshotTerm || snapshot.Term > CurrentTerm || snapshot.Voters != voters)
+            throw std::invalid_argument("Legacy snapshot does not match the trusted voter baseline");
+    } else if (SnapshotIndex || SnapshotTerm) {
+        throw std::invalid_argument("Legacy compacted state is missing its snapshot");
+    }
+
+    auto previousTerm = SnapshotTerm;
+    for (uint64_t index = SnapshotIndex + 1; index <= LastLogIndex; ++index) {
+        if (RetainedLogFlags(index) & TLogEntry::EConfiguration)
+            throw std::invalid_argument("Configuration log migration requires an explicit history baseline");
+        const auto term = RetainedLogTerm(index);
+        if (!term || term < previousTerm || term > CurrentTerm)
+            throw std::invalid_argument("Invalid legacy log term sequence");
+        previousTerm = term;
+    }
+    if (LastLogTerm != previousTerm)
+        throw std::invalid_argument("Legacy log last term mismatch");
+
+    // Persist the operator-supplied baseline before Raft can serve votes or
+    // install configuration snapshots against it.
+    Impl->Voters = voters;
+    Commit();
 }

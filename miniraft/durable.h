@@ -28,6 +28,9 @@ public:
     bool SupportsVoterBinding() const override { return true; }
     std::vector<uint32_t> GetBoundVoters() const override;
     void BindVoters(const std::vector<uint32_t>& voters) override;
+    // Explicit legacy migration. The caller asserts that voters is the
+    // complete original fixed voter set, verified outside this store.
+    void BindVotersFromTrustedBaseline(const std::vector<uint32_t>& voters);
 private:
     struct TImpl;
     std::unique_ptr<TImpl> Impl;

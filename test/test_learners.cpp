@@ -418,7 +418,10 @@ struct TFiles {
     std::filesystem::path Directory; std::string Name;
     TFiles() {
         static unsigned next = 0;
-        Directory = std::filesystem::temp_directory_path() / ("miniraft-learners-" + std::to_string(getpid()) + "-" + std::to_string(next++));
+        do {
+            Directory = std::filesystem::temp_directory_path() /
+                ("miniraft-learners-" + std::to_string(getpid()) + "-" + std::to_string(next++));
+        } while (std::filesystem::exists(Directory));
         assert_true(std::filesystem::create_directory(Directory)); Name = (Directory / "raft").string();
     }
     ~TFiles() { std::error_code ignored; std::filesystem::remove_all(Directory, ignored); }
@@ -457,6 +460,161 @@ void test_durable_voter_binding_is_atomic_before_first_vote(void**) {
         if (stage >= TStage::Renamed) assert_true(state.GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
         else assert_true(state.GetBoundVoters().empty());
         assert_int_equal(state.CurrentTerm, 1); assert_int_equal(state.VotedFor, 0); assert_int_equal(state.LastLogIndex, 0);
+    }
+}
+void test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2(void**) {
+    {
+        TFiles files;
+        {
+            TDurableState fresh(files.Name, 1);
+            Reject([&] { fresh.BindVotersFromTrustedBaseline({1, 2, 3}); });
+        }
+        auto recovered = std::make_shared<TDurableState>(files.Name, 1);
+        assert_int_equal(recovered->CurrentTerm, 1);
+        assert_int_equal(recovered->LastLogIndex, 0);
+        recovered->BindVotersFromTrustedBaseline({1, 2, 3});
+        assert_true(recovered->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
+        TRaft raft(recovered, 1, Peers(1, 3));
+        assert_true(raft.GetVoterIds() == (std::vector<uint32_t>{1, 2, 3}));
+    }
+    {
+        TFiles files; TStateFields before;
+        {
+            TDurableState legacy(files.Name, 1);
+            legacy.CurrentTerm = 3; legacy.VotedFor = 1;
+            auto entry = NewHoldedMessage<TLogEntry>(); entry->Term = 2;
+            legacy.Append(entry); before = legacy;
+        }
+        const auto path = files.Name + ".durable.1";
+        std::ifstream originalInput(path, std::ios::binary);
+        const std::string original(std::istreambuf_iterator<char>(originalInput), {});
+        assert_true(original.substr(0, 8) == "MRFTD001");
+
+        {
+            auto state = std::make_shared<TDurableState>(files.Name, 1);
+            assert_true(state->GetBoundVoters().empty());
+            Reject([&] { state->BindVoters({1, 2, 3}); });
+            Reject([&] { state->BindVotersFromTrustedBaseline({2, 3}); });
+            assert_true(static_cast<TStateFields>(*state) == before);
+            assert_true(state->GetBoundVoters().empty());
+            std::ifstream unchanged(path, std::ios::binary);
+            assert_true(std::string(std::istreambuf_iterator<char>(unchanged), {}) == original);
+
+            state->BindVotersFromTrustedBaseline({1, 2, 3});
+            assert_true(static_cast<TStateFields>(*state) == before);
+            assert_true(state->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
+            assert_int_equal(state->RetainedLogTerm(1), 2);
+        }
+        { std::ifstream migrated(path, std::ios::binary); std::string magic(8, '\0');
+          migrated.read(magic.data(), magic.size()); assert_true(magic == "MRFTD003"); }
+        auto recovered = std::make_shared<TDurableState>(files.Name, 1);
+        assert_true(static_cast<TStateFields>(*recovered) == before);
+        assert_true(recovered->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
+        TRaft raft(recovered, 1, Peers(1, 3));
+        assert_true(raft.GetVoterIds() == (std::vector<uint32_t>{1, 2, 3}));
+    }
+    {
+        TFiles files; TStateFields before; std::string application;
+        {
+            TDurableState legacy(files.Name, 1); TKv image;
+            legacy.CurrentTerm = 3; legacy.VotedFor = 1;
+            auto entry = image.Prepare(Command("migrated", "value")); entry->Term = 2;
+            legacy.Append(entry); image.Write(entry, 1);
+            application = image.SaveSnapshot();
+            legacy.InstallSnapshot({1, 2, {1, 2, 3}, application});
+            auto tail = NewHoldedMessage<TLogEntry>(); tail->Term = 3; legacy.Append(tail);
+            before = legacy;
+        }
+        const auto path = files.Name + ".durable.1";
+        std::ifstream originalInput(path, std::ios::binary);
+        const std::string original(std::istreambuf_iterator<char>(originalInput), {});
+        assert_true(original.substr(0, 8) == "MRFTD002");
+
+        {
+            auto state = std::make_shared<TDurableState>(files.Name, 1);
+            Reject([&] { state->BindVotersFromTrustedBaseline({1, 2}); });
+            assert_true(static_cast<TStateFields>(*state) == before);
+            assert_true(state->GetBoundVoters().empty());
+            std::ifstream unchanged(path, std::ios::binary);
+            assert_true(std::string(std::istreambuf_iterator<char>(unchanged), {}) == original);
+            state->BindVotersFromTrustedBaseline({1, 2, 3});
+            assert_true(static_cast<TStateFields>(*state) == before);
+            assert_true(state->GetSnapshot()->Data == application);
+            assert_true(state->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
+        }
+        { std::ifstream migrated(path, std::ios::binary); std::string magic(8, '\0');
+          migrated.read(magic.data(), magic.size()); assert_true(magic == "MRFTD003"); }
+        auto recovered = std::make_shared<TDurableState>(files.Name, 1);
+        assert_true(static_cast<TStateFields>(*recovered) == before);
+        assert_true(recovered->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
+        auto raft = std::make_shared<TRaft>(recovered, 1, Peers(1, 3));
+        auto app = std::make_shared<TKv>(); TRequestProcessor processor(raft, app, {});
+        assert_true(Read(*app, "migrated") == "value");
+        assert_true(bool(recovered->Get(2)));
+    }
+}
+void test_trusted_legacy_voter_baseline_refuses_configuration_logs(void**) {
+    TFiles files;
+    {
+        TDurableState legacy(files.Name, 1);
+        legacy.CurrentTerm = 2;
+        auto entry = NewHoldedMessage<TLogEntry>(); entry->Term = 2; entry->Flags = TLogEntry::EConfiguration;
+        legacy.Append(entry);
+    }
+    const auto path = files.Name + ".durable.1";
+    std::ifstream originalInput(path, std::ios::binary);
+    const std::string original(std::istreambuf_iterator<char>(originalInput), {});
+    auto state = std::make_shared<TDurableState>(files.Name, 1);
+    Reject([&] { state->BindVotersFromTrustedBaseline({1, 2, 3}); });
+    assert_true(state->GetBoundVoters().empty()); assert_int_equal(state->LastLogIndex, 1);
+    std::ifstream unchanged(path, std::ios::binary);
+    assert_true(std::string(std::istreambuf_iterator<char>(unchanged), {}) == original);
+}
+void test_trusted_legacy_voter_binding_is_atomic_at_each_publish_stage(void**) {
+    using TStage = TDurableState::EStage;
+    const std::vector<TStage> stages = {TStage::TempCreated, TStage::Written, TStage::FileSynced,
+        TStage::Renamed, TStage::DirectorySynced};
+    for (bool withSnapshot : {false, true}) {
+        for (auto stage : stages) {
+            TFiles files;
+            {
+                TDurableState legacy(files.Name, 1); legacy.CurrentTerm = 3; legacy.VotedFor = 1;
+                if (withSnapshot) {
+                    TKv image; auto entry = image.Prepare(Command("atomic", "snapshot"));
+                    entry->Term = 2; legacy.Append(entry); image.Write(entry, 1);
+                    legacy.InstallSnapshot({1, 2, {1, 2, 3}, image.SaveSnapshot()});
+                    auto tail = NewHoldedMessage<TLogEntry>(); tail->Term = 3; legacy.Append(tail);
+                } else {
+                    auto entry = NewHoldedMessage<TLogEntry>(); entry->Term = 2; legacy.Append(entry);
+                }
+            }
+            auto child = fork(); assert_true(child >= 0);
+            if (!child) {
+                try {
+                    TDurableState state(files.Name, 1, [&](auto point) {
+                        if (point == stage) _exit(90);
+                    });
+                    state.BindVotersFromTrustedBaseline({1, 2, 3});
+                } catch (...) { _exit(91); }
+                _exit(92);
+            }
+            int status = 0; assert_int_equal(waitpid(child, &status, 0), child);
+            assert_true(WIFEXITED(status)); assert_int_equal(WEXITSTATUS(status), 90);
+
+            TDurableState recovered(files.Name, 1);
+            if (stage < TStage::Renamed) {
+                assert_true(recovered.GetBoundVoters().empty());
+                assert_int_equal(recovered.LastLogIndex, withSnapshot ? 2 : 1);
+            } else {
+                assert_true(recovered.GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
+                assert_int_equal(recovered.LastLogIndex, withSnapshot ? 2 : 1);
+            }
+            if (withSnapshot) {
+                assert_true(bool(recovered.GetSnapshot()));
+                assert_int_equal(recovered.SnapshotIndex, 1);
+                assert_int_equal(recovered.SnapshotTerm, 2);
+            }
+        }
     }
 }
 void test_durable_learner_snapshot_suffix_and_role_survive_restart(void**) {
@@ -580,6 +738,9 @@ int main() {
         cmocka_unit_test(test_durable_learner_snapshot_suffix_and_role_survive_restart),
         cmocka_unit_test(test_durable_v3_corrupt_roles_fail_without_rewriting),
         cmocka_unit_test(test_durable_v2_snapshot_adoption_preserves_vote_log_and_application),
+        cmocka_unit_test(test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2),
+        cmocka_unit_test(test_trusted_legacy_voter_baseline_refuses_configuration_logs),
+        cmocka_unit_test(test_trusted_legacy_voter_binding_is_atomic_at_each_publish_stage),
         cmocka_unit_test(test_legacy_disk_backend_cannot_enable_learner_roles),
         cmocka_unit_test(test_legacy_leader_cannot_stage_online_learner),
         cmocka_unit_test(test_online_learner_staging_does_not_change_durable_binding),
