@@ -615,7 +615,7 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
         // A later boundary cannot have an older term than the committed prefix.
         // For an already committed, retained boundary, the terms must match;
         // an older compacted boundary cannot have a newer term than the snapshot.
-        return request->LeaderId == header->Src && request->SnapshotIndex > 0 && request->SnapshotIndex <= maxIndex &&
+        const bool valid = request->LeaderId == header->Src && request->SnapshotIndex > 0 && request->SnapshotIndex <= maxIndex &&
             request->SnapshotTerm > 0 && request->SnapshotTerm <= header->Term && request->Done <= 1 &&
             (request->SnapshotIndex <= VolatileState->CommitIndex ||
                 request->SnapshotTerm >= State->LogTerm(VolatileState->CommitIndex)) &&
@@ -626,6 +626,18 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
             request->Offset <= request->TotalBytes && length > 0 && length <= TInstallSnapshotRequest::MaxChunkBytes &&
             length <= request->TotalBytes - request->Offset &&
             bool(request->Done) == (request->Offset + length == request->TotalBytes);
+        if (!valid) return false;
+        if (header->Term > State->CurrentTerm) {
+            // Do not persist a higher term based on an InstallSnapshot request
+            // whose format cannot be accepted by this runtime. A continuation
+            // cannot be valid across a term change because term changes discard
+            // the partial transfer; an initial chunk must identify a supported
+            // fixed/stable format before it can establish leader contact.
+            if (request->Offset != 0 || length < 8) return false;
+            const std::string_view magic(request->Data, 8);
+            if (magic != "MRFTS001" && magic != "MRFTS003") return false;
+        }
+        return true;
     }
     case EMessageType::INSTALL_SNAPSHOT_RESPONSE: {
         auto response = message.Cast<TInstallSnapshotResponse>();

@@ -59,6 +59,8 @@ arithmetic for future membership changes; live voter reconfiguration remains dis
 The [joint snapshot metadata foundation](docs/joint-snapshots.md) adds a versioned
 representation for a joint configuration at a snapshot boundary; runtime adoption
 and membership changes remain disabled.
+The [snapshot term preflight follow-up](docs/unsupported-snapshot-term-preflight.md)
+rejects unsupported snapshot formats before a higher RPC term changes hard state.
 The [configuration entry foundation](docs/configuration-entries.md) defines an
 experimental entry codec and rejects that entry kind in the fixed-membership runtime.
 The [configuration history validator](docs/configuration-history.md) checks an

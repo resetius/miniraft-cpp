@@ -2,6 +2,8 @@
 
 The [alpha.27 follow-up](configuration-history.md) requires the configuration
 term to equal the snapshot term when both refer to the same index.
+The [alpha.48 follow-up](unsupported-snapshot-term-preflight.md) checks the
+initial snapshot format before accepting a higher RPC term.
 
 This step adds an experimental snapshot representation for a joint configuration
 effective at the included snapshot boundary. MRFTS002 records the old and new
@@ -26,11 +28,12 @@ matches the snapshot's old voter set. Raft startup and RPC paths still reject
 joint snapshots, and compaction only creates fixed-voter snapshots. A covered
 snapshot is acknowledged only after its prefix identifies supported fixed v1 or
 stable v3 metadata, including when the prefix arrives in several chunks.
-Unsupported joint images are rejected without
-replacing application data or publishing a joint snapshot. A valid higher-term
-RPC header can still update durable hard state before its unsupported snapshot
-contents are recognized. These rules avoid falsely acknowledging a joint image
-merely because its index is already committed locally.
+Unsupported joint images are rejected without replacing application data or
+publishing a joint snapshot. Since alpha.48, a higher-term InstallSnapshot can
+advance hard state only after its initial chunk identifies a supported MRFTS001
+or MRFTS003 format. A short, unknown, joint-format, or continuation chunk cannot
+change the term before rejection. These rules avoid falsely acknowledging a
+joint image merely because its index is already committed locally.
 
 Older binaries do not understand MRFTS002 and may acknowledge an already-covered
 image without checking its version. Do not send or activate joint snapshots in a

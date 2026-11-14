@@ -390,6 +390,27 @@ void test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered(void**)
     auto joint = fixed; joint.JointVoters = {2, 3}; joint.ConfigurationIndex = 4; joint.ConfigurationTerm = 1;
     const auto bytes = EncodeSnapshot(joint);
     const auto before = static_cast<TStateFields>(*state);
+    const auto repliesBeforeUnsupported = replies.size();
+
+    // An unsupported snapshot format or an unclassifiable short first chunk
+    // must not persist a higher term before the runtime can reject it.
+    auto higherTermJoint = Chunk(joint, bytes, 0, static_cast<uint32_t>(bytes.size()));
+    higherTermJoint->Term = state->CurrentTerm + 1;
+    raft->Process({}, higherTermJoint);
+    assert_true(static_cast<TStateFields>(*state) == before);
+    assert_int_equal(replies.size(), repliesBeforeUnsupported);
+    auto higherTermShort = Chunk(joint, bytes, 0, 4);
+    higherTermShort->Term = state->CurrentTerm + 1;
+    raft->Process({}, higherTermShort);
+    assert_true(static_cast<TStateFields>(*state) == before);
+    assert_int_equal(replies.size(), repliesBeforeUnsupported);
+    auto higherTermContinuation = Chunk(joint, bytes, 4, 4);
+    higherTermContinuation->Term = state->CurrentTerm + 1;
+    raft->Process({}, higherTermContinuation);
+    assert_true(static_cast<TStateFields>(*state) == before);
+    assert_int_equal(replies.size(), repliesBeforeUnsupported);
+
+    // At the current term, normal fail-closed rejection still returns a reply.
     raft->Process({}, Chunk(joint, bytes, 0, bytes.size()));
     assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
     assert_true(static_cast<TStateFields>(*state) == before); assert_int_equal(app->Loads, 1);
