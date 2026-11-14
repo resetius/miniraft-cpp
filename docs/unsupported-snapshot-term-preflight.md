@@ -1,5 +1,8 @@
 # Unsupported snapshot term preflight: v0.1.0-alpha.48
 
+The [alpha.49 follow-up](snapshot-metadata-term-preflight.md) extends this
+preflight through the complete snapshot metadata and voter list.
+
 Before this change, `TRaft::Process` persisted a higher RPC term before the
 InstallSnapshot handler had read enough bytes to recognize its format. A joint
 MRFTS002 image is intentionally unsupported, but its first chunk could still

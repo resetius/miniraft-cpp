@@ -399,6 +399,22 @@ void test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered(void**)
     raft->Process({}, higherTermJoint);
     assert_true(static_cast<TStateFields>(*state) == before);
     assert_int_equal(replies.size(), repliesBeforeUnsupported);
+    auto wrongEmbeddedBoundary = fixed; wrongEmbeddedBoundary.Index = 4;
+    const auto wrongEmbeddedBoundaryBytes = EncodeSnapshot(wrongEmbeddedBoundary);
+    auto higherTermWrongBoundary = Chunk(fixed, wrongEmbeddedBoundaryBytes,
+        0, static_cast<uint32_t>(wrongEmbeddedBoundaryBytes.size()));
+    higherTermWrongBoundary->Term = state->CurrentTerm + 1;
+    raft->Process({}, higherTermWrongBoundary);
+    assert_true(static_cast<TStateFields>(*state) == before);
+    assert_int_equal(replies.size(), repliesBeforeUnsupported);
+    auto wrongVotersBeforeTerm = fixed; wrongVotersBeforeTerm.Voters = {1, 3};
+    const auto wrongVotersBeforeTermBytes = EncodeSnapshot(wrongVotersBeforeTerm);
+    auto higherTermWrongVoters = Chunk(wrongVotersBeforeTerm, wrongVotersBeforeTermBytes,
+        0, static_cast<uint32_t>(wrongVotersBeforeTermBytes.size()));
+    higherTermWrongVoters->Term = state->CurrentTerm + 1;
+    raft->Process({}, higherTermWrongVoters);
+    assert_true(static_cast<TStateFields>(*state) == before);
+    assert_int_equal(replies.size(), repliesBeforeUnsupported);
     auto higherTermShort = Chunk(joint, bytes, 0, 4);
     higherTermShort->Term = state->CurrentTerm + 1;
     raft->Process({}, higherTermShort);
@@ -491,10 +507,12 @@ void test_stable_configuration_snapshot_installs_and_recovers_with_fixed_members
     {
         auto raft = std::make_shared<TRaft>(state, 2, TNodeDict{{1, peer}});
         auto app = std::make_shared<TApplication>(); TRequestProcessor processor(raft, app, {});
-        raft->Process({}, Chunk(snapshot, bytes, 0, 8));
+        const size_t metadataBytes = 52 + 4 * snapshot.Voters.size();
+        raft->Process({}, Chunk(snapshot, bytes, 0, metadataBytes));
         assert_true(replies.back()->Success); assert_false(replies.back()->Installed);
-        assert_int_equal(replies.back()->NextOffset, 8); assert_int_equal(app->Loads, 0);
-        raft->Process({}, Chunk(snapshot, bytes, 8, static_cast<uint32_t>(bytes.size() - 8)));
+        assert_int_equal(replies.back()->NextOffset, metadataBytes); assert_int_equal(app->Loads, 0);
+        raft->Process({}, Chunk(snapshot, bytes, metadataBytes,
+            static_cast<uint32_t>(bytes.size() - metadataBytes)));
         assert_true(replies.back()->Success); assert_true(replies.back()->Installed);
         assert_int_equal(replies.back()->NextOffset, bytes.size());
         assert_true(*state->GetSnapshot() == snapshot);
@@ -505,6 +523,16 @@ void test_stable_configuration_snapshot_installs_and_recovers_with_fixed_members
         auto conflictingCovered = snapshot;
         conflictingCovered.ConfigurationIndex = 3;
         const auto conflictingCoveredBytes = EncodeSnapshot(conflictingCovered);
+        const auto beforeConflictingCovered = static_cast<TStateFields>(*state);
+        const auto repliesBeforeConflictingCovered = replies.size();
+        auto higherTermConflictingCovered = Chunk(conflictingCovered, conflictingCoveredBytes, 0,
+            static_cast<uint32_t>(conflictingCoveredBytes.size()));
+        higherTermConflictingCovered->Term = state->CurrentTerm + 1;
+        raft->Process({}, higherTermConflictingCovered);
+        assert_true(static_cast<TStateFields>(*state) == beforeConflictingCovered);
+        assert_int_equal(replies.size(), repliesBeforeConflictingCovered);
+        assert_true(*state->GetSnapshot() == snapshot); assert_int_equal(app->Loads, 1);
+
         raft->Process({}, Chunk(conflictingCovered, conflictingCoveredBytes, 0,
             static_cast<uint32_t>(conflictingCoveredBytes.size())));
         assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
@@ -561,10 +589,11 @@ void test_idle_partial_snapshot_expires_on_learner_despite_heartbeats(void**) {
     TKv source; source.Write(source.Prepare(Command("key", "value")), 1);
     TSnapshot snapshot{1, 1, {1}, source.SaveSnapshot()};
     const auto bytes = EncodeSnapshot(snapshot);
+    const size_t metadataBytes = 36 + 4 * snapshot.Voters.size();
 
-    raft->Process({}, Chunk(snapshot, bytes, 0, 8));
+    raft->Process({}, Chunk(snapshot, bytes, 0, metadataBytes));
     assert_true(replies.back()->Success); assert_false(replies.back()->Installed);
-    assert_int_equal(replies.back()->NextOffset, 8); assert_int_equal(app->Loads, 0);
+    assert_int_equal(replies.back()->NextOffset, metadataBytes); assert_int_equal(app->Loads, 0);
 
     // Ordinary leader contact keeps Raft's election timer fresh, but must not
     // keep an abandoned multi-chunk snapshot allocation alive.
@@ -573,18 +602,18 @@ void test_idle_partial_snapshot_expires_on_learner_despite_heartbeats(void**) {
         TAppendEntriesRequest{.PrevLogIndex = 1, .PrevLogTerm = 1, .LeaderCommit = 0, .LeaderId = 1});
     raft->Process(heartbeatAt, heartbeat);
     // A matching retry is valid transfer activity and refreshes the deadline.
-    raft->Process(heartbeatAt, Chunk(snapshot, bytes, 0, 8));
-    assert_true(replies.back()->Success); assert_int_equal(replies.back()->NextOffset, 8);
+    raft->Process(heartbeatAt, Chunk(snapshot, bytes, 0, metadataBytes));
+    assert_true(replies.back()->Success); assert_int_equal(replies.back()->NextOffset, metadataBytes);
     const auto nextChunkAt = heartbeatAt + std::chrono::seconds(10);
     raft->ProcessTimeout(nextChunkAt);
-    raft->Process(nextChunkAt, Chunk(snapshot, bytes, 8, 8));
-    assert_true(replies.back()->Success); assert_int_equal(replies.back()->NextOffset, 16);
+    raft->Process(nextChunkAt, Chunk(snapshot, bytes, metadataBytes, 8));
+    assert_true(replies.back()->Success); assert_int_equal(replies.back()->NextOffset, metadataBytes + 8);
 
     // A continuation after expiry is rejected with offset zero so the leader
     // restarts from the beginning instead of extending a discarded image.
     const auto expiredAt = nextChunkAt + TTimeout::SnapshotTransferIdle + std::chrono::milliseconds(1);
     raft->ProcessTimeout(expiredAt);
-    raft->Process(expiredAt, Chunk(snapshot, bytes, 16, 8));
+    raft->Process(expiredAt, Chunk(snapshot, bytes, metadataBytes + 8, 8));
     assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
     assert_int_equal(replies.back()->NextOffset, 0); assert_int_equal(app->Loads, 0);
     assert_int_equal(app->LastAppliedIndex, 0); assert_int_equal(state->SnapshotIndex, 0);

@@ -61,6 +61,8 @@ representation for a joint configuration at a snapshot boundary; runtime adoptio
 and membership changes remain disabled.
 The [snapshot term preflight follow-up](docs/unsupported-snapshot-term-preflight.md)
 rejects unsupported snapshot formats before a higher RPC term changes hard state.
+The [snapshot metadata preflight follow-up](docs/snapshot-metadata-term-preflight.md)
+checks the boundary, fixed voters, and stable identity before that term update.
 The [configuration entry foundation](docs/configuration-entries.md) defines an
 experimental entry codec and rejects that entry kind in the fixed-membership runtime.
 The [configuration history validator](docs/configuration-history.md) checks an

@@ -23,7 +23,7 @@ static uint32_t rand_(uint32_t* seed) {
     return *seed;
 }
 
-struct TCoveredSnapshotProbe {
+struct TSnapshotMetadataProbe {
     bool Complete = false;
     bool Supported = false;
     size_t Need = 8;
@@ -37,7 +37,7 @@ bool ReadSnapshotInteger(std::string_view bytes, size_t offset, unsigned width, 
     return true;
 }
 
-TCoveredSnapshotProbe ProbeCoveredSnapshot(std::string_view prefix, uint64_t totalBytes,
+TSnapshotMetadataProbe ProbeSnapshotMetadata(std::string_view prefix, uint64_t totalBytes,
         uint64_t index, uint64_t term, const std::vector<uint32_t>& voters,
         const TSnapshot* knownSnapshot) {
     if (prefix.size() < 8) return {false, false, 8};
@@ -45,11 +45,9 @@ TCoveredSnapshotProbe ProbeCoveredSnapshot(std::string_view prefix, uint64_t tot
     const bool stable = magic == "MRFTS003";
     if (!stable && magic != "MRFTS001") return {true, false, 0};
 
-    // A covered snapshot is not installed, but its identity must still agree
-    // with the RPC and the receiver's fixed membership before it can count as
-    // replication progress. Stable metadata identity is checked as well. The
-    // application payload and CRC are unnecessary because the receiver already
-    // has this committed log prefix.
+    // Inspect only the bounded format header and voter list. Callers use this
+    // before granting replication progress or accepting a higher term; payload
+    // bytes and CRC are validated by the full install path when needed.
     const size_t fixedHeaderBytes = stable ? 52 : 36;
     if (prefix.size() < fixedHeaderBytes) return {false, false, fixedHeaderBytes};
     uint64_t embeddedIndex = 0, embeddedTerm = 0, voterCount = 0, dataBytes = 0;
@@ -632,10 +630,14 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
             // whose format cannot be accepted by this runtime. A continuation
             // cannot be valid across a term change because term changes discard
             // the partial transfer; an initial chunk must identify a supported
-            // fixed/stable format before it can establish leader contact.
-            if (request->Offset != 0 || length < 8) return false;
-            const std::string_view magic(request->Data, 8);
-            if (magic != "MRFTS001" && magic != "MRFTS003") return false;
+            // fixed/stable format and complete metadata prefix before it can
+            // establish leader contact.
+            if (request->Offset != 0) return false;
+            const auto knownSnapshot = State->GetSnapshot();
+            const auto probe = ProbeSnapshotMetadata(std::string_view(request->Data, length),
+                request->TotalBytes, request->SnapshotIndex, request->SnapshotTerm,
+                GetVoterIds(), knownSnapshot.get());
+            if (!probe.Complete || !probe.Supported) return false;
         }
         return true;
     }
@@ -989,7 +991,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         } else prefix.append(request->Data, count);
         IncomingSnapshot->LastProgress = now;
         const auto knownSnapshot = State->GetSnapshot();
-        const auto probe = ProbeCoveredSnapshot(prefix, request->TotalBytes,
+        const auto probe = ProbeSnapshotMetadata(prefix, request->TotalBytes,
             request->SnapshotIndex, request->SnapshotTerm, GetVoterIds(), knownSnapshot.get());
         if (!probe.Complete) { reply(true, false, prefix.size()); return; }
         IncomingSnapshot.reset();

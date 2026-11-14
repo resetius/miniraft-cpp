@@ -3,7 +3,9 @@
 The [alpha.27 follow-up](configuration-history.md) requires the configuration
 term to equal the snapshot term when both refer to the same index.
 The [alpha.48 follow-up](unsupported-snapshot-term-preflight.md) checks the
-initial snapshot format before accepting a higher RPC term.
+initial snapshot format before accepting a higher RPC term. The [alpha.49 follow-up](snapshot-metadata-term-preflight.md)
+also checks the embedded boundary, fixed voters, and known stable configuration
+identity.
 
 This step adds an experimental snapshot representation for a joint configuration
 effective at the included snapshot boundary. MRFTS002 records the old and new
@@ -31,9 +33,12 @@ stable v3 metadata, including when the prefix arrives in several chunks.
 Unsupported joint images are rejected without replacing application data or
 publishing a joint snapshot. Since alpha.48, a higher-term InstallSnapshot can
 advance hard state only after its initial chunk identifies a supported MRFTS001
-or MRFTS003 format. A short, unknown, joint-format, or continuation chunk cannot
-change the term before rejection. These rules avoid falsely acknowledging a
-joint image merely because its index is already committed locally.
+or MRFTS003 format. Since alpha.49, that chunk must also contain the complete
+bounded metadata prefix and match the RPC boundary, fixed voter set, and any
+known stable configuration identity. Short, unknown, joint-format, mismatched,
+or continuation chunks cannot change the term before rejection. These rules
+avoid falsely acknowledging a joint image merely because its index is already
+committed locally.
 
 Older binaries do not understand MRFTS002 and may acknowledge an already-covered
 image without checking its version. Do not send or activate joint snapshots in a
