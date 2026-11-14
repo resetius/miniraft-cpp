@@ -11,6 +11,13 @@ configuration entry index and term into the new image. A follower whose committe
 prefix already covers a stable snapshot validates the RPC boundary, voter list,
 configuration identity and encoded data length before acknowledging it.
 
+Once a node has a stable configuration identity, installing a newer MRFTS001
+snapshot carries that identity into the stored MRFTS003 image. An incoming
+MRFTS003 image with a different identity is rejected, including on the
+already-covered fast path. This prevents a legacy-format refresh from silently
+erasing configuration history and prevents a peer from replacing it with a
+conflicting baseline.
+
 This does not implement membership changes. Configuration log entries remain
 disabled, the voter binding cannot change, and a stable snapshot claiming a
 different voter list is rejected. Joint consensus, transition rollback and
@@ -19,6 +26,7 @@ voters before sending MRFTS003 images because older binaries may acknowledge an
 already-covered unknown snapshot format.
 
 Tests cover durable application restore, identity preservation through
-compaction and restart, chunked InstallSnapshot, covered-prefix validation of
-stable metadata, and rejection of joint snapshots. Self-review completed; no
-independent reviewer approval is claimed.
+compaction, restart, and legacy-format refresh, chunked InstallSnapshot,
+covered-prefix validation of stable metadata, and rejection of conflicting
+identities and joint snapshots. Self-review completed; no independent reviewer
+approval is claimed.
