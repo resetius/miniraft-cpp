@@ -41,6 +41,10 @@ appropriate before supplying it. The validator does not prove commitment, cluste
 identity, promotion readiness, log completeness outside the supplied sequence or
 the correctness of the caller's trusted baseline.
 
+The [alpha.53 follow-up](configuration-scan-identity.md) ensures that the scan's
+uncommitted-configuration result compares phase and voter sets as well as
+configuration index and term.
+
 Joint snapshot metadata now rejects a configuration term different from the
 snapshot term when both indices are equal: one log index cannot have two terms.
 Earlier alpha.25 tooling could encode such structurally inconsistent v2 images;

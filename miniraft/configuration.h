@@ -59,7 +59,10 @@ struct TConfigurationScan {
     TConfigurationHistory Latest;
     bool HasUncommittedConfiguration() const {
         return Committed.ConfigurationIndex() != Latest.ConfigurationIndex() ||
-            Committed.ConfigurationTerm() != Latest.ConfigurationTerm();
+            Committed.ConfigurationTerm() != Latest.ConfigurationTerm() ||
+            Committed.IsJoint() != Latest.IsJoint() ||
+            Committed.OldVoters() != Latest.OldVoters() ||
+            Committed.NewVoters() != Latest.NewVoters();
     }
 };
 

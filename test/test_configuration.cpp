@@ -103,6 +103,22 @@ void test_history_validates_joint_stable_chain_and_independent_rollback(void**) 
     assert_true(pending.NewVoters() == joint.NewVoters);
     assert_false(prefix.IsJoint()); assert_int_equal(prefix.ThroughIndex(), 1);
 }
+void test_configuration_scan_compares_full_configuration_state(void**) {
+    auto committed = TConfigurationHistory::Stable({1, 2, 3}, 7, 3, 9, 4);
+    auto differentVoters = TConfigurationHistory::Stable({1, 2, 4}, 7, 3, 9, 4);
+    TConfigurationScan voterMismatch{committed, differentVoters};
+    assert_true(voterMismatch.HasUncommittedConfiguration());
+
+    TSnapshot jointSnapshot{9, 4, {1, 2, 3}, "opaque"};
+    jointSnapshot.JointVoters = {3, 4, 5};
+    jointSnapshot.ConfigurationIndex = 7; jointSnapshot.ConfigurationTerm = 3;
+    auto joint = TConfigurationHistory::FromJointSnapshot(jointSnapshot);
+    TConfigurationScan phaseMismatch{committed, joint};
+    assert_true(phaseMismatch.HasUncommittedConfiguration());
+
+    TConfigurationScan unchanged{committed, committed};
+    assert_false(unchanged.HasUncommittedConfiguration());
+}
 void test_history_from_joint_snapshot_requires_a_consistent_identity(void**) {
     TSnapshot snapshot{8, 4, {1, 2, 3}, "opaque"};
     snapshot.JointVoters = {3, 4, 5}; snapshot.ConfigurationIndex = 5; snapshot.ConfigurationTerm = 3;
@@ -445,6 +461,7 @@ int main() {
     const CMUnitTest tests[] = {
         cmocka_unit_test(test_configuration_snapshot_projection_and_history_resume),
         cmocka_unit_test(test_history_validates_joint_stable_chain_and_independent_rollback),
+        cmocka_unit_test(test_configuration_scan_compares_full_configuration_state),
         cmocka_unit_test(test_history_from_joint_snapshot_requires_a_consistent_identity),
         cmocka_unit_test(test_history_rejects_skips_wrong_predecessors_and_term_regression),
         cmocka_unit_test(test_scan_separates_commit_and_replaced_suffix),

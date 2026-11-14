@@ -69,6 +69,8 @@ The [configuration history validator](docs/configuration-history.md) checks an
 offline retained-log sequence against a trusted baseline or joint snapshot.
 The [configuration log scanner](docs/configuration-scan.md) validates a retained
 suffix at a caller-supplied commit boundary and at its end.
+The [configuration state comparison follow-up](docs/configuration-scan-identity.md)
+includes phase and voter sets when reporting an uncommitted configuration.
 The [online learner staging API](docs/online-learner-staging.md) lets embedders
 add and remove leader-local, non-voting replication targets.
 The [network learner follow-up](docs/online-learner-network.md) connects that
