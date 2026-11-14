@@ -426,12 +426,30 @@ void test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered(void**)
     assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
     auto stable = fixed; stable.StableConfiguration = true; stable.ConfigurationIndex = 4; stable.ConfigurationTerm = 1;
     auto stableBytes = EncodeSnapshot(stable);
-    raft->Process({}, Chunk(stable, stableBytes, 0, 4));
-    assert_true(replies.back()->Success); assert_false(replies.back()->Installed);
-    raft->Process({}, Chunk(stable, stableBytes, 4, 4));
-    assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
-    stable.Index = 6; stableBytes = EncodeSnapshot(stable);
     raft->Process({}, Chunk(stable, stableBytes, 0, stableBytes.size()));
+    assert_true(replies.back()->Success); assert_true(replies.back()->Installed);
+    assert_true(static_cast<TStateFields>(*state) == before); assert_int_equal(app->Loads, 1);
+
+    // The stable-format covered probe validates the config identity and voter
+    // set from a split metadata prefix before crediting the already-held index.
+    const size_t stableMetadataBytes = 52 + 4 * stable.Voters.size();
+    for (size_t offset = 0; offset < stableMetadataBytes; offset += 4) {
+        const auto count = std::min<size_t>(4, stableMetadataBytes - offset);
+        raft->Process({}, Chunk(stable, stableBytes, offset, static_cast<uint32_t>(count)));
+        if (offset + count < stableMetadataBytes) {
+            assert_true(replies.back()->Success); assert_false(replies.back()->Installed);
+            assert_int_equal(replies.back()->NextOffset, offset + count);
+        }
+    }
+    assert_true(replies.back()->Success); assert_true(replies.back()->Installed);
+
+    auto stableWrongVoters = stable; stableWrongVoters.Voters = {1, 3};
+    auto stableWrongVotersBytes = EncodeSnapshot(stableWrongVoters);
+    raft->Process({}, Chunk(stableWrongVoters, stableWrongVotersBytes, 0, stableWrongVotersBytes.size()));
+    assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
+    auto invalidStableIdentity = stableBytes;
+    for (size_t i = 36; i < 44; ++i) invalidStableIdentity[i] = 0;
+    raft->Process({}, Chunk(stable, invalidStableIdentity, 0, invalidStableIdentity.size()));
     assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
     joint.Index = 6;
     const auto newer = EncodeSnapshot(joint);
@@ -439,6 +457,33 @@ void test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered(void**)
     assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
     assert_true(static_cast<TStateFields>(*state) == before); assert_int_equal(app->Loads, 1);
     assert_true(Read(*app, "a") == "old");
+}
+void test_stable_configuration_snapshot_installs_and_recovers_with_fixed_membership(void**) {
+    TKv source; source.Write(source.Prepare(Command("a", "stable snapshot")), 5);
+    TSnapshot snapshot{5, 1, {1, 2}, source.SaveSnapshot()};
+    snapshot.StableConfiguration = true;
+    snapshot.ConfigurationIndex = 4; snapshot.ConfigurationTerm = 1;
+    const auto bytes = EncodeSnapshot(snapshot);
+    std::vector<TMessageHolder<TInstallSnapshotResponse>> replies;
+    auto peer = std::make_shared<TEndpoint>([&](auto message) { replies.push_back(message.template Cast<TInstallSnapshotResponse>()); });
+    auto state = std::make_shared<TState>();
+    {
+        auto raft = std::make_shared<TRaft>(state, 2, TNodeDict{{1, peer}});
+        auto app = std::make_shared<TApplication>(); TRequestProcessor processor(raft, app, {});
+        raft->Process({}, Chunk(snapshot, bytes, 0, 8));
+        assert_true(replies.back()->Success); assert_false(replies.back()->Installed);
+        assert_int_equal(replies.back()->NextOffset, 8); assert_int_equal(app->Loads, 0);
+        raft->Process({}, Chunk(snapshot, bytes, 8, static_cast<uint32_t>(bytes.size() - 8)));
+        assert_true(replies.back()->Success); assert_true(replies.back()->Installed);
+        assert_int_equal(replies.back()->NextOffset, bytes.size());
+        assert_true(*state->GetSnapshot() == snapshot);
+        assert_int_equal(app->Loads, 1); assert_true(Read(*app, "a") == "stable snapshot");
+    }
+    auto restarted = std::make_shared<TRaft>(state, 2, TNodeDict{{1, peer}});
+    auto recovered = std::make_shared<TApplication>(); TRequestProcessor recovery(restarted, recovered, {});
+    assert_int_equal(recovered->LastAppliedIndex, snapshot.Index);
+    assert_true(Read(*recovered, "a") == "stable snapshot");
+    assert_true(restarted->GetState()->GetSnapshot()->StableConfiguration);
 }
 void test_idle_partial_snapshot_expires_on_learner_despite_heartbeats(void**) {
     auto state = std::make_shared<TState>();
@@ -848,6 +893,7 @@ int main() {
         cmocka_unit_test(test_snapshot_is_rechecked_when_commit_advances_mid_transfer),
         cmocka_unit_test(test_memory_snapshot_storage_rejects_term_regression),
         cmocka_unit_test(test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered),
+        cmocka_unit_test(test_stable_configuration_snapshot_installs_and_recovers_with_fixed_membership),
         cmocka_unit_test(test_idle_partial_snapshot_expires_on_learner_despite_heartbeats),
         cmocka_unit_test(test_remote_snapshot_retains_suffix_without_applying_it_before_commit),
         cmocka_unit_test(test_snapshot_boundary_index_exhaustion_does_not_append_wrapped_noop),

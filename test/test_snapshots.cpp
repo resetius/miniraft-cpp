@@ -130,6 +130,19 @@ void test_stable_configuration_snapshot_codec_and_runtime_guards(void**) {
     memory->Snapshot = std::make_shared<const TSnapshot>(snapshot);
     Reject([&] { TRaft unsupported(memory, 1, {{2, std::make_shared<TSink>()}, {3, std::make_shared<TSink>()}}); });
     assert_true(memory->GetBoundVoters().empty());
+    auto bound = std::make_shared<TState>();
+    bound->BindVoters(snapshot.Voters);
+    bound->InstallSnapshot(snapshot);
+    TRaft recovered(bound, 1, {{2, std::make_shared<TSink>()}, {3, std::make_shared<TSink>()}});
+    assert_int_equal(recovered.GetVolatileState()->CommitIndex, snapshot.Index);
+    auto changedBinding = std::make_shared<TState>();
+    changedBinding->BindVoters({1, 2, 4});
+    changedBinding->CurrentTerm = snapshot.Term;
+    changedBinding->Snapshot = std::make_shared<const TSnapshot>(snapshot);
+    changedBinding->SnapshotIndex = changedBinding->LastLogIndex = snapshot.Index;
+    changedBinding->SnapshotTerm = changedBinding->LastLogTerm = snapshot.Term;
+    Reject([&] { TRaft invalid(changedBinding, 1, {{2, std::make_shared<TSink>()}, {3, std::make_shared<TSink>()}}); });
+    assert_true(changedBinding->GetBoundVoters() == std::vector<uint32_t>({1, 2, 4}));
 #ifdef __linux__
     TFiles files;
     { TSnapshotStore store(files.Name, 1); store.Save(snapshot); assert_true(store.Load().value() == snapshot); }
@@ -352,27 +365,46 @@ void test_startup_restores_stale_application_from_durable_snapshot_boundary(void
     assert_int_equal(raft->GetVolatileState()->CommitIndex, 2);
 }
 #ifdef __linux__
-void test_stable_configuration_snapshot_durable_roundtrip_but_runtime_rejects(void**) {
-    TFiles files; const auto path = files.Name + ".durable.1";
-    auto snapshot = Sample(); snapshot.StableConfiguration = true;
+void test_stable_configuration_snapshot_durable_runtime_recovery_and_compaction(void**) {
+    TFiles files;
+    TKv source; Apply(source, "a", "one", 1); Apply(source, "b", "two", 2);
+    TSnapshot snapshot{2, 1, {1, 2, 3}, source.SaveSnapshot()};
+    snapshot.StableConfiguration = true;
     snapshot.ConfigurationIndex = 1; snapshot.ConfigurationTerm = 1;
     {
         TDurableState state(files.Name, 1);
         state.BindVoters(snapshot.Voters);
         state.InstallSnapshot(snapshot);
     }
-    std::string bytes;
+    TSnapshot compacted;
     {
-        TDurableState state(files.Name, 1);
-        assert_true(state.GetBoundVoters() == snapshot.Voters);
-        assert_true(*state.GetSnapshot() == snapshot);
-        std::ifstream input(path, std::ios::binary);
-        bytes.assign(std::istreambuf_iterator<char>(input), {});
+        auto state = std::make_shared<TDurableState>(files.Name, 1);
+        assert_true(state->GetBoundVoters() == snapshot.Voters);
+        assert_true(*state->GetSnapshot() == snapshot);
+        auto raft = std::make_shared<TRaft>(state, 1,
+            TNodeDict{{2, std::make_shared<TSink>()}, {3, std::make_shared<TSink>()}});
+        auto app = std::make_shared<TKv>();
+        TRequestProcessor processor(raft, app, {});
+        assert_int_equal(app->LastAppliedIndex, 2);
+        assert_true(Read(*app, "a") == "one"); assert_true(Read(*app, "b") == "two");
+
+        auto entry = app->Prepare(Command("tail", "after recovery")); entry->Term = 1;
+        state->Append(entry); app->Write(entry, 3);
+        const_cast<TVolatileState*>(raft->GetVolatileState())->CommitIndex = 3;
+        compacted = raft->Compact();
+        assert_true(compacted.StableConfiguration);
+        assert_int_equal(compacted.ConfigurationIndex, snapshot.ConfigurationIndex);
+        assert_int_equal(compacted.ConfigurationTerm, snapshot.ConfigurationTerm);
+        assert_int_equal(compacted.Index, 3);
     }
-    Reject([&] { TRaft raft(std::make_shared<TDurableState>(files.Name, 1), 1,
-                           {{2, std::make_shared<TSink>()}, {3, std::make_shared<TSink>()}}); });
-    std::ifstream after(path, std::ios::binary);
-    assert_true(std::string(std::istreambuf_iterator<char>(after), {}) == bytes);
+    auto state = std::make_shared<TDurableState>(files.Name, 1);
+    assert_true(*state->GetSnapshot() == compacted);
+    auto raft = std::make_shared<TRaft>(state, 1,
+        TNodeDict{{2, std::make_shared<TSink>()}, {3, std::make_shared<TSink>()}});
+    auto app = std::make_shared<TKv>(); TRequestProcessor processor(raft, app, {});
+    assert_int_equal(app->LastAppliedIndex, compacted.Index);
+    assert_true(Read(*app, "a") == "one"); assert_true(Read(*app, "b") == "two");
+    assert_true(Read(*app, "tail") == "after recovery");
 }
 void test_unbound_durable_configuration_snapshot_recovery_fails_closed(void**) {
     TFiles files; const auto path = files.Name + ".durable.1";
@@ -555,7 +587,7 @@ int main() {
         cmocka_unit_test(test_restore_rejects_mismatched_log_configuration_and_used_application),
         cmocka_unit_test(test_startup_restores_stale_application_from_durable_snapshot_boundary),
 #ifdef __linux__
-        cmocka_unit_test(test_stable_configuration_snapshot_durable_roundtrip_but_runtime_rejects),
+        cmocka_unit_test(test_stable_configuration_snapshot_durable_runtime_recovery_and_compaction),
         cmocka_unit_test(test_unbound_durable_configuration_snapshot_recovery_fails_closed),
         cmocka_unit_test(test_joint_snapshot_export_and_durable_roundtrip_but_runtime_rejects),
         cmocka_unit_test(test_snapshot_store_rejects_oversized_files_and_temp_symlinks),

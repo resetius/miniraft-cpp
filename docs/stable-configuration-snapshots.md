@@ -1,4 +1,4 @@
-# Offline stable configuration snapshot metadata
+# Stable configuration snapshot metadata
 
 The experimental MRFTS003 snapshot format preserves a stable voter set and the
 index and term of the configuration entry that selected it. This fills a gap in
@@ -18,12 +18,15 @@ trusted snapshot and commit boundary independently. MRFTS003 cannot assert that
 there was no earlier configuration entry; an explicit trusted baseline remains
 necessary for such histories.
 
-The live runtime rejects MRFTS003, and the network receiver rejects it even at an
-already covered boundary. Bound memory and durable stores can retain and recover
-the image for offline validation only when its voter list matches the persisted
-binding. Storage does not activate a changed voter set from snapshot metadata.
+The runtime accepts MRFTS003 only when its voter list matches the node's existing
+fixed voter binding. It can recover the image at startup, restore the application,
+install it from a peer, and preserve its configuration identity through later
+compaction. The covered-snapshot path checks the stable configuration identity
+and voter list before acknowledging an already-covered boundary. These paths do
+not activate a changed voter set or enable joint consensus.
+
 Older binaries may falsely acknowledge covered unknown formats; do not send these
-images to a mixed-version cluster. Live configuration activation, rollback,
-commit rules, joint snapshot installation and membership recovery remain open.
-This experimental format may change before those semantics are implemented.
+images to a mixed-version cluster. Joint snapshot installation, live
+configuration activation, rollback, commit rules and membership recovery remain
+open. This experimental format may change before those semantics are implemented.
 Rebuild dependents because the in-memory snapshot structure has changed.

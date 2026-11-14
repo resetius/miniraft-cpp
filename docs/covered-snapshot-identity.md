@@ -6,18 +6,17 @@ recognized only the `MRFTS001` magic, then acknowledged the full snapshot as
 installed. It skipped checking the snapshot's embedded index, term and voter
 IDs against the RPC and the receiver's fixed voter set.
 
-The fast path now waits for and parses the bounded fixed-format metadata prefix.
-It acknowledges coverage only when the embedded boundary and sorted voter list
-match. It also checks the encoded application length against the declared total
-size. It does not read the application body or verify its CRC because it never
-uses that image; the receiver's already committed prefix is the evidence for
-coverage. Actual installations continue to validate the complete image, CRC,
-metadata, voter set and application payload before replacing state.
+The fast path waits for and parses the bounded metadata prefix for fixed v1 and
+stable v3 snapshots. It acknowledges coverage only when the embedded boundary,
+stable configuration identity (when present), and sorted voter list match. It
+also checks the encoded application length against the declared total size. It
+does not read the application body or verify its CRC because it never uses that
+image; the receiver's already committed prefix is the evidence for coverage.
+Actual installations validate the complete image, CRC, metadata, voter set and
+application payload before replacing state.
 
 Deterministic regression cases cover mismatched embedded voters, a snapshot
-boundary that disagrees with the request, and a valid metadata prefix split
-across chunks. Rejected images do not change durable Raft or application state.
-Joint and stable configuration snapshots remain unsupported by the live
-runtime, and live voter changes remain disabled. Self-review completed; no
-independent reviewer approval is claimed. Network-enabled Release and ASan/UBSan
-CTest suites both pass all 20 targets.
+boundary that disagrees with the request, invalid stable metadata, and valid
+metadata prefixes split across chunks. Rejected images do not change durable Raft
+or application state. Joint snapshots and live voter changes remain disabled.
+Self-review completed; no independent reviewer approval is claimed.

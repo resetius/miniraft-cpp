@@ -12,15 +12,15 @@ with its existing voter binding; it does not reinterpret that binding from the
 metadata. The history scanner also verifies that a joint baseline's old voters
 match the bound set.
 
-This is persistence for offline validation, not runtime configuration recovery.
-`TRaft` still rejects configuration metadata snapshots on startup, the network
-receiver rejects them, configuration log entries remain disabled, and compaction
-continues to produce fixed-voter snapshots. A stable snapshot whose voter list
-differs from the existing binding is rejected. Live transition semantics must
-define how the binding changes before such snapshots can be used by Raft.
+In alpha.45 these images were persistence for offline validation only. The
+alpha.46 follow-up enables runtime recovery and transfer of MRFTS003 stable
+snapshots when the voter list equals the node's existing fixed membership.
+Compaction carries forward that stable configuration identity. MRFTS002 joint
+snapshots and configuration log entries remain disabled in the live runtime.
+Stable snapshots that claim another voter set are still rejected because
+membership transition semantics are not implemented.
 
 Tests cover in-memory installation, durable joint and stable round-trips, bound
 voter mismatch rejection without rewriting storage, offline scan baseline checks,
-and runtime startup rejection without rewriting the recovered image. Self-review
-checked that recovery requires an existing binding and that no live Raft path
-adopts the experimental metadata. No independent reviewer approval is claimed.
+stable runtime restore/transfer/compaction, and continued joint snapshot rejection.
+No independent reviewer approval is claimed.

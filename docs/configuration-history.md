@@ -9,10 +9,12 @@ The caller must independently establish that the history boundary is committed
 and that the supplied application image corresponds exactly to that boundary.
 The method validates snapshot metadata and size; it does not capture application
 state, compact or mutate storage, establish commitment, or activate voters.
-Experimental configuration snapshots remain rejected by the live runtime.
+Joint configuration snapshots remain rejected by the live runtime. Stable
+metadata snapshots can be recovered and installed when they match the node's
+existing fixed voter binding; this does not enable voter changes.
 Bound storage can retain and recover stable or joint metadata snapshots for
 offline validation, provided the snapshot voter list matches the store's existing
-voter binding. This does not activate the configuration after restart.
+voter binding.
 
 TConfigurationHistory checks a sequence of retained log entries against a trusted
 configuration baseline. It joins the experimental configuration-entry codec with
@@ -54,11 +56,10 @@ restart, confirms the fixture's known bootstrap baseline, and verifies that Raft
 still rejects the unsupported entries without rewriting storage. Full tests also
 cover existing snapshot installation and learner catch-up.
 
-This is offline validation, not live reconfiguration. Storage can now preserve
-configuration snapshot metadata across restart, but durable recovery into an
-active configuration remains open. Joint entry activation and rollback, snapshot
-installation across membership transitions, promotion gates and transport
-discovery remain open. Self-review
+This is configuration history validation for fixed membership, not live
+reconfiguration. Joint entry activation and rollback, snapshot installation
+across membership transitions, promotion gates and transport discovery remain
+open. Self-review
 checked contiguous scanning, term and predecessor relationships, immutable branch
 results, snapshot boundary consistency and the unknown-v1-identity case. No
 independent reviewer approval is claimed.

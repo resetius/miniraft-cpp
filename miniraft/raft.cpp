@@ -37,16 +37,20 @@ bool ReadSnapshotInteger(std::string_view bytes, size_t offset, unsigned width, 
     return true;
 }
 
-TCoveredSnapshotProbe ProbeCoveredFixedSnapshot(std::string_view prefix, uint64_t totalBytes,
+TCoveredSnapshotProbe ProbeCoveredSnapshot(std::string_view prefix, uint64_t totalBytes,
         uint64_t index, uint64_t term, const std::vector<uint32_t>& voters) {
     if (prefix.size() < 8) return {false, false, 8};
-    if (prefix.substr(0, 8) != "MRFTS001") return {true, false, 0};
+    const auto magic = prefix.substr(0, 8);
+    const bool stable = magic == "MRFTS003";
+    if (!stable && magic != "MRFTS001") return {true, false, 0};
 
     // A covered snapshot is not installed, but its identity must still agree
     // with the RPC and the receiver's fixed membership before it can count as
-    // replication progress. The application payload and CRC are unnecessary
-    // because the receiver already has this committed log prefix.
-    if (prefix.size() < 36) return {false, false, 36};
+    // replication progress. Stable metadata identity is checked as well. The
+    // application payload and CRC are unnecessary because the receiver already
+    // has this committed log prefix.
+    const size_t fixedHeaderBytes = stable ? 52 : 36;
+    if (prefix.size() < fixedHeaderBytes) return {false, false, fixedHeaderBytes};
     uint64_t embeddedIndex = 0, embeddedTerm = 0, voterCount = 0, dataBytes = 0;
     if (!ReadSnapshotInteger(prefix, 8, 8, embeddedIndex) ||
         !ReadSnapshotInteger(prefix, 16, 8, embeddedTerm) ||
@@ -54,15 +58,23 @@ TCoveredSnapshotProbe ProbeCoveredFixedSnapshot(std::string_view prefix, uint64_
         !ReadSnapshotInteger(prefix, 28, 8, dataBytes) ||
         embeddedIndex != index || embeddedTerm != term || voterCount != voters.size())
         return {true, false, 0};
+    if (stable) {
+        uint64_t configurationIndex = 0, configurationTerm = 0;
+        if (!ReadSnapshotInteger(prefix, 36, 8, configurationIndex) ||
+            !ReadSnapshotInteger(prefix, 44, 8, configurationTerm) || !configurationIndex ||
+            configurationIndex > embeddedIndex || !configurationTerm || configurationTerm > embeddedTerm ||
+            (configurationIndex == embeddedIndex && configurationTerm != embeddedTerm))
+            return {true, false, 0};
+    }
 
     const uint64_t voterBytes = voterCount * 4;
-    const uint64_t headerBytes = 36 + voterBytes;
+    const uint64_t headerBytes = fixedHeaderBytes + voterBytes;
     if (headerBytes + 4 > totalBytes || dataBytes != totalBytes - headerBytes - 4)
         return {true, false, 0};
     if (headerBytes > prefix.size()) return {false, false, size_t(headerBytes)};
     for (size_t i = 0; i < voters.size(); ++i) {
         uint64_t voter = 0;
-        if (!ReadSnapshotInteger(prefix, 36 + i * 4, 4, voter) || voter != voters[i])
+        if (!ReadSnapshotInteger(prefix, fixedHeaderBytes + i * 4, 4, voter) || voter != voters[i])
             return {true, false, 0};
     }
     return {true, true, size_t(headerBytes)};
@@ -251,8 +263,10 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
     const auto snapshot = State->GetSnapshot();
     if (snapshot) {
         ValidateSnapshot(*snapshot);
-        if (snapshot->HasConfigurationMetadata())
-            throw std::invalid_argument("Configuration snapshot recovery is unsupported");
+        if (snapshot->IsJoint())
+            throw std::invalid_argument("Joint snapshot recovery is unsupported");
+        if (snapshot->StableConfiguration && bound != Voters)
+            throw std::invalid_argument("Stable configuration snapshot requires an existing voter binding");
         if (snapshot->Index != State->SnapshotIndex || snapshot->Term != State->SnapshotTerm ||
             snapshot->Term > State->CurrentTerm || snapshot->Voters != Voters ||
             State->LastLogTerm < State->SnapshotTerm || State->LastLogTerm > State->CurrentTerm ||
@@ -958,7 +972,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
             }
         } else prefix.append(request->Data, count);
         IncomingSnapshot->LastProgress = now;
-        const auto probe = ProbeCoveredFixedSnapshot(prefix, request->TotalBytes,
+        const auto probe = ProbeCoveredSnapshot(prefix, request->TotalBytes,
             request->SnapshotIndex, request->SnapshotTerm, GetVoterIds());
         if (!probe.Complete) { reply(true, false, prefix.size()); return; }
         IncomingSnapshot.reset();
@@ -986,14 +1000,15 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         }
     } else bytes.append(request->Data, count);
     IncomingSnapshot->LastProgress = now;
-    if (bytes.size() >= 8 && std::string_view(bytes).substr(0, 8) != "MRFTS001") {
+    if (bytes.size() >= 8 && std::string_view(bytes).substr(0, 8) != "MRFTS001" &&
+        std::string_view(bytes).substr(0, 8) != "MRFTS003") {
         IncomingSnapshot.reset(); reply(false, false, 0); return;
     }
     if (bytes.size() < request->TotalBytes) { reply(true, false, bytes.size()); return; }
     TSnapshot snapshot;
     try {
         snapshot = DecodeSnapshot(bytes);
-        if (snapshot.HasConfigurationMetadata() || snapshot.Index != request->SnapshotIndex || snapshot.Term != request->SnapshotTerm || snapshot.Voters != GetVoterIds())
+        if (snapshot.IsJoint() || snapshot.Index != request->SnapshotIndex || snapshot.Term != request->SnapshotTerm || snapshot.Voters != GetVoterIds())
             throw TMessageError("Snapshot metadata mismatch");
         application->ValidateSnapshot(snapshot.Data, snapshot.Index);
     } catch (const std::exception&) {

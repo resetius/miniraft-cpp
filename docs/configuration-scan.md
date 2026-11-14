@@ -23,11 +23,10 @@ backend, which must validate its own records. Memory and durable backends avoid
 copying ordinary payloads; external backends using default metadata accessors may
 read full entries. Configuration records are read and validated in full.
 
-Configuration entries and configuration snapshots remain rejected by the live
-runtime. Bound in-memory and durable stores can retain stable or joint metadata
-snapshots for offline validation; `snapshot.Voters` must match the persisted
-binding. For joint snapshots, the scanner also requires the baseline's old voter
-set to match that binding. Tests cover durable restart and reject a baseline that
-differs from the persisted binding. Live membership activation, commit rules,
-snapshot installation across transitions, and recovery into an active Raft
-configuration remain future work.
+Configuration entries and joint snapshots remain rejected by the live runtime.
+Stable metadata snapshots can be recovered and installed if their voter list
+matches the persisted fixed membership. Bound in-memory and durable stores can
+also retain joint metadata for offline validation; for joint snapshots, the
+scanner requires the baseline's old voter set to match that binding. Live
+membership activation, commit rules, and snapshot installation across membership
+transitions remain future work.

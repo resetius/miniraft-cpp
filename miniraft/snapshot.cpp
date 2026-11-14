@@ -43,10 +43,10 @@ void Validate(const TSnapshot& snapshot) {
 }
 void CheckLocalLog(const TSnapshot& snapshot, const TRaft& raft) {
     Validate(snapshot);
-    if (snapshot.HasConfigurationMetadata() || snapshot.Voters != raft.GetVoterIds() || snapshot.Index > raft.GetLastIndex() ||
+    if (snapshot.IsJoint() || snapshot.Voters != raft.GetVoterIds() || snapshot.Index > raft.GetLastIndex() ||
         snapshot.Term > raft.GetState()->CurrentTerm ||
         raft.GetState()->LogTerm(snapshot.Index) != snapshot.Term)
-        throw std::runtime_error("Snapshot does not match retained log and fixed configuration");
+        throw std::runtime_error("Snapshot does not match retained log and active configuration");
 }
 #ifdef __linux__
 struct TFd {
@@ -129,6 +129,11 @@ TSnapshot CaptureSnapshot(const TRaft& raft, const IRsm& rsm) {
     if (!index || index > raft.GetVolatileState()->CommitIndex || index > raft.GetLastIndex())
         throw std::runtime_error("Snapshot requires applied committed progress");
     TSnapshot snapshot{index, raft.GetState()->LogTerm(index), raft.GetVoterIds(), {}};
+    if (const auto previous = raft.GetState()->GetSnapshot(); previous && previous->StableConfiguration) {
+        snapshot.StableConfiguration = true;
+        snapshot.ConfigurationIndex = previous->ConfigurationIndex;
+        snapshot.ConfigurationTerm = previous->ConfigurationTerm;
+    }
     CheckLocalLog(snapshot, raft);
     snapshot.Data = rsm.SaveSnapshot();
     Validate(snapshot);

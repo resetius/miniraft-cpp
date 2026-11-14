@@ -26,8 +26,8 @@ lifecycle.
 The KV CLI still discovers peers at startup. Staging is leader-local and is
 lost on restart or failover; the new leader and the application must reconcile
 it. This adds network transport support for non-voting catch-up only. Voter
-promotion/removal, replicated joint consensus, membership-aware snapshot
-installation and durable configuration recovery remain unsupported.
+promotion/removal, replicated joint consensus and snapshot installation across
+membership transitions remain unsupported.
 
 The deterministic server test checks target registration, voter/quorum
 invariance, removal and rollback after a nonleader rejection. The existing

@@ -92,7 +92,8 @@ Never delete voter state or edit votes/terms to work around this validation.
 
 The new durable format `MRFTD003` retains the 20-byte header and stores:
 CurrentTerm[8], VotedFor[4], retained-log count[8], voter count[4], sorted voter
-IDs[4 each], snapshot length[8], optional MRFTS001 image, then retained log records.
+IDs[4 each], snapshot length[8], optional MRFTS001, MRFTS002, or MRFTS003 image,
+then retained log records.
 An absent snapshot uses length zero. The CRC covers version magic plus payload.
 Recovery bounds and validates the voter list and requires any snapshot to name
 the same voters. Both v1 and v2 remain readable; the first binding writes v3 using

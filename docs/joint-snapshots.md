@@ -21,11 +21,12 @@ snapshot store can export and load v2 images for testing or offline tooling.
 
 This is a format and offline persistence foundation, not live joint consensus or
 complete configuration history. A bound memory or durable store can install and
-recover a joint snapshot when its persisted voter list matches the snapshot's old
-voter set. Raft startup and RPC paths still reject joint snapshots, and compaction
-still creates only fixed-voter snapshots. A covered snapshot is acknowledged only
-after its prefix identifies the supported v1 format, including when the prefix
-arrives in several chunks. Unsupported joint images are rejected without
+recover a joint snapshot for offline validation when its persisted voter list
+matches the snapshot's old voter set. Raft startup and RPC paths still reject
+joint snapshots, and compaction only creates fixed-voter snapshots. A covered
+snapshot is acknowledged only after its prefix identifies supported fixed v1 or
+stable v3 metadata, including when the prefix arrives in several chunks.
+Unsupported joint images are rejected without
 replacing application data or publishing a joint snapshot. A valid higher-term
 RPC header can still update durable hard state before its unsupported snapshot
 contents are recognized. These rules avoid falsely acknowledging a joint image
