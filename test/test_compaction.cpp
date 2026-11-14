@@ -478,12 +478,53 @@ void test_stable_configuration_snapshot_installs_and_recovers_with_fixed_members
         assert_int_equal(replies.back()->NextOffset, bytes.size());
         assert_true(*state->GetSnapshot() == snapshot);
         assert_int_equal(app->Loads, 1); assert_true(Read(*app, "a") == "stable snapshot");
+
+        // A covered stable image with a different configuration identity must
+        // not be acknowledged as progress.
+        auto conflictingCovered = snapshot;
+        conflictingCovered.ConfigurationIndex = 3;
+        const auto conflictingCoveredBytes = EncodeSnapshot(conflictingCovered);
+        raft->Process({}, Chunk(conflictingCovered, conflictingCoveredBytes, 0,
+            static_cast<uint32_t>(conflictingCoveredBytes.size())));
+        assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
+        assert_true(*state->GetSnapshot() == snapshot); assert_int_equal(app->Loads, 1);
+
+        // A newer legacy image can be installed, but it must retain the
+        // receiver's already trusted stable configuration identity.
+        source.Write(source.Prepare(Command("a", "legacy refresh")), 6);
+        TSnapshot legacy{6, 1, {1, 2}, source.SaveSnapshot()};
+        const auto legacyBytes = EncodeSnapshot(legacy);
+        raft->Process({}, Chunk(legacy, legacyBytes, 0, static_cast<uint32_t>(legacyBytes.size())));
+        assert_true(replies.back()->Success); assert_true(replies.back()->Installed);
+        auto preserved = legacy;
+        preserved.StableConfiguration = true;
+        preserved.ConfigurationIndex = snapshot.ConfigurationIndex;
+        preserved.ConfigurationTerm = snapshot.ConfigurationTerm;
+        assert_true(*state->GetSnapshot() == preserved);
+        assert_int_equal(app->Loads, 2); assert_true(Read(*app, "a") == "legacy refresh");
+
+        // Conflicting metadata at a newer boundary is rejected before either
+        // durable Raft state or the application can be replaced.
+        source.Write(source.Prepare(Command("a", "conflicting refresh")), 7);
+        TSnapshot conflicting{7, 1, {1, 2}, source.SaveSnapshot()};
+        conflicting.StableConfiguration = true;
+        conflicting.ConfigurationIndex = 3; conflicting.ConfigurationTerm = 1;
+        const auto conflictingBytes = EncodeSnapshot(conflicting);
+        raft->Process({}, Chunk(conflicting, conflictingBytes, 0,
+            static_cast<uint32_t>(conflictingBytes.size())));
+        assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
+        assert_true(*state->GetSnapshot() == preserved);
+        assert_int_equal(app->Loads, 2); assert_int_equal(app->LastAppliedIndex, 6);
+        assert_true(Read(*app, "a") == "legacy refresh");
     }
     auto restarted = std::make_shared<TRaft>(state, 2, TNodeDict{{1, peer}});
     auto recovered = std::make_shared<TApplication>(); TRequestProcessor recovery(restarted, recovered, {});
-    assert_int_equal(recovered->LastAppliedIndex, snapshot.Index);
-    assert_true(Read(*recovered, "a") == "stable snapshot");
-    assert_true(restarted->GetState()->GetSnapshot()->StableConfiguration);
+    assert_int_equal(recovered->LastAppliedIndex, 6);
+    assert_true(Read(*recovered, "a") == "legacy refresh");
+    const auto recoveredSnapshot = restarted->GetState()->GetSnapshot();
+    assert_true(recoveredSnapshot->StableConfiguration);
+    assert_int_equal(recoveredSnapshot->ConfigurationIndex, 4);
+    assert_int_equal(recoveredSnapshot->ConfigurationTerm, 1);
 }
 void test_idle_partial_snapshot_expires_on_learner_despite_heartbeats(void**) {
     auto state = std::make_shared<TState>();

@@ -38,7 +38,8 @@ bool ReadSnapshotInteger(std::string_view bytes, size_t offset, unsigned width, 
 }
 
 TCoveredSnapshotProbe ProbeCoveredSnapshot(std::string_view prefix, uint64_t totalBytes,
-        uint64_t index, uint64_t term, const std::vector<uint32_t>& voters) {
+        uint64_t index, uint64_t term, const std::vector<uint32_t>& voters,
+        const TSnapshot* knownSnapshot) {
     if (prefix.size() < 8) return {false, false, 8};
     const auto magic = prefix.substr(0, 8);
     const bool stable = magic == "MRFTS003";
@@ -63,7 +64,10 @@ TCoveredSnapshotProbe ProbeCoveredSnapshot(std::string_view prefix, uint64_t tot
         if (!ReadSnapshotInteger(prefix, 36, 8, configurationIndex) ||
             !ReadSnapshotInteger(prefix, 44, 8, configurationTerm) || !configurationIndex ||
             configurationIndex > embeddedIndex || !configurationTerm || configurationTerm > embeddedTerm ||
-            (configurationIndex == embeddedIndex && configurationTerm != embeddedTerm))
+            (configurationIndex == embeddedIndex && configurationTerm != embeddedTerm) ||
+            (knownSnapshot && knownSnapshot->StableConfiguration &&
+                (configurationIndex != knownSnapshot->ConfigurationIndex ||
+                 configurationTerm != knownSnapshot->ConfigurationTerm)))
             return {true, false, 0};
     }
 
@@ -972,8 +976,9 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
             }
         } else prefix.append(request->Data, count);
         IncomingSnapshot->LastProgress = now;
+        const auto knownSnapshot = State->GetSnapshot();
         const auto probe = ProbeCoveredSnapshot(prefix, request->TotalBytes,
-            request->SnapshotIndex, request->SnapshotTerm, GetVoterIds());
+            request->SnapshotIndex, request->SnapshotTerm, GetVoterIds(), knownSnapshot.get());
         if (!probe.Complete) { reply(true, false, prefix.size()); return; }
         IncomingSnapshot.reset();
         reply(probe.Supported, probe.Supported, probe.Supported ? request->TotalBytes : 0);
@@ -1010,6 +1015,21 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         snapshot = DecodeSnapshot(bytes);
         if (snapshot.IsJoint() || snapshot.Index != request->SnapshotIndex || snapshot.Term != request->SnapshotTerm || snapshot.Voters != GetVoterIds())
             throw TMessageError("Snapshot metadata mismatch");
+        const auto knownSnapshot = State->GetSnapshot();
+        if (knownSnapshot && knownSnapshot->StableConfiguration) {
+            if (snapshot.StableConfiguration &&
+                (snapshot.ConfigurationIndex != knownSnapshot->ConfigurationIndex ||
+                 snapshot.ConfigurationTerm != knownSnapshot->ConfigurationTerm))
+                throw TMessageError("Stable snapshot configuration identity changed");
+            if (!snapshot.StableConfiguration) {
+                // A legacy-format refresh has no configuration identity. Keep
+                // the receiver's trusted identity when storing the new image.
+                snapshot.StableConfiguration = true;
+                snapshot.ConfigurationIndex = knownSnapshot->ConfigurationIndex;
+                snapshot.ConfigurationTerm = knownSnapshot->ConfigurationTerm;
+            }
+        }
+        ValidateSnapshot(snapshot);
         application->ValidateSnapshot(snapshot.Data, snapshot.Index);
     } catch (const std::exception&) {
         IncomingSnapshot.reset(); reply(false, false, 0); return;
