@@ -70,3 +70,9 @@ struct TConfigurationScan {
 // the baseline and the commit boundary; neither is proven by this scan.
 TConfigurationScan ScanConfigurationHistory(const IState& state,
     TConfigurationHistory baseline, uint64_t commitIndex);
+
+// Read the committed boundary from storage instead of accepting a caller's
+// guess. Requires voter binding and a backend that persists CommitIndex; the
+// caller must still supply a trusted baseline through SnapshotIndex.
+TConfigurationScan ScanCommittedConfigurationHistory(const IState& state,
+    TConfigurationHistory baseline);

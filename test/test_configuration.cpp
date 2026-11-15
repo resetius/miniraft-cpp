@@ -455,6 +455,47 @@ void test_offline_history_scan_after_durable_snapshot_and_restart(void**) {
     assert_true(std::string(std::istreambuf_iterator<char>(after), {}) == before);
     std::error_code ignored; std::filesystem::remove_all(dir, ignored);
 }
+
+void test_persisted_commit_boundary_drives_committed_configuration_scan(void**) {
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-committed-history-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    const auto name = (dir / "raft").string();
+    TConfigurationRecord joint{EConfigurationPhase::Joint, 2, 0, 0, {1}, {1, 2}};
+    auto final = joint; final.Phase = EConfigurationPhase::Stable; final.Term = 3;
+    final.PreviousIndex = 2; final.PreviousTerm = 2;
+    {
+        auto state = std::make_shared<TDurableState>(name, 1);
+        { TRaft bootstrap(state, 1, {}); }
+        state->CurrentTerm = 3; state->Commit();
+        state->Append(Ordinary(1));
+        state->Append(EncodeConfigurationEntry(joint));
+        state->Append(Ordinary(2));
+        state->Append(EncodeConfigurationEntry(final));
+        state->CommitIndex = 3; state->Commit();
+    }
+    {
+        TDurableState state(name, 1);
+        auto baseline = TConfigurationHistory::Stable({1}, 0, 0, 0, 0);
+        const auto scan = ScanCommittedConfigurationHistory(state, baseline);
+        assert_int_equal(state.CommitIndex, 3);
+        assert_true(scan.Committed.IsJoint());
+        assert_int_equal(scan.Committed.ConfigurationIndex(), 2);
+        assert_false(scan.Latest.IsJoint());
+        assert_true(scan.Latest.OldVoters() == final.NewVoters);
+        assert_true(scan.HasUncommittedConfiguration());
+        Reject([&] {
+            auto wrong = TConfigurationHistory::Stable({2}, 0, 0, 0, 0);
+            ScanCommittedConfigurationHistory(state, wrong);
+        });
+    }
+    TState volatileState; volatileState.BindVoters({1});
+    Reject([&] {
+        auto baseline = TConfigurationHistory::Stable({1}, 0, 0, 0, 0);
+        ScanCommittedConfigurationHistory(volatileState, baseline);
+    });
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+}
 #endif
 }
 int main() {
@@ -476,6 +517,7 @@ int main() {
         cmocka_unit_test(test_durable_restart_rejects_reserved_entry_without_rewriting),
         cmocka_unit_test(test_legacy_restart_uses_safe_flag_lookup_and_preserves_files),
         cmocka_unit_test(test_offline_history_scan_after_durable_snapshot_and_restart),
+        cmocka_unit_test(test_persisted_commit_boundary_drives_committed_configuration_scan),
 #endif
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);

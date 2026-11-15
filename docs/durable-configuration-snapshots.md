@@ -18,6 +18,12 @@ binding from snapshot metadata. Older durable formats remain readable and use
 their snapshot boundary as the conservative commit floor. The history scanner
 also verifies that a joint baseline's old voters match the bound set.
 
+`ScanCommittedConfigurationHistory` uses the recovered commit index directly
+and requires both durable commit-index support and a persisted voter binding.
+The caller still supplies a trusted history baseline through the snapshot
+boundary. This remains an offline validation API; it does not activate joint
+quorums or permit live configuration changes.
+
 In alpha.45 these images were persistence for offline validation only. The
 alpha.46 follow-up enables runtime recovery and transfer of MRFTS003 stable
 snapshots when the voter list equals the node's existing fixed membership.

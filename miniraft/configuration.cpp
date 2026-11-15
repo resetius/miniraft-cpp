@@ -202,3 +202,11 @@ TConfigurationScan ScanConfigurationHistory(const IState& state,
         throw std::invalid_argument("Configuration scan last term mismatch");
     return {committed, latest};
 }
+
+TConfigurationScan ScanCommittedConfigurationHistory(const IState& state,
+    TConfigurationHistory baseline) {
+    if (!state.SupportsCommitIndexPersistence() || !state.SupportsVoterBinding() ||
+        state.GetBoundVoters().empty())
+        throw std::invalid_argument("Committed configuration scan requires durable commit and voter metadata");
+    return ScanConfigurationHistory(state, std::move(baseline), state.CommitIndex);
+}
