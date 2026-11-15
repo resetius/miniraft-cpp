@@ -41,6 +41,12 @@ void Validate(const TSnapshot& snapshot) {
         validateVoters(snapshot.JointVoters);
     }
 }
+void CheckStableSnapshotIdentity(const TSnapshot* current, const TSnapshot& incoming) {
+    if (current && current->StableConfiguration && incoming.StableConfiguration &&
+        (incoming.ConfigurationIndex != current->ConfigurationIndex ||
+         incoming.ConfigurationTerm != current->ConfigurationTerm))
+        throw std::invalid_argument("Stable snapshot configuration identity changed");
+}
 void CheckLocalLog(const TSnapshot& snapshot, const TRaft& raft) {
     Validate(snapshot);
     if (snapshot.IsJoint() || snapshot.Voters != raft.GetVoterIds() || snapshot.Index > raft.GetLastIndex() ||
@@ -71,10 +77,8 @@ void ValidateSnapshot(const TSnapshot& snapshot) { Validate(snapshot); }
 
 void PreserveStableSnapshotIdentity(const TSnapshot* current, TSnapshot& incoming) {
     if (!current || !current->StableConfiguration) return;
+    CheckStableSnapshotIdentity(current, incoming);
     if (incoming.StableConfiguration) {
-        if (incoming.ConfigurationIndex != current->ConfigurationIndex ||
-            incoming.ConfigurationTerm != current->ConfigurationTerm)
-            throw std::invalid_argument("Stable snapshot configuration identity changed");
         return;
     }
     // A joint image carries an explicit new phase. A legacy image carries no
@@ -158,6 +162,8 @@ TSnapshot CaptureSnapshot(const TRaft& raft, const IRsm& rsm) {
 }
 
 void RestoreSnapshot(const TSnapshot& snapshot, const TRaft& raft, IRsm& rsm) {
+    const auto knownSnapshot = raft.GetState()->GetSnapshot();
+    CheckStableSnapshotIdentity(knownSnapshot.get(), snapshot);
     CheckLocalLog(snapshot, raft);
     if (rsm.LastAppliedIndex >= snapshot.Index)
         throw std::runtime_error("Application is not behind the snapshot");

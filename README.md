@@ -100,6 +100,8 @@ The [metadata continuity follow-up](docs/stable-snapshot-metadata-continuity.md)
 preserves the known identity across legacy-format refreshes and rejects conflicts.
 The [storage continuity follow-up](docs/stable-snapshot-storage-continuity.md)
 applies the same identity rule to direct memory and durable snapshot installs.
+The [checkpoint restore follow-up](docs/stable-snapshot-checkpoint-continuity.md)
+rejects standalone application checkpoints with a conflicting stable identity.
 The [snapshot term validation fix](docs/snapshot-committed-terms.md) rejects
 snapshot boundaries that contradict the follower's committed prefix.
 The [message buffer follow-up](docs/message-extents.md) checks allocated buffer

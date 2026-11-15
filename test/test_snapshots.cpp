@@ -349,6 +349,43 @@ void test_restore_rejects_mismatched_log_configuration_and_used_application(void
     Reject([&] { RestoreSnapshot(snapshot, raft, restored); });
     assert_true(Read(restored, "a") == "one");
 }
+void test_restore_rejects_checkpoint_with_conflicting_stable_identity(void**) {
+    const std::vector<uint32_t> voters{1, 2, 3};
+    auto state = std::make_shared<TState>();
+    state->BindVoters(voters);
+    TSnapshot authoritative{2, 1, voters, "authoritative"};
+    authoritative.StableConfiguration = true;
+    authoritative.ConfigurationIndex = 1;
+    authoritative.ConfigurationTerm = 1;
+    state->InstallSnapshot(authoritative);
+    state->CurrentTerm = 2;
+    auto entry = NewHoldedMessage<TLogEntry>(); entry->Term = 2;
+    state->Append(entry);
+    TRaft raft(state, 1, {{2, std::make_shared<TSink>()}, {3, std::make_shared<TSink>()}});
+    const_cast<TVolatileState*>(raft.GetVolatileState())->CommitIndex = 3;
+
+    TKv source; Apply(source, "a", "checkpoint value", 3);
+    TSnapshot checkpoint{3, 2, voters, source.SaveSnapshot()};
+    checkpoint.StableConfiguration = true;
+    for (int mode = 0; mode < 2; ++mode) {
+        auto conflicting = checkpoint;
+        if (mode == 0) conflicting.ConfigurationIndex = 2;
+        else conflicting.ConfigurationTerm = 2;
+        TKv rejected;
+        Reject([&] { RestoreSnapshot(conflicting, raft, rejected); });
+        assert_int_equal(rejected.LastAppliedIndex, 0);
+        assert_true(Read(rejected, "a").empty());
+    }
+
+    // Legacy checkpoints contain no identity; the local trusted identity is
+    // still enough to accept their application image at a matching boundary.
+    checkpoint.StableConfiguration = false;
+    checkpoint.ConfigurationIndex = checkpoint.ConfigurationTerm = 0;
+    TKv legacy;
+    RestoreSnapshot(checkpoint, raft, legacy);
+    assert_int_equal(legacy.LastAppliedIndex, 3);
+    assert_true(Read(legacy, "a") == "checkpoint value");
+}
 void test_startup_restores_stale_application_from_durable_snapshot_boundary(void**) {
     auto state = std::make_shared<TState>();
     TKv source; Apply(source, "snapshot", "committed", 2);
@@ -629,6 +666,7 @@ int main() {
         cmocka_unit_test(test_kv_invalid_snapshot_preserves_existing_state_and_progress),
         cmocka_unit_test(test_capture_requires_committed_applied_progress),
         cmocka_unit_test(test_restore_rejects_mismatched_log_configuration_and_used_application),
+        cmocka_unit_test(test_restore_rejects_checkpoint_with_conflicting_stable_identity),
         cmocka_unit_test(test_startup_restores_stale_application_from_durable_snapshot_boundary),
         cmocka_unit_test(test_memory_snapshot_storage_preserves_stable_configuration_identity),
 #ifdef __linux__
