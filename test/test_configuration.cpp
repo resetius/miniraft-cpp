@@ -166,6 +166,29 @@ void test_history_rejects_skips_wrong_predecessors_and_term_regression(void**) {
     assert_false(prefix.IsJoint()); assert_int_equal(prefix.ThroughIndex(), 1);
     assert_true(pending.IsJoint()); assert_int_equal(pending.ThroughIndex(), 2);
 }
+void test_scan_requires_each_configuration_predecessor_to_be_committed(void**) {
+    TState state; state.CurrentTerm = 4;
+    state.Append(Ordinary(1));
+    const TConfigurationRecord joint{EConfigurationPhase::Joint, 2, 0, 0, {1}, {1, 2}};
+    state.Append(EncodeConfigurationEntry(joint));
+    const TConfigurationRecord stable{EConfigurationPhase::Stable, 3, 2, 2, {1}, {1, 2}};
+    state.Append(EncodeConfigurationEntry(stable));
+    const TConfigurationRecord nextJoint{EConfigurationPhase::Joint, 4, 3, 3, {1, 2}, {2, 3}};
+    state.Append(EncodeConfigurationEntry(nextJoint));
+
+    const auto baseline = TConfigurationHistory::Stable({1}, 0, 0, 0, 0);
+    // The first joint entry is committed, but its stable successor is not.
+    // The next joint transition must wait for that stable entry to commit.
+    Reject([&] { ScanConfigurationHistory(state, baseline, 2); });
+
+    const auto scan = ScanConfigurationHistory(state, baseline, 3);
+    assert_false(scan.Committed.IsJoint());
+    assert_true(scan.Committed.OldVoters() == stable.NewVoters);
+    assert_true(scan.Latest.IsJoint());
+    assert_true(scan.Latest.OldVoters() == nextJoint.OldVoters);
+    assert_true(scan.Latest.NewVoters() == nextJoint.NewVoters);
+    assert_true(scan.HasUncommittedConfiguration());
+}
 struct TCountingState : TState {
     mutable unsigned Gets = 0;
     TMessageHolder<TLogEntry> Get(int64_t index) const override { ++Gets; return TState::Get(index); }
@@ -195,8 +218,7 @@ void test_scan_separates_commit_and_replaced_suffix(void**) {
     scan = ScanConfigurationHistory(state, base, 2);
     assert_true(scan.Latest.IsJoint()); assert_false(scan.HasUncommittedConfiguration());
     state.Append(EncodeConfigurationEntry(final));
-    scan = ScanConfigurationHistory(state, base, 1);
-    assert_false(scan.Committed.IsJoint()); assert_true(scan.HasUncommittedConfiguration());
+    Reject([&] { ScanConfigurationHistory(state, base, 1); });
     Reject([&] { base.ObserveMetadata(1, 1, TLogEntry::EConfiguration); });
     Reject([&] { base.ObserveMetadata(2, 1, 0); });
 }
@@ -570,6 +592,7 @@ int main() {
         cmocka_unit_test(test_configuration_scan_compares_full_configuration_state),
         cmocka_unit_test(test_history_from_joint_snapshot_requires_a_consistent_identity),
         cmocka_unit_test(test_history_rejects_skips_wrong_predecessors_and_term_regression),
+        cmocka_unit_test(test_scan_requires_each_configuration_predecessor_to_be_committed),
         cmocka_unit_test(test_scan_separates_commit_and_replaced_suffix),
         cmocka_unit_test(test_scan_from_joint_snapshot_and_rejects_mismatched_baselines),
         cmocka_unit_test(test_scan_from_stable_configuration_snapshot),

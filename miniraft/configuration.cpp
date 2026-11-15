@@ -193,6 +193,12 @@ TConfigurationScan ScanConfigurationHistory(const IState& state,
         const auto flags = state.RetainedLogFlags(index);
         if (!term || term > state.CurrentTerm) throw std::invalid_argument("Invalid retained log term");
         if (flags & TLogEntry::EConfiguration) {
+            // Do not accept a second transition until the preceding config has
+            // committed. Otherwise an uncommitted joint entry could be followed
+            // by a stable entry and make Latest appear to leave joint mode
+            // without ever establishing the required old/new quorum.
+            if (latest.ConfigurationIndex() > commitIndex)
+                throw std::invalid_argument("Configuration transition precedes predecessor commitment");
             auto entry = state.Get(index);
             if (!entry.HasValidExtent() || entry->Len < sizeof(TLogEntry) ||
                 entry->Term != term || entry->Flags != flags)

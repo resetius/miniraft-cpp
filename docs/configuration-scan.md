@@ -21,6 +21,9 @@ sets to agree. The scan checks snapshot and log boundaries, voter history, terms
 configuration predecessors, and transitions.
 It requires a consistent, externally serialized view of the state; it does not
 mutate storage, apply entries, activate voters, or change Raft roles.
+It also rejects a configuration entry that follows an earlier configuration
+entry outside the supplied commit boundary. In particular, a stable successor
+cannot make an uncommitted joint configuration disappear from the latest view.
 
 For ordinary entries, the scan trusts term and flag metadata from the storage
 backend, which must validate its own records. Memory and durable backends avoid
