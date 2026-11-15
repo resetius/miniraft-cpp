@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <vector>
 
-// Experimental record encoding only. Current Raft rejects these entries.
+// Experimental configuration record encoding. The runtime can recover a
+// validated retained history, but proposals and incoming config entries remain
+// disabled until the complete transition/install protocol is implemented.
 enum class EConfigurationPhase : uint32_t { Joint = 1, Stable = 2 };
 struct TConfigurationRecord {
     EConfigurationPhase Phase = EConfigurationPhase::Joint;
@@ -66,8 +68,8 @@ struct TConfigurationScan {
     }
 };
 
-// Offline, read-only validation. The caller supplies and must substantiate both
-// the baseline and the commit boundary; neither is proven by this scan.
+// Read-only validation. The caller supplies and must substantiate both the
+// baseline and commit boundary; neither is proven by this scan.
 TConfigurationScan ScanConfigurationHistory(const IState& state,
     TConfigurationHistory baseline, uint64_t commitIndex);
 

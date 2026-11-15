@@ -253,17 +253,14 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
             throw std::invalid_argument("Invalid or duplicate learner ID");
         previous = id;
     }
-    if (!std::binary_search(Learners.begin(), Learners.end(), Id)) Voters.push_back(Id);
+    if (!std::binary_search(Learners.begin(), Learners.end(), Id)) InitialVoters.push_back(Id);
     for (const auto& [id, _] : Nodes)
-        if (!std::binary_search(Learners.begin(), Learners.end(), id)) Voters.push_back(id);
-    std::sort(Voters.begin(), Voters.end());
-    ValidateFixedVoters(Voters);
+        if (!std::binary_search(Learners.begin(), Learners.end(), id)) InitialVoters.push_back(id);
+    std::sort(InitialVoters.begin(), InitialVoters.end());
+    ValidateFixedVoters(InitialVoters);
+    Voters = InitialVoters;
     VotingQuorum.emplace(Voters);
     if (!State->CurrentTerm) throw std::invalid_argument("Stored Raft term must be positive");
-    if (!IsVoter(Id) && State->VotedFor)
-        throw std::invalid_argument("A learner store must not contain a vote");
-    if (State->VotedFor && !IsVoter(State->VotedFor))
-        throw std::invalid_argument("Stored vote does not name a configured voter");
     Nservers = Voters.size(); MinVotes = Nservers / 2 + 1;
     if (!Learners.empty() && !State->SupportsVoterBinding())
         throw std::invalid_argument("Learners require voter-binding-capable storage");
@@ -277,10 +274,11 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
         ValidateSnapshot(*snapshot);
         if (snapshot->IsJoint())
             throw std::invalid_argument("Joint snapshot recovery is unsupported");
-        if (snapshot->StableConfiguration && bound != Voters)
-            throw std::invalid_argument("Stable configuration snapshot requires an existing voter binding");
+        if (snapshot->StableConfiguration && bound != InitialVoters)
+            throw std::invalid_argument("Stable configuration snapshot requires the existing voter binding");
         if (snapshot->Index != State->SnapshotIndex || snapshot->Term != State->SnapshotTerm ||
-            snapshot->Term > State->CurrentTerm || snapshot->Voters != Voters ||
+            snapshot->Term > State->CurrentTerm ||
+            snapshot->Voters != InitialVoters ||
             State->LastLogTerm < State->SnapshotTerm || State->LastLogTerm > State->CurrentTerm ||
             (State->LastLogIndex == State->SnapshotIndex && State->LastLogTerm != State->SnapshotTerm))
             throw std::invalid_argument("Compacted state snapshot boundary mismatch");
@@ -289,12 +287,8 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
     }
     if (State->HasUnboundRecoveredState() && !snapshot)
         throw std::invalid_argument("Recovered durable state requires voter proof before Raft startup");
-    // Reject before binding voters or serving traffic. Current Raft cannot
-    // interpret configuration entries, including uncommitted suffix entries.
     auto previousTerm = State->SnapshotTerm;
     for (uint64_t index = State->SnapshotIndex + 1; index <= State->LastLogIndex; ++index) {
-        if (State->RetainedLogFlags(index) & TLogEntry::EConfiguration)
-            throw std::invalid_argument("Configuration log recovery is unsupported");
         if (snapshot) {
             const auto term = State->RetainedLogTerm(index);
             if (!term || term < previousTerm || term > State->CurrentTerm)
@@ -305,14 +299,102 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
     if (snapshot && previousTerm != State->LastLogTerm)
         throw std::invalid_argument("Compacted log last term mismatch");
     const bool fresh = State->CurrentTerm == 1 && !State->VotedFor && !State->LastLogIndex;
-    if (State->SupportsVoterBinding() && (!bound.empty() || fresh || snapshot || !Learners.empty()))
-        State->BindVoters(Voters);
+    if (!bound.empty()) {
+        if (bound != InitialVoters)
+            throw std::invalid_argument("Persisted voter configuration differs from the configured peers");
+    }
+    const bool bindInitialVoters = bound.empty() && State->SupportsVoterBinding() &&
+        (fresh || snapshot || !Learners.empty());
+    const auto baseline = snapshot && snapshot->StableConfiguration
+        ? TConfigurationHistory::FromStableSnapshot(*snapshot)
+        : TConfigurationHistory::Stable(InitialVoters, 0, 0, State->SnapshotIndex, State->SnapshotTerm);
+    ConfigurationBaseline = baseline;
+    RefreshConfiguration(std::max(State->CommitIndex, State->SnapshotIndex));
+    const bool hasRetainedConfiguration = Configuration->Latest.ConfigurationIndex() > baseline.ConfigurationIndex();
+    if (hasRetainedConfiguration && (!State->SupportsVoterBinding() || bound.empty() ||
+        !State->SupportsCommitIndexPersistence()))
+        throw std::invalid_argument("Retained membership changes require bound voters and a persisted commit index");
+    if (State->VotedFor && !IsVoter(State->VotedFor) && !hasRetainedConfiguration)
+        throw std::invalid_argument("Stored vote does not name a configured voter");
+    if (!IsVoter(Id) && State->VotedFor && !hasRetainedConfiguration)
+        throw std::invalid_argument("A learner store must not contain a vote");
+    if (bindInitialVoters) State->BindVoters(InitialVoters);
     if (commitFloorAdded) {
         State->CommitIndex = State->SnapshotIndex;
         State->Commit();
     }
     VolatileState->CommitIndex = State->CommitIndex;
     State->MarkRaftStarted();
+}
+
+void TRaft::RefreshConfiguration(uint64_t commitIndex) {
+    if (!ConfigurationBaseline)
+        throw std::logic_error("Missing trusted configuration baseline");
+    auto scan = ScanConfigurationHistory(*State, *ConfigurationBaseline, commitIndex);
+
+    // An uncommitted joint entry already requires both majorities to commit.
+    // Once the joint entry commits, keep joint consensus until its stable
+    // successor commits as well. This makes truncating either suffix restore
+    // the quorum implied by the surviving log.
+    const TConfigurationHistory* quorumConfiguration = nullptr;
+    if (scan.Committed.IsJoint()) quorumConfiguration = &scan.Committed;
+    else if (scan.Latest.IsJoint()) quorumConfiguration = &scan.Latest;
+    else quorumConfiguration = &scan.Committed;
+
+    std::vector<uint32_t> voters = quorumConfiguration->OldVoters();
+    std::optional<TQuorum> quorum;
+    int minVotes = 0;
+    if (quorumConfiguration->IsJoint()) {
+        voters.insert(voters.end(), quorumConfiguration->NewVoters().begin(),
+            quorumConfiguration->NewVoters().end());
+        std::sort(voters.begin(), voters.end());
+        voters.erase(std::unique(voters.begin(), voters.end()), voters.end());
+        quorum.emplace(quorumConfiguration->OldVoters(), quorumConfiguration->NewVoters());
+        minVotes = std::max(int(quorumConfiguration->OldVoters().size() / 2 + 1),
+            int(quorumConfiguration->NewVoters().size() / 2 + 1));
+    } else {
+        quorum.emplace(quorumConfiguration->OldVoters());
+        minVotes = int(quorumConfiguration->OldVoters().size() / 2 + 1);
+    }
+    for (auto id : voters)
+        if (id != Id && !Nodes.contains(id))
+            throw std::invalid_argument("Active configuration has no replication target for a voter");
+
+    std::vector<uint32_t> learners;
+    if (!std::binary_search(voters.begin(), voters.end(), Id)) learners.push_back(Id);
+    for (const auto& [id, _] : Nodes)
+        if (!std::binary_search(voters.begin(), voters.end(), id)) learners.push_back(id);
+    std::sort(learners.begin(), learners.end());
+
+    Voters.swap(voters);
+    Learners.swap(learners);
+    VotingQuorum.swap(quorum);
+    MinVotes = minVotes;
+    Nservers = int(Voters.size());
+    Configuration = std::move(scan);
+    const auto& baseline = *ConfigurationBaseline;
+    const auto& latest = Configuration->Latest;
+    ConfigurationScanRequired = baseline.ConfigurationIndex() != latest.ConfigurationIndex() ||
+        baseline.ConfigurationTerm() != latest.ConfigurationTerm() || baseline.IsJoint() != latest.IsJoint() ||
+        baseline.OldVoters() != latest.OldVoters() || baseline.NewVoters() != latest.NewVoters();
+
+    if (!IsVoter(Id)) {
+        VolatileState->Votes.clear();
+        if (StateName == EState::CANDIDATE || StateName == EState::LEADER) {
+            StateName = EState::FOLLOWER;
+            VolatileState->LeaderId = 0;
+        }
+    }
+}
+
+bool TRaft::HasMembershipHistory() const {
+    if (!ConfigurationBaseline || !Configuration) return false;
+    const auto& baseline = *ConfigurationBaseline;
+    const auto& latest = Configuration->Latest;
+    return baseline.ConfigurationIndex() != latest.ConfigurationIndex() ||
+        baseline.ConfigurationTerm() != latest.ConfigurationTerm() ||
+        baseline.IsJoint() != latest.IsJoint() || baseline.OldVoters() != latest.OldVoters() ||
+        baseline.NewVoters() != latest.NewVoters();
 }
 
 void TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message) {
@@ -856,7 +938,7 @@ void TRaft::AddLearnerTarget(uint32_t id, std::shared_ptr<INode> node) {
     if (!id || id == Id || !node || Nodes.contains(id) || IsVoter(id) ||
         std::binary_search(Learners.begin(), Learners.end(), id))
         throw std::invalid_argument("Invalid or duplicate learner target");
-    if (!State->SupportsVoterBinding() || State->GetBoundVoters() != Voters)
+    if (!State->SupportsVoterBinding() || State->GetBoundVoters() != InitialVoters)
         throw std::logic_error("Learner staging requires a bound voter configuration");
     if (Nodes.size() >= size_t(INT_MAX)) throw std::overflow_error("Too many replication targets");
     // Build all allocating changes before publishing any part of the target.
@@ -908,6 +990,8 @@ bool TRaft::IsLearnerCommitAcknowledged(uint32_t id) const {
 
 TSnapshot TRaft::Compact() {
     if (!State->SupportsSnapshots()) throw std::logic_error("Storage cannot compact snapshots");
+    if (HasMembershipHistory())
+        throw std::logic_error("Compaction after a log membership change requires runtime configuration snapshots");
     auto application = SnapshotApplication.lock();
     if (!application) throw std::logic_error("Compaction requires a bound application");
     if (application->LastAppliedIndex == State->SnapshotIndex && State->GetSnapshot()) return *State->GetSnapshot();
@@ -920,6 +1004,10 @@ TSnapshot TRaft::Compact() {
     application->ValidateSnapshot(snapshot.Data, snapshot.Index);
     AdvanceCommitIndex(VolatileState->CommitIndex);
     State->InstallSnapshot(snapshot);
+    ConfigurationBaseline = snapshot.StableConfiguration
+        ? TConfigurationHistory::FromStableSnapshot(snapshot)
+        : TConfigurationHistory::Stable(Voters, 0, 0, snapshot.Index, snapshot.Term);
+    RefreshConfiguration(VolatileState->CommitIndex);
     // Outstanding transfers own their immutable encoded bytes; discard any
     // otherwise-retained encoding of the old local snapshot.
     EncodedSnapshot.reset();
@@ -1114,6 +1202,7 @@ void TRaft::AdvanceCommitIndex(uint64_t index) {
         State->Commit();
     }
     VolatileState->CommitIndex = target;
+    if (ConfigurationScanRequired) RefreshConfiguration(target);
 }
 
 void TRaft::AdvanceLeaderCommit() {

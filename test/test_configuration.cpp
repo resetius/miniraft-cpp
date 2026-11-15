@@ -34,7 +34,8 @@ void FixChecksum(TMessageHolder<TLogEntry> entry) {
 }
 struct TEndpoint : INode {
     unsigned Sent = 0;
-    void Send(TMessageHolder<TMessage>) override { ++Sent; }
+    std::vector<TMessageHolder<TMessage>> Messages;
+    void Send(TMessageHolder<TMessage> message) override { ++Sent; Messages.push_back(std::move(message)); }
     void Drain() override {}
 };
 struct TCountingRsm : TDummyRsm {
@@ -488,6 +489,132 @@ void test_offline_history_scan_after_durable_snapshot_and_restart(void**) {
     assert_true(std::string(std::istreambuf_iterator<char>(after), {}) == before);
     std::error_code ignored; std::filesystem::remove_all(dir, ignored);
 }
+void test_raft_recovers_joint_quorum_for_candidate_election(void**) {
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-joint-quorum-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    const auto name = (dir / "raft").string();
+    {
+        auto state = std::make_shared<TDurableState>(name, 4);
+        state->BindVoters({1, 2, 3});
+        state->CurrentTerm = 2;
+        state->Commit();
+        TConfigurationRecord joint{EConfigurationPhase::Joint, 2, 0, 0, {1, 2, 3}, {3, 4, 5}};
+        state->Append(EncodeConfigurationEntry(joint));
+        state->Commit();
+
+        TNodeDict peers;
+        std::unordered_map<uint32_t, std::shared_ptr<TEndpoint>> endpoints;
+        for (uint32_t id : {1, 2, 3, 5}) {
+            auto endpoint = std::make_shared<TEndpoint>();
+            endpoints.emplace(id, endpoint);
+            peers.emplace(id, endpoint);
+        }
+        auto raft = std::make_shared<TRaft>(state, 4, peers, std::vector<uint32_t>{4, 5});
+        assert_true(raft->IsVoter(4));
+        assert_true(raft->IsVoter(5));
+        assert_int_equal(raft->GetNservers(), 5);
+
+        auto now = ITimeSource::Time{};
+        raft->ProcessTimeout(now); // self vote alone cannot satisfy either joint majority
+        assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+        auto vote = [&](uint32_t source) {
+            raft->Process(now, NewHoldedMessage(TMessageEx{.Src = source, .Dst = 4, .Term = 3},
+                TRequestVoteResponse{.VoteGranted = 1}));
+            raft->ProcessTimeout(now + std::chrono::milliseconds(1));
+        };
+
+        vote(1); // This leaves both voter sets below their strict majority.
+        assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+        vote(3); // 3 plus self satisfies new, while 1 plus 3 satisfies old.
+        assert_true(raft->CurrentStateName() == EState::LEADER);
+
+        raft->ProcessTimeout(now + std::chrono::milliseconds(2));
+        auto ack = [&](uint32_t source, uint64_t expectedIndex, int responseMillis) {
+            auto request = endpoints.at(source)->Messages.back().Cast<TAppendEntriesRequest>();
+            const auto matchIndex = request->PrevLogIndex + request->Nentries;
+            assert_int_equal(matchIndex, expectedIndex);
+            raft->Process(now + std::chrono::milliseconds(responseMillis),
+                NewHoldedMessage(TMessageEx{.Src = source, .Dst = 4, .Term = 3, .Seqno = request->Seqno},
+                    TAppendEntriesResponse{.MatchIndex = matchIndex, .Success = 1}));
+        };
+        ack(3, 1, 3);
+        ack(5, 1, 3);
+        ack(1, 1, 3);
+        assert_int_equal(raft->GetVolatileState()->CommitIndex, 0);
+
+        raft->ProcessTimeout(now + std::chrono::milliseconds(4));
+        ack(3, 2, 5);
+        assert_int_equal(raft->GetVolatileState()->CommitIndex, 0);
+        ack(5, 2, 5);
+        assert_int_equal(raft->GetVolatileState()->CommitIndex, 0);
+        assert_int_equal(raft->CommitSeqno(), 0);
+        ack(1, 2, 5);
+        assert_int_equal(raft->GetVolatileState()->CommitIndex, 2);
+        assert_true(raft->CommitSeqno() > 0);
+    }
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+}
+void test_raft_keeps_joint_quorum_until_stable_successor_commits(void**) {
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-joint-finalize-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    auto state = std::make_shared<TDurableState>((dir / "raft").string(), 4);
+    state->BindVoters({1, 2, 3});
+    state->CurrentTerm = 3;
+    state->Commit();
+    TConfigurationRecord joint{EConfigurationPhase::Joint, 2, 0, 0, {1, 2, 3}, {3, 4, 5}};
+    state->Append(EncodeConfigurationEntry(joint));
+    auto stable = joint;
+    stable.Phase = EConfigurationPhase::Stable;
+    stable.Term = 3;
+    stable.PreviousIndex = 1;
+    stable.PreviousTerm = 2;
+    state->Append(EncodeConfigurationEntry(stable));
+    state->CommitIndex = 1;
+    state->Commit();
+
+    TNodeDict peers;
+    for (uint32_t id : {1, 2, 3, 5}) peers.emplace(id, std::make_shared<TEndpoint>());
+    {
+        TRaft inJoint(state, 4, peers, std::vector<uint32_t>{4, 5});
+        assert_true(inJoint.IsVoter(1));
+        assert_true(inJoint.IsVoter(5));
+        assert_int_equal(inJoint.GetNservers(), 5);
+    }
+
+    state->CommitIndex = 2;
+    state->Commit();
+    {
+        TRaft afterStableCommit(state, 4, peers, std::vector<uint32_t>{4, 5});
+        assert_false(afterStableCommit.IsVoter(1));
+        assert_false(afterStableCommit.IsVoter(2));
+        assert_true(afterStableCommit.IsVoter(3));
+        assert_true(afterStableCommit.IsVoter(5));
+        assert_int_equal(afterStableCommit.GetNservers(), 3);
+    }
+    state.reset();
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+}
+void test_raft_rejects_stable_snapshot_that_changes_active_voters(void**) {
+    auto state = std::make_shared<TState>();
+    state->BindVoters({1, 2, 3});
+    state->CurrentTerm = 5;
+    TSnapshot snapshot{5, 4, {2, 3, 4}, "stable image"};
+    snapshot.StableConfiguration = true;
+    snapshot.ConfigurationIndex = 4;
+    snapshot.ConfigurationTerm = 3;
+    state->InstallSnapshot(snapshot);
+
+    TNodeDict peers{
+        {3, std::make_shared<TEndpoint>()},
+        {4, std::make_shared<TEndpoint>()},
+    };
+    const auto fields = static_cast<TStateFields>(*state);
+    Reject([&] { TRaft raft(state, 2, peers); });
+    assert_true(static_cast<TStateFields>(*state) == fields);
+    assert_true(state->GetBoundVoters() == std::vector<uint32_t>({1, 2, 3}));
+}
 
 void test_persisted_commit_boundary_drives_committed_configuration_scan(void**) {
     auto dir = std::filesystem::temp_directory_path() / ("miniraft-committed-history-" +
@@ -617,6 +744,9 @@ int main() {
         cmocka_unit_test(test_durable_restart_rejects_reserved_entry_without_rewriting),
         cmocka_unit_test(test_legacy_restart_uses_safe_flag_lookup_and_preserves_files),
         cmocka_unit_test(test_offline_history_scan_after_durable_snapshot_and_restart),
+        cmocka_unit_test(test_raft_recovers_joint_quorum_for_candidate_election),
+        cmocka_unit_test(test_raft_keeps_joint_quorum_until_stable_successor_commits),
+        cmocka_unit_test(test_raft_rejects_stable_snapshot_that_changes_active_voters),
         cmocka_unit_test(test_persisted_commit_boundary_drives_committed_configuration_scan),
         cmocka_unit_test(test_configuration_snapshots_preserve_original_binding_across_transitions),
 #endif

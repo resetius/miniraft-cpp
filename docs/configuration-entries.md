@@ -17,25 +17,28 @@ and term; a stable entry requires a nonzero predecessor. The codec checks shape,
 not log position, predecessor identity, commitment, role eligibility or cluster
 authentication. CRC is an accidental-corruption check, not authentication.
 
-Current Raft rejects entries carrying the reserved bit in local proposals and
-incoming AppendEntries, before changing term or log. Startup scans the retained
-suffix and rejects such entries before voter binding or serving traffic. If a
-configuration record reaches committed replay in a controlled test or future
-runtime, the request processor validates it, advances its applied index, and
-does not pass it to the application state machine. This no-op application rule
-does not activate the configuration. Joint snapshots remain rejected as described
-in [joint snapshot metadata](joint-snapshots.md). The codec and storage backends
-can represent records for deterministic testing and offline tools, but they are
-not an active replication or recovery protocol.
+Local proposals and incoming AppendEntries still reject entries carrying the
+reserved bit, before changing term or log. Startup now scans and reconstructs
+valid retained configuration history, then selects the stable or joint quorum for
+elections, commit advancement and strong-read confirmation. Retained transitions
+require a bound original voter set, a persisted commit index and peer endpoints
+for every active voter. If a configuration record reaches committed replay, the
+request processor validates it, advances its applied index, and does not pass it
+to the application state machine. Joint snapshot recovery and snapshot transfer
+across a membership transition remain unsupported, so compaction is blocked while
+the retained suffix carries a membership change. This is recovery support, not a
+live reconfiguration API. Joint snapshots remain rejected as described in
+[joint snapshot metadata](joint-snapshots.md).
 
 Compatibility matters: previous versions allowed custom entry flags. Before
-upgrading, audit applications and retained logs for use of the high bit. A node
-with that bit in its retained suffix now refuses startup; this release does not
-rewrite or migrate it. A fixed snapshot may already contain effects of older
+upgrading, audit applications and retained logs for use of the high bit. Raft now
+reserves it for configuration records and refuses startup unless every retained
+record forms a valid, trusted transition chain; this release does not rewrite or
+migrate custom uses. A fixed snapshot may already contain effects of older
 entries, which this suffix scan cannot detect. Older binaries may apply an unknown
-configuration entry as application data, so no future version should replicate
-these entries until every voter runs a compatible implementation. Do not delete
-or edit committed state to bypass rejection.
+configuration entry as application data, so these entries must not be replicated
+until every voter runs a compatible implementation. Do not delete or edit
+committed state to bypass rejection.
 
 The optimized memory and durable backends scan flags without copying payloads.
 External and legacy backends use the default Get-based fallback, so startup can
@@ -45,9 +48,10 @@ RetainedLogFlags consistent. No existing durable file or wire frame layout chang
 
 Tests cover both phases, bootstrap and maximum-size records, every-byte corruption
 and truncation, semantic corruption with valid CRC, malformed frames, rejected RPCs
-and proposals, application isolation, compacted suffixes and restart rejection
-without rewriting durable or legacy files. Self-review checked fail-closed ordering,
-the flag scan, predecessor shape and compatibility limits. No independent reviewer
-approval is claimed. Dynamic promotion/removal, configuration activation and
-rollback, joint snapshot recovery, discovery and full configuration history remain
-open; this experimental encoding may change when those semantics are implemented.
+and proposals, application isolation, compacted suffixes and restart recovery of a
+joint quorum without rewriting durable files. Self-review checked fail-closed
+ordering, predecessor shape, runtime quorum selection and compatibility limits. No
+independent reviewer approval is claimed. Dynamic promotion/removal APIs, live
+configuration RPCs, suffix rollback after replacement, joint snapshot recovery,
+discovery and full transition testing remain open; this experimental encoding may
+change when those semantics are implemented.

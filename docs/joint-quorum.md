@@ -10,8 +10,13 @@ TQuorum validates positive, sorted, unique, nonempty voter sets and computes
 stable or joint election results and watermarks. Its value callback must return
 the same value for a voter throughout a call. TVolatileState can apply this
 arithmetic to commit advancement, retaining the current-term commit restriction
-and monotonic commit index. Existing fixed-membership election, commit and strong
-read paths now use the same stable-quorum arithmetic; they do not enter joint mode.
+and monotonic commit index. Validated retained configuration history now selects
+the runtime quorum used by elections, commit advancement and strong-read
+confirmation. An uncommitted joint entry uses both voter sets; after that entry
+commits, the joint quorum remains active until its stable successor commits.
+The fixed-membership snapshot runtime still requires stable snapshot voters to
+match the node's configured and bound set; joint snapshot recovery remains
+disabled.
 
 Tests exhaust every pair of nonempty old/new subsets of five IDs and every vote
 subset, including disjoint and overlapping sets, even-sized groups, absent self
@@ -20,16 +25,19 @@ watermarks and check current-term gating. Separate stable-set tests compare the
 calculation with strict-majority order statistics for sizes 1–8. Existing Raft,
 partition, learner, snapshot and read tests exercise the fixed-membership paths.
 
-This is arithmetic foundation, not a reconfiguration API. It does not replicate
-configuration entries, change roles, elect/remove leaders, bind joint membership
-durably or encode configuration history in snapshots. A safe next step must define
-configuration entry ordering and recovery, activation and rollback of uncommitted
-configurations, promotion readiness, old/new quorum use at every protocol phase,
-and snapshot installation across transitions. Until those pieces are implemented
-and tested, stored voter bindings remain immutable and promotion stays disabled.
+This adds runtime recovery and quorum selection, not a reconfiguration API. Local
+configuration proposals and incoming configuration entries remain disabled.
+Recovered suffix transitions require a bound original voter set, a persisted
+commit index and endpoints for every active voter. Joint snapshot recovery and
+snapshot transfer across a membership transition remain unsupported; compaction
+is rejected while the retained log contains a membership change beyond its
+snapshot baseline. Promotion readiness, live configuration RPCs, rollback on
+suffix replacement, and removed-leader behavior still need end-to-end coverage.
 
 The change adds a public type and changes TRaft's in-memory layout; rebuild the
 library and dependents together. Wire and durable formats are unchanged.
 Self-review checked overlap, strict majorities, current-term commitment, stable
-path equivalence and learner exclusion. No independent reviewer approval is
-claimed. There is no live membership change to exercise or benchmark yet.
+path equivalence and learner exclusion. Runtime tests verify that elections,
+commit advancement and strong-read confirmation each wait for both majorities
+under an in-progress joint configuration. No independent reviewer approval is
+claimed. The live transition API remains disabled.

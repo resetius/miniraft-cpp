@@ -13,6 +13,7 @@
 #include "timesource.h"
 #include "state.h"
 #include "quorum.h"
+#include "configuration.h"
 
 struct INode {
     virtual ~INode() = default;
@@ -118,8 +119,9 @@ enum class EState: int {
 
 class TRaft {
 public:
-    // Nodes contains every replication peer; learners may include the local ID.
-    // Voter roles remain fixed; learner replication targets can be staged locally.
+    // Nodes contains every configured replication peer; learners may include
+    // the local ID. Retained validated configuration history determines active
+    // voter roles and joint quorum arithmetic.
     TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, std::vector<uint32_t> learners = {});
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
@@ -173,6 +175,9 @@ public:
     }
 
     int GetMinVotes() const {
+        // Stable configurations return their strict-majority threshold. Joint
+        // configurations return the larger of the two thresholds; callers
+        // must use protocol outcomes, not this scalar, to decide a quorum.
         return MinVotes;
     }
 
@@ -211,10 +216,18 @@ private:
     ITimeSource::Time MakeElection(ITimeSource::Time now);
     uint64_t NextSeqno();
     bool ValidateRpc(TMessageHolder<TMessage> message) const;
+    void RefreshConfiguration(uint64_t commitIndex);
+    bool HasMembershipHistory() const;
 
     uint32_t Id;
     TNodeDict Nodes;
-    std::vector<uint32_t> Voters, Learners;
+    // InitialVoters is the immutable storage binding. Voters is the active
+    // voting union (the union of both sets while a joint configuration is in
+    // force); Learners is derived from that active membership.
+    std::vector<uint32_t> InitialVoters, Voters, Learners;
+    std::optional<TConfigurationHistory> ConfigurationBaseline;
+    std::optional<TConfigurationScan> Configuration;
+    bool ConfigurationScanRequired = false;
     std::optional<TQuorum> VotingQuorum;
     int MinVotes;
     int Npeers;
