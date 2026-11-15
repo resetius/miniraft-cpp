@@ -203,6 +203,31 @@ void test_learner_replication_cannot_commit_or_satisfy_strong_read(void**) {
     cluster.Isolated = {3}; cluster.Pump(1, 80);
     assert_int_equal(replies, 1); assert_true(Read(*cluster.Apps[3], "x") == "new");
 }
+void test_learner_commit_ack_waits_for_commit_propagation(void**) {
+    TCluster cluster; cluster.Elect(1); cluster.Pump();
+    auto leader = cluster.Nodes[0];
+    const auto index = leader->Append(cluster.Apps[0]->Prepare(Command("pending", "value")));
+
+    // The learner can have the complete log while the voters cannot yet commit
+    // this entry. Its ACK only proves the previous commit boundary.
+    cluster.Isolated = {2, 3}; cluster.Pump(1, 40);
+    assert_int_equal(leader->GetVolatileState()->CommitIndex, index - 1);
+    assert_true(leader->GetVolatileState()->MatchIndex.at(4) >= index);
+    assert_true(leader->IsLearnerCaughtUp(4));
+    assert_true(leader->IsLearnerCommitAcknowledged(4));
+
+    // Now let the voter majority commit while the learner is partitioned. The
+    // log watermark remains true, but the correlated commit acknowledgement is
+    // stale until the leader sends the new boundary and receives a reply.
+    cluster.Isolated = {4}; cluster.Pump(1, 40);
+    assert_int_equal(leader->GetVolatileState()->CommitIndex, index);
+    assert_true(leader->IsLearnerCaughtUp(4));
+    assert_false(leader->IsLearnerCommitAcknowledged(4));
+
+    cluster.Isolated.clear(); cluster.Pump(1, 40);
+    assert_true(leader->IsLearnerCommitAcknowledged(4));
+    assert_int_equal(cluster.Apps[3]->LastAppliedIndex, index);
+}
 void test_learner_snapshot_catchup_status_and_restart_preserve_role(void**) {
     TCluster cluster; cluster.Isolated = {4}; cluster.Elect(1);
     for (const std::string key : {"a", "b", "c"}) cluster.Write(key, std::string(60000, key[0]));
@@ -210,6 +235,7 @@ void test_learner_snapshot_catchup_status_and_restart_preserve_role(void**) {
     assert_true(snapshot.Voters == (std::vector<uint32_t>{1, 2, 3}));
     assert_false(cluster.Nodes[0]->IsLearnerCaughtUp(4)); cluster.Isolated.clear(); cluster.Pump(1, 100, true);
     assert_int_equal(cluster.Apps[3]->Loads, 1); assert_true(cluster.Nodes[0]->IsLearnerCaughtUp(4));
+    assert_true(cluster.Nodes[0]->IsLearnerCommitAcknowledged(4));
     assert_false(cluster.Nodes[0]->IsLearnerCaughtUp(2)); assert_false(cluster.Nodes[0]->IsLearnerCaughtUp(99));
     assert_true(Read(*cluster.Apps[3], "c") == std::string(60000, 'c'));
     cluster.Nodes[0]->Append(cluster.Apps[0]->Prepare(Command("tail", "later")));
@@ -753,6 +779,7 @@ int main() {
         cmocka_unit_test(test_single_voter_commits_and_reads_without_learner_acknowledgements),
         cmocka_unit_test(test_learner_grants_cannot_elect_candidate_and_no_votes_are_solicited),
         cmocka_unit_test(test_learner_replication_cannot_commit_or_satisfy_strong_read),
+        cmocka_unit_test(test_learner_commit_ack_waits_for_commit_propagation),
         cmocka_unit_test(test_learner_snapshot_catchup_status_and_restart_preserve_role),
         cmocka_unit_test(test_restart_cannot_promote_learner_or_change_voters_but_can_add_transport),
         cmocka_unit_test(test_nonfresh_unbound_store_requires_snapshot_proof_for_learners),

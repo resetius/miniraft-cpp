@@ -431,6 +431,7 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     });
     if (request == requests.end() ||
         (message->Success && message->MatchIndex != request->LastIndex)) return;
+    const auto acknowledgedLeaderCommit = request->LeaderCommit;
     // A newer response supersedes older RPCs. Reordered/duplicate failures
     // must not undo progress or repeatedly increase backoff.
     requests.erase(requests.begin(), std::next(request));
@@ -440,12 +441,15 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             acknowledged = std::max(acknowledged, message->Seqno);
         }
         auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], message->MatchIndex);
+        auto commitAckIndex = std::max(VolatileState->CommitAckIndex[nodeId],
+            std::min(acknowledgedLeaderCommit, message->MatchIndex));
         (*VolatileState)
             .SetMatchIndex(nodeId, matchIndex)
             .SetNextIndex(nodeId, matchIndex+1)
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1);
+        VolatileState->CommitAckIndex[nodeId] = commitAckIndex;
         AdvanceLeaderCommit();
     } else if (message->MatchIndex > 0) {
         // A compacted-prefix hint is not replication evidence. Probe its boundary
@@ -496,12 +500,13 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     }
     lastIndex = prevIndex + entries.size();
 
+    const auto leaderCommit = std::min(VolatileState->CommitIndex, lastIndex);
     auto mes = NewHoldedMessage(
         TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm, .Seqno = NextSeqno()},
         TAppendEntriesRequest {
             .PrevLogIndex = prevIndex,
             .PrevLogTerm = State->LogTerm(prevIndex),
-            .LeaderCommit = std::min(VolatileState->CommitIndex, lastIndex),
+            .LeaderCommit = leaderCommit,
             .LeaderId = Id,
             .Nentries = static_cast<uint32_t>(lastIndex - prevIndex),
         });
@@ -512,7 +517,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     }
     VolatileState->LastSentSeqno[nodeId] = mes->Seqno;
     auto& pending = VolatileState->PendingAppendRpcs[nodeId];
-    pending.push_back({mes->Seqno, lastIndex});
+    pending.push_back({mes->Seqno, lastIndex, leaderCommit});
     if (pending.size() > TVolatileState::MaxPendingAppendRpcs) pending.pop_front();
     return mes;
 }
@@ -873,6 +878,7 @@ std::shared_ptr<INode> TRaft::RemoveLearnerTarget(uint32_t id) {
     auto node = peer->second;
     Nodes.erase(peer); Learners.erase(learner);
     VolatileState->NextIndex.erase(id); VolatileState->MatchIndex.erase(id);
+    VolatileState->CommitAckIndex.erase(id);
     VolatileState->ReadAckSeqno.erase(id); VolatileState->LastSentSeqno.erase(id);
     VolatileState->PendingAppendRpcs.erase(id); VolatileState->SnapshotRpcs.erase(id);
     VolatileState->HeartbeatDue.erase(id); VolatileState->RpcDue.erase(id);
@@ -887,6 +893,16 @@ bool TRaft::IsLearnerCaughtUp(uint32_t id) const {
         VolatileState->CommitIndex == 0 || State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm) return false;
     auto match = VolatileState->MatchIndex.find(id);
     return match != VolatileState->MatchIndex.end() && match->second >= State->LastLogIndex;
+}
+
+bool TRaft::IsLearnerCommitAcknowledged(uint32_t id) const {
+    if (StateName != EState::LEADER || !std::binary_search(Learners.begin(), Learners.end(), id) ||
+        VolatileState->CommitIndex == 0 || State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm)
+        return false;
+    const auto match = VolatileState->MatchIndex.find(id);
+    const auto commitAck = VolatileState->CommitAckIndex.find(id);
+    return match != VolatileState->MatchIndex.end() && match->second >= State->LastLogIndex &&
+        commitAck != VolatileState->CommitAckIndex.end() && commitAck->second >= VolatileState->CommitIndex;
 }
 
 TSnapshot TRaft::Compact() {
@@ -957,6 +973,9 @@ void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> response)
         const auto index = std::max(VolatileState->MatchIndex[response->Src], response->SnapshotIndex);
         (*VolatileState).SetMatchIndex(response->Src, index).SetNextIndex(response->Src, index + 1)
             .SetBatchSize(response->Src, 1024).SetBackOff(response->Src, 1);
+        VolatileState->CommitAckIndex[response->Src] = std::max(
+            VolatileState->CommitAckIndex[response->Src],
+            std::min(VolatileState->CommitIndex, response->SnapshotIndex));
         AdvanceLeaderCommit();
         VolatileState->SnapshotRpcs.erase(found);
         // Snapshot completion is not a fresh-read acknowledgement. AppendEntries

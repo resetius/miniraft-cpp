@@ -54,7 +54,7 @@ private:
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TVolatileState {
-    struct TAppendRpc { uint64_t Seqno, LastIndex; };
+    struct TAppendRpc { uint64_t Seqno, LastIndex, LeaderCommit; };
     static constexpr size_t MaxPendingAppendRpcs = 256;
     // Distinct snapshot images retained by active peer transfers. New
     // compaction is deferred when this many generations are already pinned.
@@ -76,6 +76,8 @@ struct TVolatileState {
     uint32_t LeaderId = 0;
     std::unordered_map<uint32_t, uint64_t> NextIndex;
     std::unordered_map<uint32_t, uint64_t> MatchIndex;
+    // Highest leader commit boundary confirmed by a correlated replication ACK.
+    std::unordered_map<uint32_t, uint64_t> CommitAckIndex;
     std::unordered_set<uint32_t> Votes;
     std::unordered_map<uint32_t, ITimeSource::Time> HeartbeatDue;
     std::unordered_map<uint32_t, ITimeSource::Time> RpcDue;
@@ -133,6 +135,10 @@ public:
     bool IsVoter(uint32_t id) const;
     // Leader-only, point-in-time log catch-up; not permission to promote.
     bool IsLearnerCaughtUp(uint32_t id) const;
+    // True when a correlated ACK confirms the learner's Raft commit boundary
+    // through this leader's current commit index, and its log matches the leader.
+    // This does not attest to application progress or authorize promotion.
+    bool IsLearnerCommitAcknowledged(uint32_t id) const;
     // Leader-local replication staging; not a membership change. Caller owns
     // endpoint lifecycle, reconciles targets after failover/restart, and must
     // serialize these calls with all Raft processing.

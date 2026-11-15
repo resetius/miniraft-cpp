@@ -7,6 +7,10 @@ binding do not change. Staged learners receive the ordinary log or a snapshot
 when needed, but never count toward election, commit, or strong-read quorums.
 `IsLearnerCaughtUp` remains a point-in-time log watermark, not an authorization
 to promote or a guarantee of application health.
+`IsLearnerCommitAcknowledged` separately reports whether a correlated successful
+replication reply confirms the leader's current Raft commit boundary while the
+learner also matches the leader's log. It does not report application-applied
+progress and does not authorize promotion.
 
 These are serialized embedding APIs, not a replicated cluster configuration or a
 promotion API. The caller must ensure the destination is configured as a learner
