@@ -30,9 +30,10 @@ backend, which must validate its own records. Memory and durable backends avoid
 copying ordinary payloads; external backends using default metadata accessors may
 read full entries. Configuration records are read and validated in full.
 
-Configuration entries and joint snapshots remain rejected by the live runtime.
-Bound in-memory and durable stores can retain stable or joint metadata snapshots
-for offline validation while preserving the original voter binding. The scanner
-still requires a trusted configuration baseline; metadata presence alone does
-not authenticate a transition. Live membership activation, commit rules, and
-snapshot installation across membership transitions remain future work.
+The standalone scanner remains read-only. The Raft runtime uses it to validate
+a simulated AppendEntries suffix before accepting configuration entries and to
+recompute roles after commit or suffix replacement. Live changes additionally
+require durable commit-index persistence, the original voter binding and local
+endpoints for every active voter. Joint snapshot installation and snapshot
+transfer across a transition remain unsupported. Snapshot metadata alone does
+not authenticate a transition.

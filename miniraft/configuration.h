@@ -5,9 +5,8 @@
 #include <cstdint>
 #include <vector>
 
-// Experimental configuration record encoding. The runtime can recover a
-// validated retained history, but proposals and incoming config entries remain
-// disabled until the complete transition/install protocol is implemented.
+// Configuration record encoding for the live joint-consensus log protocol.
+// Snapshot installation across membership transitions remains unsupported.
 enum class EConfigurationPhase : uint32_t { Joint = 1, Stable = 2 };
 struct TConfigurationRecord {
     EConfigurationPhase Phase = EConfigurationPhase::Joint;
@@ -19,8 +18,9 @@ struct TConfigurationRecord {
 TMessageHolder<TLogEntry> EncodeConfigurationEntry(const TConfigurationRecord& record);
 TConfigurationRecord DecodeConfigurationEntry(TMessageHolder<TLogEntry> entry);
 
-// Offline transition validation only; does not establish commitment, activate
-// roles, or make a fixed-membership Raft node accept configuration entries.
+// Validates transition ordering and derives configuration identity from a
+// trusted baseline and commit boundary. Runtime callers use this before
+// activating roles or accepting a candidate AppendEntries suffix.
 class TConfigurationHistory {
 public:
     TConfigurationHistory(const TConfigurationHistory&) = default;

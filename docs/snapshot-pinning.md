@@ -59,4 +59,6 @@ durable formats are unchanged; no additional migration is required.
 This guarantees progress of the selected finite image under eventual chunk
 delivery and ACKs. Reaching the live log end still requires enough replication
 capacity relative to writes/compaction and sufficiently stable leadership.
-Dynamic promotion/removal and joint consensus remain open.
+The bounded promotion and joint-consensus path is described in
+[live membership](configuration-entries.md). Membership-aware snapshots and
+leader removal remain open.

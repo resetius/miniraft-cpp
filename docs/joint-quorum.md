@@ -25,14 +25,13 @@ watermarks and check current-term gating. Separate stable-set tests compare the
 calculation with strict-majority order statistics for sizes 1–8. Existing Raft,
 partition, learner, snapshot and read tests exercise the fixed-membership paths.
 
-This adds runtime recovery and quorum selection, not a reconfiguration API. Local
-configuration proposals and incoming configuration entries remain disabled.
-Recovered suffix transitions require a bound original voter set, a persisted
-commit index and endpoints for every active voter. Joint snapshot recovery and
-snapshot transfer across a membership transition remain unsupported; compaction
-is rejected while the retained log contains a membership change beyond its
-snapshot baseline. Promotion readiness, live configuration RPCs, rollback on
-suffix replacement, and removed-leader behavior still need end-to-end coverage.
+This arithmetic now backs the bounded live transition API described in
+[configuration entries](configuration-entries.md). Recovered suffix transitions
+and live changes require a bound original voter set, a persisted commit index and
+endpoints for every active voter. Joint snapshot recovery and snapshot transfer
+across a membership transition remain unsupported; compaction is rejected while
+the retained log contains a membership change beyond its snapshot baseline.
+Leader removal and explicit leadership transfer are not implemented.
 
 The change adds a public type and changes TRaft's in-memory layout; rebuild the
 library and dependents together. Wire and durable formats are unchanged.

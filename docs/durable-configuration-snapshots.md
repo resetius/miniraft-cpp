@@ -27,15 +27,17 @@ and requires both durable commit-index support and a persisted original voter
 binding. For configuration-bearing snapshots, the caller supplies the active
 history baseline through the snapshot boundary; the scanner verifies it against
 the snapshot metadata. Legacy snapshots still require the baseline voters to
-match the original binding. This remains an offline validation API; the snapshot
-metadata is not proof of commitment or cluster identity, and this does not
-activate joint quorums or permit live configuration changes.
+match the original binding. This scanner is an offline validation API; snapshot
+metadata is not proof of commitment or cluster identity. The separate live log
+transition API uses the durable commit boundary and original binding, while
+joint snapshot installation remains unsupported.
 
 In alpha.45 these images were persistence for offline validation only. The
 alpha.46 follow-up enables runtime recovery and transfer of MRFTS003 stable
 snapshots when the voter list equals the node's existing fixed membership.
 Compaction carries forward that stable configuration identity. MRFTS002 joint
-snapshots and configuration log entries remain disabled in the live runtime.
+snapshots remain disabled in the live runtime; configuration log entries are
+now accepted through the guarded joint-consensus path.
 Since alpha.58, bound storage can preserve its original voter binding while
 installing configuration-bearing snapshots whose active set changed. Raft
 startup and network snapshot handling still reject those transition snapshots;

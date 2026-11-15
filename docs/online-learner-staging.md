@@ -38,6 +38,7 @@ multi-chunk snapshot with delayed acknowledgements, invalid calls, and refusal
 on unbound or legacy stores. Durable-store tests verify that staging does not
 rewrite the binding and is absent on restart. A leader-change test verifies
 that an embedding application must re-register the target on the new leader.
-Dynamic voter promotion/removal, replicated joint consensus, persistent discovery,
-and membership-aware snapshot installation are still required before live voting
-membership changes are supported.
+A bounded durable-store promotion/finalization path now uses these catch-up
+acknowledgements; see [live joint membership](configuration-entries.md).
+Persistent endpoint discovery, leader removal and membership-aware snapshot
+installation remain open.

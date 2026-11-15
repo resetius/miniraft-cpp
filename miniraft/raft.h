@@ -130,6 +130,13 @@ public:
     // Local proposals require leader state. Role rejection leaves storage and
     // the supplied entry unchanged; followers receive entries through Process.
     uint64_t Append(TMessageHolder<TLogEntry> entry);
+    // Start a joint-consensus transition. Every newly added voter must already
+    // be staged as a learner and have acknowledged this leader's committed
+    // boundary. This first runtime path requires the current leader to remain
+    // in the new voter set; leadership transfer must precede leader removal.
+    uint64_t ProposeJointConfiguration(std::vector<uint32_t> newVoters);
+    // Append the stable successor after the joint entry has committed.
+    uint64_t FinalizeConfiguration();
     uint32_t GetLeaderId() const;
     uint64_t GetLastIndex() const;
     std::vector<uint32_t> GetVoterIds() const;
@@ -216,6 +223,8 @@ private:
     ITimeSource::Time MakeElection(ITimeSource::Time now);
     uint64_t NextSeqno();
     bool ValidateRpc(TMessageHolder<TMessage> message) const;
+    bool ValidateAppendConfiguration(TMessageHolder<TAppendEntriesRequest> message) const;
+    void RequireLiveConfigurationStorage() const;
     void RefreshConfiguration(uint64_t commitIndex);
     bool HasMembershipHistory() const;
 

@@ -18,15 +18,13 @@ already-covered fast path. This prevents a legacy-format refresh from silently
 erasing configuration history and prevents a peer from replacing it with a
 conflicting baseline.
 
-This does not implement membership changes. Configuration log entries remain
-disabled, and the original voter binding cannot change. Raft startup and network
-installation still reject a stable snapshot whose active set differs from the
-configured fixed set. Since alpha.58, offline storage can retain such
-configuration-bearing snapshots without changing the original binding. Joint
-consensus, transition rollback and snapshot installation across a membership
-transition remain open. Upgrade all
-voters before sending MRFTS003 images because older binaries may acknowledge an
-already-covered unknown snapshot format.
+The original voter binding still identifies the trusted initial set. The live
+joint-consensus log protocol can move the active set without rewriting that
+binding, but the snapshot runtime here still requires snapshot voters to match
+the configured set. Joint snapshot installation and snapshot transfer across a
+membership transition remain open. Upgrade all voters before sending MRFTS003
+images because older binaries may acknowledge an already-covered unknown
+snapshot format.
 
 Tests cover durable application restore, identity preservation through
 compaction, restart, and legacy-format refresh, chunked InstallSnapshot,

@@ -58,6 +58,7 @@ isolation. Self-review checked connection generation ownership and outstanding
 connector lifetime as well as chunk identity lifetime. No independent approval
 is claimed.
 
-Dynamic promotion/removal and replicated joint-consensus configurations remain
-open. Snapshot catch-up is a prerequisite for promotion, not authorization to
-change the fixed voter set.
+Snapshot catch-up is a prerequisite for promotion, not authorization by itself.
+The bounded durable joint-consensus API is described in
+[live membership](configuration-entries.md); leader removal and
+membership-aware snapshot transfer remain open.

@@ -39,5 +39,6 @@ The role check is not a quorum lease: an isolated leader may still accept entrie
 that remain uncommitted, and a successful Append return is only a local log index.
 Callers must serialize Raft access and wait for committed application/client
 completion as appropriate. Directly editing IState or forcing states through the
-test-facing Become API is outside proposal admission. Joint consensus and voter
-promotion/removal remain open.
+test-facing Become API is outside proposal admission. The current bounded
+joint-consensus path is described in [live membership](configuration-entries.md);
+leader removal and membership-aware snapshots remain open.

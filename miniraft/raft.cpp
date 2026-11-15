@@ -462,6 +462,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
     uint64_t matchIndex = 0;
     uint64_t commitIndex = VolatileState->CommitIndex;
     bool success = false;
+    bool configurationTouched = false;
     if (message->PrevLogIndex >= State->SnapshotIndex && (message->PrevLogIndex == 0 ||
         (message->PrevLogIndex <= State->LastLogIndex
             && State->LogTerm(message->PrevLogIndex) == message->PrevLogTerm)))
@@ -474,10 +475,13 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
             index++;
             // replace or append log entries
             if (State->LogTerm(index) != entry->Term) {
+                if (Configuration && index <= Configuration->Latest.ConfigurationIndex())
+                    configurationTouched = true;
                 while (State->LastLogIndex > index-1) {
                     State->RemoveLast();
                 }
                 State->Append(entry);
+                if (entry->Flags & TLogEntry::EConfiguration) configurationTouched = true;
             }
         }
 
@@ -491,6 +495,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
         TAppendEntriesResponse {.MatchIndex = matchIndex, .Success = success});
 
     AdvanceCommitIndex(commitIndex);
+    if (configurationTouched) RefreshConfiguration(VolatileState->CommitIndex);
     (*VolatileState)
         .SetLeaderId(message->LeaderId)
         .SetElectionDue(MakeElection(now));
@@ -758,16 +763,103 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
         auto previousTerm = append->PrevLogTerm;
         for (uint32_t i = 0; i < message.PayloadSize; ++i) {
             auto entry = message.Payload[i].Cast<TLogEntry>();
-            if (entry->Flags & TLogEntry::EConfiguration) return false;
             if (!entry->Term || entry->Term < previousTerm || entry->Term > header->Term) return false;
             previousTerm = entry->Term;
             const auto index = append->PrevLogIndex + i + 1;
             if (index >= State->SnapshotIndex && index <= VolatileState->CommitIndex && State->LogTerm(index) != entry->Term) return false;
         }
-        return true;
+        return ValidateAppendConfiguration(append);
     }
     default: return false;
     }
+}
+
+bool TRaft::ValidateAppendConfiguration(TMessageHolder<TAppendEntriesRequest> message) const {
+    if (message->Nentries != message.PayloadSize) return false;
+    bool hasConfigurationEntry = false;
+    for (uint32_t i = 0; i < message.PayloadSize; ++i) {
+        auto entry = message.Payload[i].Cast<TLogEntry>();
+        if (!(entry->Flags & TLogEntry::EConfiguration)) continue;
+        try {
+            const auto record = DecodeConfigurationEntry(entry);
+            // A transition leader must be able to remain a voter through the
+            // stable successor. Leader removal needs an explicit transfer and
+            // commit-propagation protocol, which this runtime does not yet have.
+            if (!std::binary_search(record.NewVoters.begin(), record.NewVoters.end(), message->LeaderId))
+                return false;
+        } catch (const std::exception&) {
+            return false;
+        }
+        hasConfigurationEntry = true;
+    }
+    if (hasConfigurationEntry && (!ConfigurationBaseline || !State->SupportsVoterBinding() ||
+        !State->SupportsCommitIndexPersistence() || State->GetBoundVoters() != InitialVoters))
+        return false;
+
+    // A mismatched previous boundary cannot change this log, so after checking
+    // the entry frames we can safely return the normal AppendEntries conflict.
+    if (message->Term < State->CurrentTerm || message->PrevLogIndex < State->SnapshotIndex ||
+        (message->PrevLogIndex && (message->PrevLogIndex > State->LastLogIndex ||
+            State->LogTerm(message->PrevLogIndex) != message->PrevLogTerm)))
+        return true;
+
+    bool scanRequired = hasConfigurationEntry;
+    for (uint32_t i = 0; i < message.PayloadSize; ++i) {
+        const auto index = message->PrevLogIndex + i + 1;
+        auto incoming = message.Payload[i].Cast<TLogEntry>();
+        const auto localTerm = State->LogTerm(index);
+        const bool incomingConfiguration = incoming->Flags & TLogEntry::EConfiguration;
+        const bool localConfiguration = index <= State->LastLogIndex &&
+            (State->RetainedLogFlags(index) & TLogEntry::EConfiguration);
+        if (localTerm == incoming->Term && (incomingConfiguration || localConfiguration)) {
+            auto local = State->Get(index);
+            if (!local || local->Flags != incoming->Flags || local->Len != incoming->Len ||
+                memcmp(local.Mes, incoming.Mes, incoming->Len) != 0)
+                return false;
+        }
+        if (localTerm != incoming->Term && Configuration &&
+            index <= Configuration->Latest.ConfigurationIndex())
+            scanRequired = true;
+    }
+    if (!scanRequired) return true;
+    if (!ConfigurationBaseline || !State->SupportsVoterBinding() ||
+        !State->SupportsCommitIndexPersistence() || State->GetBoundVoters() != InitialVoters)
+        return false;
+
+    try {
+        TState shadow;
+        static_cast<TStateFields&>(shadow) = static_cast<const TStateFields&>(*State);
+        shadow.Snapshot = State->GetSnapshot();
+        shadow.BoundVoters = State->GetBoundVoters();
+        shadow.LastLogIndex = State->SnapshotIndex;
+        shadow.LastLogTerm = State->SnapshotTerm;
+        for (uint64_t index = State->SnapshotIndex + 1; index <= State->LastLogIndex; ++index) {
+            auto entry = State->Get(index);
+            if (!entry) return false;
+            shadow.Append(std::move(entry));
+        }
+        shadow.CurrentTerm = message->Term;
+        auto index = message->PrevLogIndex;
+        for (uint32_t i = 0; i < message.PayloadSize; ++i) {
+            auto entry = message.Payload[i].Cast<TLogEntry>();
+            ++index;
+            if (shadow.LogTerm(index) == entry->Term) continue;
+            while (shadow.LastLogIndex > index - 1) shadow.RemoveLast();
+            shadow.Append(std::move(entry));
+        }
+        const auto commitIndex = std::max(VolatileState->CommitIndex,
+            std::min(message->LeaderCommit, index));
+        const auto scan = ScanConfigurationHistory(shadow, *ConfigurationBaseline, commitIndex);
+        const auto* active = scan.Committed.IsJoint() ? &scan.Committed :
+            scan.Latest.IsJoint() ? &scan.Latest : &scan.Committed;
+        for (auto id : active->OldVoters())
+            if (id != Id && !Nodes.contains(id)) return false;
+        for (auto id : active->NewVoters())
+            if (id != Id && !Nodes.contains(id)) return false;
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
 }
 
 void TRaft::FollowerTimeout(ITimeSource::Time now) {
@@ -918,6 +1010,60 @@ uint64_t TRaft::Append(TMessageHolder<TLogEntry> entry) {
         throw TMessageError("Configuration proposals are unsupported");
     entry->Term = State->CurrentTerm;
     State->Append(std::move(entry));
+    return State->LastLogIndex;
+}
+
+void TRaft::RequireLiveConfigurationStorage() const {
+    if (!State->SupportsVoterBinding() || !State->SupportsCommitIndexPersistence() ||
+        InitialVoters.empty() || State->GetBoundVoters() != InitialVoters)
+        throw std::logic_error("Live membership changes require persisted commit and voter metadata");
+}
+
+uint64_t TRaft::ProposeJointConfiguration(std::vector<uint32_t> newVoters) {
+    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change membership");
+    RequireLiveConfigurationStorage();
+    ValidateFixedVoters(newVoters);
+    if (!Configuration || Configuration->HasUncommittedConfiguration() || Configuration->Latest.IsJoint())
+        throw std::logic_error("A stable committed configuration is required to start a transition");
+    if (State->LastLogIndex >= uint64_t(INT64_MAX)) throw std::overflow_error("Raft log index exhausted");
+    if (!VolatileState->CommitIndex || State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm)
+        throw std::logic_error("A current-term entry must be committed before changing membership");
+
+    const auto& oldVoters = Configuration->Committed.OldVoters();
+    if (newVoters == oldVoters || !std::binary_search(newVoters.begin(), newVoters.end(), Id))
+        throw std::invalid_argument("The new voter set must change membership and retain the current leader");
+    for (auto id : newVoters) {
+        if (id != Id && !Nodes.contains(id))
+            throw std::invalid_argument("Every new voter must have a configured replication target");
+        if (!std::binary_search(oldVoters.begin(), oldVoters.end(), id) &&
+            !IsLearnerCommitAcknowledged(id))
+            throw std::logic_error("Every added voter must be a staged learner with a committed catch-up ACK");
+    }
+
+    const auto& latest = Configuration->Latest;
+    TConfigurationRecord record{EConfigurationPhase::Joint, State->CurrentTerm,
+        latest.ConfigurationIndex(), latest.ConfigurationTerm(), oldVoters, std::move(newVoters)};
+    State->Append(EncodeConfigurationEntry(record));
+    RefreshConfiguration(VolatileState->CommitIndex);
+    return State->LastLogIndex;
+}
+
+uint64_t TRaft::FinalizeConfiguration() {
+    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change membership");
+    RequireLiveConfigurationStorage();
+    if (!Configuration || Configuration->HasUncommittedConfiguration() || !Configuration->Committed.IsJoint())
+        throw std::logic_error("The joint configuration must commit before finalization");
+    if (State->LastLogIndex >= uint64_t(INT64_MAX)) throw std::overflow_error("Raft log index exhausted");
+    if (!VolatileState->CommitIndex || State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm)
+        throw std::logic_error("A current-term entry must be committed before finalizing membership");
+
+    const auto& joint = Configuration->Committed;
+    if (!std::binary_search(joint.NewVoters().begin(), joint.NewVoters().end(), Id))
+        throw std::logic_error("Leadership must transfer to a voter in the new set before finalization");
+    TConfigurationRecord record{EConfigurationPhase::Stable, State->CurrentTerm,
+        joint.ConfigurationIndex(), joint.ConfigurationTerm(), joint.OldVoters(), joint.NewVoters()};
+    State->Append(EncodeConfigurationEntry(record));
+    RefreshConfiguration(VolatileState->CommitIndex);
     return State->LastLogIndex;
 }
 

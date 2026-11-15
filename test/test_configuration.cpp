@@ -35,7 +35,12 @@ void FixChecksum(TMessageHolder<TLogEntry> entry) {
 struct TEndpoint : INode {
     unsigned Sent = 0;
     std::vector<TMessageHolder<TMessage>> Messages;
-    void Send(TMessageHolder<TMessage> message) override { ++Sent; Messages.push_back(std::move(message)); }
+    std::function<void(TMessageHolder<TMessage>)> Route;
+    void Send(TMessageHolder<TMessage> message) override {
+        ++Sent;
+        if (Route) Route(std::move(message));
+        else Messages.push_back(std::move(message));
+    }
     void Drain() override {}
 };
 struct TCountingRsm : TDummyRsm {
@@ -156,6 +161,8 @@ void test_history_rejects_skips_wrong_predecessors_and_term_regression(void**) {
     Reject([&] { base.Advance(1, Ordinary(1)); });
     auto wrong = joint; wrong.OldVoters = {1, 2, 4};
     Reject([&] { base.Advance(1, EncodeConfigurationEntry(wrong)); });
+    auto noOp = joint; noOp.NewVoters = noOp.OldVoters;
+    Reject([&] { base.Advance(1, EncodeConfigurationEntry(noOp)); });
     auto prefix = base.Observe(1, Ordinary(3));
     Reject([&] { prefix.Advance(2, entry); });
     Reject([&] { prefix.Observe(2, Ordinary(2)); });
@@ -381,6 +388,161 @@ void test_configuration_rpc_and_proposal_are_rejected_before_mutation(void**) {
     auto proposed = EncodeConfigurationEntry(record);
     Reject([&] { leader.Append(proposed); });
     assert_true(static_cast<TStateFields>(*leaderState) == leaderBefore); assert_int_equal(proposed->Term, 2);
+    Reject([&] { leader.ProposeJointConfiguration({1, 2}); }); // Volatile stores cannot authorize a live change.
+    assert_true(static_cast<TStateFields>(*leaderState) == leaderBefore);
+}
+void test_joint_membership_addition_and_finalization_replicate_deterministically(void**) {
+#ifdef __linux__
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-live-config-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    const auto name = (dir / "raft").string();
+    {
+        auto toLearner = std::make_shared<TEndpoint>();
+        auto toLeader = std::make_shared<TEndpoint>();
+        auto leaderState = std::make_shared<TDurableState>(name, 1);
+        auto learnerState = std::make_shared<TDurableState>(name, 2);
+        TRaft leader(leaderState, 1, {{2, toLearner}}, {2});
+        TRaft learner(learnerState, 2, {{1, toLeader}}, {2});
+        const auto now = ITimeSource::Time{};
+        toLearner->Route = [&](auto message) { learner.Process(now, std::move(message)); };
+        toLeader->Route = [&](auto message) { leader.Process(now, std::move(message)); };
+
+        // A well-formed but wrong predecessor must not make the higher term
+        // durable or earn an AppendEntries response.
+        TConfigurationRecord invalid{EConfigurationPhase::Joint, 2, 0, 0, {2}, {1, 2}};
+        auto invalidRequest = NewHoldedMessage(TMessageEx{.Src = 1, .Dst = 2, .Term = 2},
+            TAppendEntriesRequest{.LeaderId = 1, .Nentries = 1});
+        invalidRequest.InitPayload(1); invalidRequest.Payload[0] = EncodeConfigurationEntry(invalid);
+        const auto beforeInvalidRequest = static_cast<TStateFields>(*learnerState);
+        learner.Process(now, invalidRequest);
+        assert_true(static_cast<TStateFields>(*learnerState) == beforeInvalidRequest);
+        assert_int_equal(toLeader->Sent, 0);
+
+        leader.ProcessTimeout(now);
+        assert_true(leader.CurrentStateName() == EState::LEADER);
+        leader.ProcessTimeout(now + std::chrono::seconds(10));
+        assert_true(leader.IsLearnerCommitAcknowledged(2));
+
+        const auto beforeRejectedProposal = static_cast<TStateFields>(*leaderState);
+        Reject([&] { leader.ProposeJointConfiguration({2}); }); // Cannot remove the active leader.
+        assert_true(static_cast<TStateFields>(*leaderState) == beforeRejectedProposal);
+        const auto jointIndex = leader.ProposeJointConfiguration({1, 2});
+        assert_int_equal(jointIndex, 2);
+        assert_true(leader.IsVoter(2));
+        assert_true(leader.GetVoterIds() == (std::vector<uint32_t>{1, 2}));
+
+        leader.ProcessTimeout(now + std::chrono::seconds(20));
+        assert_true(learner.IsVoter(2));
+        assert_int_equal(leader.GetVolatileState()->CommitIndex, jointIndex);
+        assert_int_equal(learnerState->CommitIndex, 1); // The commit watermark needs another RPC.
+        leader.ProcessTimeout(now + std::chrono::seconds(30));
+        assert_int_equal(learnerState->CommitIndex, jointIndex);
+
+        const auto stableIndex = leader.FinalizeConfiguration();
+        assert_int_equal(stableIndex, 3);
+        leader.ProcessTimeout(now + std::chrono::seconds(40));
+        assert_int_equal(leader.GetVolatileState()->CommitIndex, stableIndex);
+        assert_true(leader.GetVoterIds() == (std::vector<uint32_t>{1, 2}));
+        leader.ProcessTimeout(now + std::chrono::seconds(50));
+        assert_int_equal(learnerState->CommitIndex, stableIndex);
+        assert_true(leader.GetLearnerIds().empty());
+        assert_true(learner.IsVoter(2));
+        assert_true(learner.GetVoterIds() == (std::vector<uint32_t>{1, 2}));
+
+        // Removing a different voter still requires both old and new
+        // majorities until the stable successor commits.
+        const auto removalJoint = leader.ProposeJointConfiguration({1});
+        assert_int_equal(removalJoint, 4);
+        assert_true(leader.IsVoter(2));
+        leader.ProcessTimeout(now + std::chrono::seconds(60));
+        assert_int_equal(leader.GetVolatileState()->CommitIndex, removalJoint);
+        leader.ProcessTimeout(now + std::chrono::seconds(70));
+        assert_int_equal(learnerState->CommitIndex, removalJoint);
+        const auto removalStable = leader.FinalizeConfiguration();
+        assert_int_equal(removalStable, 5);
+        leader.ProcessTimeout(now + std::chrono::seconds(80));
+        assert_int_equal(leader.GetVolatileState()->CommitIndex, removalStable);
+        assert_false(leader.IsVoter(2));
+        leader.ProcessTimeout(now + std::chrono::seconds(90));
+        assert_int_equal(learnerState->CommitIndex, removalStable);
+        assert_false(leader.IsVoter(2));
+        assert_false(learner.IsVoter(2));
+        assert_true(leader.GetVoterIds() == (std::vector<uint32_t>{1}));
+        assert_true(learner.GetVoterIds() == (std::vector<uint32_t>{1}));
+    }
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+#endif
+}
+void test_uncommitted_joint_suffix_replacement_restores_old_voters(void**) {
+#ifdef __linux__
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-config-rollback-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    const auto name = (dir / "raft").string();
+    {
+        auto peer = std::make_shared<TEndpoint>();
+        auto state = std::make_shared<TDurableState>(name, 2);
+        state->BindVoters({1});
+        state->CurrentTerm = 2;
+        auto joint = TConfigurationRecord{EConfigurationPhase::Joint, 2, 0, 0, {1}, {1, 2}};
+        state->Append(EncodeConfigurationEntry(joint));
+        state->Commit();
+        TRaft follower(state, 2, {{1, peer}}, {2});
+        assert_true(follower.IsVoter(2));
+
+        auto ordinary = Ordinary(3);
+        auto replacement = NewHoldedMessage(TMessageEx{.Src = 1, .Dst = 2, .Term = 3},
+            TAppendEntriesRequest{.LeaderId = 1, .Nentries = 1});
+        replacement.InitPayload(1); replacement.Payload[0] = ordinary;
+        follower.Process(ITimeSource::Time{}, replacement);
+        assert_int_equal(state->CurrentTerm, 3);
+        assert_int_equal(state->LastLogIndex, 1);
+        assert_int_equal(state->RetainedLogFlags(1), 0);
+        assert_false(follower.IsVoter(2));
+        assert_true(follower.GetVoterIds() == (std::vector<uint32_t>{1}));
+        assert_int_equal(peer->Sent, 1);
+    }
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+#endif
+}
+void test_durable_restart_recovers_stable_membership_roles(void**) {
+#ifdef __linux__
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-config-restart-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    const auto name = (dir / "raft").string();
+    {
+        auto state = std::make_shared<TDurableState>(name, 2);
+        state->BindVoters({1}); // Original binding stays fixed through both transitions.
+        state->CurrentTerm = 3;
+        auto addJoint = TConfigurationRecord{EConfigurationPhase::Joint, 2, 0, 0, {1}, {1, 2}};
+        state->Append(EncodeConfigurationEntry(addJoint));
+        state->CommitIndex = 1; state->Commit();
+        auto addStable = addJoint; addStable.Phase = EConfigurationPhase::Stable;
+        addStable.PreviousIndex = 1; addStable.PreviousTerm = 2;
+        state->Append(EncodeConfigurationEntry(addStable));
+        state->CommitIndex = 2; state->Commit();
+        auto removeJoint = TConfigurationRecord{EConfigurationPhase::Joint, 3, 2, 2, {1, 2}, {1}};
+        state->Append(EncodeConfigurationEntry(removeJoint));
+        state->CommitIndex = 3; state->Commit();
+        auto removeStable = removeJoint; removeStable.Phase = EConfigurationPhase::Stable;
+        removeStable.PreviousIndex = 3; removeStable.PreviousTerm = 3;
+        state->Append(EncodeConfigurationEntry(removeStable));
+        state->CommitIndex = 4; state->Commit();
+    }
+    {
+        auto state = std::make_shared<TDurableState>(name, 2);
+        auto peer = std::make_shared<TEndpoint>();
+        TRaft raft(state, 2, {{1, peer}}, {2}); // Reconstruct from the original binding.
+        assert_true(state->GetBoundVoters() == (std::vector<uint32_t>{1}));
+        assert_false(raft.IsVoter(2));
+        assert_true(raft.GetVoterIds() == (std::vector<uint32_t>{1}));
+        assert_true(raft.GetLearnerIds() == (std::vector<uint32_t>{2}));
+        assert_int_equal(raft.GetVolatileState()->CommitIndex, 4);
+    }
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+#endif
 }
 void test_configuration_application_advances_without_calling_state_machine(void**) {
     auto state = std::make_shared<TState>(); auto record = Joint(); record.Term = 1;
@@ -739,8 +901,11 @@ int main() {
         cmocka_unit_test(test_configuration_roundtrips_both_phases_and_bounded_maximum),
         cmocka_unit_test(test_configuration_rejects_invalid_fields_and_valid_crc_corruption),
         cmocka_unit_test(test_configuration_rpc_and_proposal_are_rejected_before_mutation),
+        cmocka_unit_test(test_joint_membership_addition_and_finalization_replicate_deterministically),
+        cmocka_unit_test(test_uncommitted_joint_suffix_replacement_restores_old_voters),
         cmocka_unit_test(test_configuration_application_advances_without_calling_state_machine),
 #ifdef __linux__
+        cmocka_unit_test(test_durable_restart_recovers_stable_membership_roles),
         cmocka_unit_test(test_durable_restart_rejects_reserved_entry_without_rewriting),
         cmocka_unit_test(test_legacy_restart_uses_safe_flag_lookup_and_preserves_files),
         cmocka_unit_test(test_offline_history_scan_after_durable_snapshot_and_restart),

@@ -46,7 +46,9 @@ The KV CLI uses static transport discovery. Library embedders can use
 [network learner staging](online-learner-network.md). That local, non-voting
 replication target is not persisted or cluster membership.
 Deleting `--learner 4` to turn it into a voter is rejected for bound stores; it is
-not a membership-change procedure. Voter-set changes remain disabled.
+not a membership-change procedure. Durable Raft embedders can use the separate
+[live joint-membership API](configuration-entries.md) after catch-up and commit
+acknowledgement.
 
 ## Quorum and term isolation
 

@@ -38,8 +38,11 @@ fully retained in that baseline. The [compaction follow-up](docs/compaction.md)
 enables prefix deletion and chunked InstallSnapshot catch-up; fixed membership
 remains required. Upgrade all voters before enabling the new compaction behavior.
 The [learner follow-up](docs/learners.md) adds non-voting catch-up and durable
-voter binding. KV uses `--learner id` on every replica's configuration. Promotion
-and joint-consensus voter changes remain disabled.
+voter binding. KV uses `--learner id` on every replica's configuration. The
+[live joint-membership step](docs/configuration-entries.md) adds a durable-store
+`TRaft` API for adding and removing nonleader voters through joint consensus;
+leader removal, hot server role reconciliation and membership-aware snapshot
+transfer remain unsupported.
 The [snapshot retry follow-up](docs/snapshot-retries.md) prevents timeout retries
 and strong-read traffic from starving delayed snapshot acknowledgements, and
 prevents stale reader failures from destroying newer reconnect attempts.
@@ -55,7 +58,7 @@ caller-owned entry buffers from changing entries already stored in TState.
 The [term lookup follow-up](docs/term-lookups.md) avoids copying full payloads
 when Raft needs only a retained entry's term.
 The [joint quorum foundation](docs/joint-quorum.md) adds and tests dual-majority
-arithmetic for future membership changes; live voter reconfiguration remains disabled.
+arithmetic used by the live membership transition path.
 The [joint snapshot metadata foundation](docs/joint-snapshots.md) adds a versioned
 representation for a joint configuration at a snapshot boundary; runtime adoption
 and membership changes remain disabled.
@@ -63,8 +66,8 @@ The [snapshot term preflight follow-up](docs/unsupported-snapshot-term-preflight
 rejects unsupported snapshot formats before a higher RPC term changes hard state.
 The [snapshot metadata preflight follow-up](docs/snapshot-metadata-term-preflight.md)
 checks the boundary, fixed voters, and stable identity before that term update.
-The [configuration entry foundation](docs/configuration-entries.md) defines an
-experimental entry codec and rejects that entry kind in the fixed-membership runtime.
+The [configuration entry support](docs/configuration-entries.md) describes the
+live joint-to-stable transition API and its durable-storage and snapshot limits.
 The [configuration history validator](docs/configuration-history.md) checks an
 offline retained-log sequence against a trusted baseline or joint snapshot.
 The [configuration log scanner](docs/configuration-scan.md) validates a retained
@@ -87,7 +90,7 @@ transfer retention to two image generations and defers local compaction at the c
 The [stable configuration snapshot foundation](docs/stable-configuration-snapshots.md)
 preserves configuration identity. Raft can recover and install stable metadata
 snapshots when their voter list matches the node's existing fixed membership;
-joint snapshots and live voter changes remain disabled.
+joint snapshots and membership-aware snapshot transfer remain disabled.
 The [durable configuration snapshot follow-up](docs/durable-configuration-snapshots.md)
 documents its voter-binding requirement and recovery boundary.
 The [trusted legacy voter binding follow-up](docs/trusted-legacy-voter-binding.md)

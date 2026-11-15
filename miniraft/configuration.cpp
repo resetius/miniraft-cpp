@@ -118,7 +118,7 @@ TConfigurationHistory TConfigurationHistory::Advance(uint64_t index, TMessageHol
         throw std::invalid_argument("Configuration entry does not extend the trusted history");
     TConfigurationHistory next = *this;
     if (!IsJoint()) {
-        if (record.Phase != EConfigurationPhase::Joint || record.OldVoters != Old)
+        if (record.Phase != EConfigurationPhase::Joint || record.OldVoters != Old || record.NewVoters == Old)
             throw std::invalid_argument("Expected a joint configuration from the stable voter set");
         next.New = record.NewVoters;
     } else {
