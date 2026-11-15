@@ -33,6 +33,9 @@ std::string EncodeSnapshot(const TSnapshot& snapshot);
 TSnapshot DecodeSnapshot(std::string_view bytes);
 // Validate metadata and size without copying the application image.
 void ValidateSnapshot(const TSnapshot& snapshot);
+// Preserve a trusted stable configuration identity when a legacy image is
+// refreshed, and reject a stable image that changes that identity.
+void PreserveStableSnapshotIdentity(const TSnapshot* current, TSnapshot& incoming);
 TSnapshot CaptureSnapshot(const TRaft& raft, const IRsm& rsm);
 // Startup only, with an application behind the snapshot and
 // a matching local boundary/log. This can recover an app left behind by a crash

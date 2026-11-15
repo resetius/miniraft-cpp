@@ -313,21 +313,24 @@ uint64_t TDurableState::RetainedLogFlags(int64_t index) const {
 std::shared_ptr<const TSnapshot> TDurableState::GetSnapshot() const { return Impl->Snapshot; }
 
 void TDurableState::InstallSnapshot(const TSnapshot& snapshot) {
-    EncodeSnapshot(snapshot);
-    if (snapshot.HasConfigurationMetadata() && Impl->Voters.empty())
+    ValidateSnapshot(snapshot);
+    TSnapshot image = snapshot;
+    PreserveStableSnapshotIdentity(Impl->Snapshot.get(), image);
+    ValidateSnapshot(image);
+    if (image.HasConfigurationMetadata() && Impl->Voters.empty())
         throw std::invalid_argument("Configuration snapshots require a bound voter set");
-    if (!Impl->Voters.empty() && snapshot.Voters != Impl->Voters)
+    if (!Impl->Voters.empty() && image.Voters != Impl->Voters)
         throw std::invalid_argument("Snapshot would change bound voters");
-    if (snapshot.Index <= SnapshotIndex || snapshot.Term < SnapshotTerm || snapshot.Term > CurrentTerm)
+    if (image.Index <= SnapshotIndex || image.Term < SnapshotTerm || image.Term > CurrentTerm)
         throw std::invalid_argument("Obsolete or future durable snapshot");
-    auto image = std::make_shared<const TSnapshot>(snapshot);
+    auto saved = std::make_shared<const TSnapshot>(std::move(image));
     std::vector<TMessageHolder<TLogEntry>> suffix;
-    if (snapshot.Index <= LastLogIndex && LogTerm(snapshot.Index) == snapshot.Term)
-        suffix.assign(Impl->Log.begin() + (snapshot.Index - SnapshotIndex), Impl->Log.end());
+    if (saved->Index <= LastLogIndex && LogTerm(saved->Index) == saved->Term)
+        suffix.assign(Impl->Log.begin() + (saved->Index - SnapshotIndex), Impl->Log.end());
     Impl->Log.swap(suffix);
-    Impl->Snapshot = std::move(image);
-    SnapshotIndex = snapshot.Index;
-    SnapshotTerm = snapshot.Term;
+    Impl->Snapshot = std::move(saved);
+    SnapshotIndex = Impl->Snapshot->Index;
+    SnapshotTerm = Impl->Snapshot->Term;
     LastLogIndex = SnapshotIndex + Impl->Log.size();
     LastLogTerm = Impl->Log.empty() ? SnapshotTerm : Impl->Log.back()->Term;
     Commit(); // Atomically publishes hard state, snapshot and the selected suffix.

@@ -364,7 +364,51 @@ void test_startup_restores_stale_application_from_durable_snapshot_boundary(void
     assert_true(Read(*stale, "stale").empty());
     assert_int_equal(raft->GetVolatileState()->CommitIndex, 2);
 }
+void CheckStableSnapshotIdentityContinuity(IState& state) {
+    const std::vector<uint32_t> voters{1, 2, 3};
+    state.BindVoters(voters);
+    TSnapshot stable{2, 1, voters, "stable image"};
+    stable.StableConfiguration = true;
+    stable.ConfigurationIndex = 1;
+    stable.ConfigurationTerm = 1;
+    state.InstallSnapshot(stable);
+
+    TSnapshot legacy{3, 1, voters, "legacy refresh"};
+    state.InstallSnapshot(legacy);
+    auto preserved = legacy;
+    preserved.StableConfiguration = true;
+    preserved.ConfigurationIndex = stable.ConfigurationIndex;
+    preserved.ConfigurationTerm = stable.ConfigurationTerm;
+    assert_true(*state.GetSnapshot() == preserved);
+
+    auto conflicting = TSnapshot{4, 1, voters, "conflicting stable image"};
+    conflicting.StableConfiguration = true;
+    conflicting.ConfigurationIndex = 2;
+    conflicting.ConfigurationTerm = 1;
+    const auto before = static_cast<TStateFields>(state);
+    Reject([&] { state.InstallSnapshot(conflicting); });
+    assert_true(static_cast<TStateFields>(state) == before);
+    assert_true(*state.GetSnapshot() == preserved);
+}
+void test_memory_snapshot_storage_preserves_stable_configuration_identity(void**) {
+    TState state;
+    CheckStableSnapshotIdentityContinuity(state);
+}
 #ifdef __linux__
+void test_durable_snapshot_storage_preserves_stable_configuration_identity(void**) {
+    TFiles files;
+    {
+        TDurableState state(files.Name, 1);
+        CheckStableSnapshotIdentityContinuity(state);
+    }
+    TDurableState recovered(files.Name, 1);
+    auto snapshot = recovered.GetSnapshot();
+    assert_true(snapshot && snapshot->StableConfiguration);
+    assert_int_equal(snapshot->Index, 3);
+    assert_int_equal(snapshot->ConfigurationIndex, 1);
+    assert_int_equal(snapshot->ConfigurationTerm, 1);
+    assert_true(snapshot->Data == "legacy refresh");
+}
 void test_stable_configuration_snapshot_durable_runtime_recovery_and_compaction(void**) {
     TFiles files;
     TKv source; Apply(source, "a", "one", 1); Apply(source, "b", "two", 2);
@@ -586,7 +630,9 @@ int main() {
         cmocka_unit_test(test_capture_requires_committed_applied_progress),
         cmocka_unit_test(test_restore_rejects_mismatched_log_configuration_and_used_application),
         cmocka_unit_test(test_startup_restores_stale_application_from_durable_snapshot_boundary),
+        cmocka_unit_test(test_memory_snapshot_storage_preserves_stable_configuration_identity),
 #ifdef __linux__
+        cmocka_unit_test(test_durable_snapshot_storage_preserves_stable_configuration_identity),
         cmocka_unit_test(test_stable_configuration_snapshot_durable_runtime_recovery_and_compaction),
         cmocka_unit_test(test_unbound_durable_configuration_snapshot_recovery_fails_closed),
         cmocka_unit_test(test_joint_snapshot_export_and_durable_roundtrip_but_runtime_rejects),

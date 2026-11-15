@@ -69,6 +69,23 @@ void Sync(int fd) {
 
 void ValidateSnapshot(const TSnapshot& snapshot) { Validate(snapshot); }
 
+void PreserveStableSnapshotIdentity(const TSnapshot* current, TSnapshot& incoming) {
+    if (!current || !current->StableConfiguration) return;
+    if (incoming.StableConfiguration) {
+        if (incoming.ConfigurationIndex != current->ConfigurationIndex ||
+            incoming.ConfigurationTerm != current->ConfigurationTerm)
+            throw std::invalid_argument("Stable snapshot configuration identity changed");
+        return;
+    }
+    // A joint image carries an explicit new phase. A legacy image carries no
+    // configuration claim, so retain the already trusted stable identity.
+    if (!incoming.HasConfigurationMetadata()) {
+        incoming.StableConfiguration = true;
+        incoming.ConfigurationIndex = current->ConfigurationIndex;
+        incoming.ConfigurationTerm = current->ConfigurationTerm;
+    }
+}
+
 std::string EncodeSnapshot(const TSnapshot& snapshot) {
     Validate(snapshot);
     std::string out(snapshot.StableConfiguration ? StableMagic : snapshot.IsJoint() ? JointMagic : Magic);

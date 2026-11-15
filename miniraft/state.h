@@ -156,21 +156,24 @@ struct TState: IState {
     }
     std::shared_ptr<const TSnapshot> GetSnapshot() const override { return Snapshot; }
     void InstallSnapshot(const TSnapshot& snapshot) override {
-        EncodeSnapshot(snapshot); // Validate before changing any state.
-        if (snapshot.HasConfigurationMetadata() && BoundVoters.empty())
+        ValidateSnapshot(snapshot);
+        TSnapshot image = snapshot;
+        PreserveStableSnapshotIdentity(Snapshot.get(), image);
+        ValidateSnapshot(image); // Validate before changing any state.
+        if (image.HasConfigurationMetadata() && BoundVoters.empty())
             throw std::invalid_argument("Configuration snapshots require a bound voter set");
-        if (!BoundVoters.empty() && snapshot.Voters != BoundVoters)
+        if (!BoundVoters.empty() && image.Voters != BoundVoters)
             throw std::invalid_argument("Snapshot would change bound voters");
-        if (snapshot.Index <= SnapshotIndex || snapshot.Term < SnapshotTerm || snapshot.Term > CurrentTerm)
+        if (image.Index <= SnapshotIndex || image.Term < SnapshotTerm || image.Term > CurrentTerm)
             throw std::invalid_argument("Obsolete or future snapshot");
-        auto image = std::make_shared<const TSnapshot>(snapshot);
+        auto saved = std::make_shared<const TSnapshot>(std::move(image));
         std::vector<TMessageHolder<TLogEntry>> suffix;
-        if (snapshot.Index <= LastLogIndex && LogTerm(snapshot.Index) == snapshot.Term)
-            suffix.assign(Log.begin() + (snapshot.Index - SnapshotIndex), Log.end());
+        if (saved->Index <= LastLogIndex && LogTerm(saved->Index) == saved->Term)
+            suffix.assign(Log.begin() + (saved->Index - SnapshotIndex), Log.end());
         Log.swap(suffix);
-        Snapshot = std::move(image);
-        SnapshotIndex = snapshot.Index;
-        SnapshotTerm = snapshot.Term;
+        Snapshot = std::move(saved);
+        SnapshotIndex = Snapshot->Index;
+        SnapshotTerm = Snapshot->Term;
         LastLogIndex = SnapshotIndex + Log.size();
         LastLogTerm = Log.empty() ? SnapshotTerm : Log.back()->Term;
     }

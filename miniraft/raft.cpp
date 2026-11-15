@@ -1033,19 +1033,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         if (snapshot.IsJoint() || snapshot.Index != request->SnapshotIndex || snapshot.Term != request->SnapshotTerm || snapshot.Voters != GetVoterIds())
             throw TMessageError("Snapshot metadata mismatch");
         const auto knownSnapshot = State->GetSnapshot();
-        if (knownSnapshot && knownSnapshot->StableConfiguration) {
-            if (snapshot.StableConfiguration &&
-                (snapshot.ConfigurationIndex != knownSnapshot->ConfigurationIndex ||
-                 snapshot.ConfigurationTerm != knownSnapshot->ConfigurationTerm))
-                throw TMessageError("Stable snapshot configuration identity changed");
-            if (!snapshot.StableConfiguration) {
-                // A legacy-format refresh has no configuration identity. Keep
-                // the receiver's trusted identity when storing the new image.
-                snapshot.StableConfiguration = true;
-                snapshot.ConfigurationIndex = knownSnapshot->ConfigurationIndex;
-                snapshot.ConfigurationTerm = knownSnapshot->ConfigurationTerm;
-            }
-        }
+        PreserveStableSnapshotIdentity(knownSnapshot.get(), snapshot);
         ValidateSnapshot(snapshot);
         application->ValidateSnapshot(snapshot.Data, snapshot.Index);
     } catch (const std::exception&) {

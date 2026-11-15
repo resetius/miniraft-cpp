@@ -98,6 +98,8 @@ The [stable snapshot runtime follow-up](docs/stable-configuration-snapshot-runti
 carries that identity through restore, InstallSnapshot, and later compaction.
 The [metadata continuity follow-up](docs/stable-snapshot-metadata-continuity.md)
 preserves the known identity across legacy-format refreshes and rejects conflicts.
+The [storage continuity follow-up](docs/stable-snapshot-storage-continuity.md)
+applies the same identity rule to direct memory and durable snapshot installs.
 The [snapshot term validation fix](docs/snapshot-committed-terms.md) rejects
 snapshot boundaries that contradict the follower's committed prefix.
 The [message buffer follow-up](docs/message-extents.md) checks allocated buffer
