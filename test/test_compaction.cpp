@@ -427,8 +427,20 @@ void test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered(void**)
     assert_int_equal(replies.size(), repliesBeforeUnsupported);
 
     // At the current term, normal fail-closed rejection still returns a reply.
+    raft->Become(EState::CANDIDATE);
+    const auto electionDueBeforeUnsupported = raft->GetVolatileState()->ElectionDue;
+    raft->Process({}, Chunk(joint, bytes, 0, 4));
+    assert_true(replies.back()->Success); assert_false(replies.back()->Installed);
+    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    assert_true(raft->GetVolatileState()->ElectionDue == electionDueBeforeUnsupported);
+    raft->Process({}, Chunk(joint, bytes, 4, 4));
+    assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
+    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    assert_true(raft->GetVolatileState()->ElectionDue == electionDueBeforeUnsupported);
     raft->Process({}, Chunk(joint, bytes, 0, bytes.size()));
     assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
+    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    assert_true(raft->GetVolatileState()->ElectionDue == electionDueBeforeUnsupported);
     assert_true(static_cast<TStateFields>(*state) == before); assert_int_equal(app->Loads, 1);
 
     // Covered fast-path ACKs still require the embedded boundary and voter set

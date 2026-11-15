@@ -29,6 +29,13 @@ struct TSnapshotMetadataProbe {
     size_t Need = 8;
 };
 
+bool IsSupportedSnapshotMagicPrefix(std::string_view prefix) {
+    constexpr std::string_view legacy = "MRFTS001";
+    constexpr std::string_view stable = "MRFTS003";
+    const auto bytes = prefix.substr(0, std::min(prefix.size(), legacy.size()));
+    return legacy.substr(0, bytes.size()) == bytes || stable.substr(0, bytes.size()) == bytes;
+}
+
 bool ReadSnapshotInteger(std::string_view bytes, size_t offset, unsigned width, uint64_t& value) {
     if (offset > bytes.size() || width > bytes.size() - offset) return false;
     value = 0;
@@ -970,9 +977,14 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
                 .Success = uint32_t(success), .Installed = uint32_t(installed)}));
     };
     if (request->Term < State->CurrentTerm) { reply(false, false, 0); return; }
-    Become(EState::FOLLOWER);
-    VolatileState->LeaderId = request->LeaderId;
-    VolatileState->ElectionDue = MakeElection(now);
+    // Partial or unsupported image headers are not evidence of leader contact.
+    // In particular, do not demote a candidate or refresh its election timer
+    // until the complete bounded metadata prefix is supported.
+    auto acceptLeaderContact = [&] {
+        Become(EState::FOLLOWER);
+        VolatileState->LeaderId = request->LeaderId;
+        VolatileState->ElectionDue = MakeElection(now);
+    };
     if (request->SnapshotIndex <= VolatileState->CommitIndex) {
         const auto term = State->LogTerm(request->SnapshotIndex);
         const bool covered = request->SnapshotIndex < State->SnapshotIndex || term == request->SnapshotTerm;
@@ -999,11 +1011,15 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
             }
         } else prefix.append(request->Data, count);
         IncomingSnapshot->LastProgress = now;
+        if (!IsSupportedSnapshotMagicPrefix(prefix)) {
+            IncomingSnapshot.reset(); reply(false, false, 0); return;
+        }
         const auto knownSnapshot = State->GetSnapshot();
         const auto probe = ProbeSnapshotMetadata(prefix, request->TotalBytes,
             request->SnapshotIndex, request->SnapshotTerm, GetVoterIds(), knownSnapshot.get());
         if (!probe.Complete) { reply(true, false, prefix.size()); return; }
         IncomingSnapshot.reset();
+        if (probe.Supported) acceptLeaderContact();
         reply(probe.Supported, probe.Supported, probe.Supported ? request->TotalBytes : 0);
         return;
     }
@@ -1028,17 +1044,21 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         }
     } else bytes.append(request->Data, count);
     IncomingSnapshot->LastProgress = now;
-    if (bytes.size() >= 8 && std::string_view(bytes).substr(0, 8) != "MRFTS001" &&
-        std::string_view(bytes).substr(0, 8) != "MRFTS003") {
+    if (!IsSupportedSnapshotMagicPrefix(bytes)) {
         IncomingSnapshot.reset(); reply(false, false, 0); return;
     }
+    const auto knownSnapshot = State->GetSnapshot();
+    const auto probe = ProbeSnapshotMetadata(bytes, request->TotalBytes,
+        request->SnapshotIndex, request->SnapshotTerm, GetVoterIds(), knownSnapshot.get());
+    if (!probe.Complete) { reply(true, false, bytes.size()); return; }
+    if (!probe.Supported) { IncomingSnapshot.reset(); reply(false, false, 0); return; }
+    acceptLeaderContact();
     if (bytes.size() < request->TotalBytes) { reply(true, false, bytes.size()); return; }
     TSnapshot snapshot;
     try {
         snapshot = DecodeSnapshot(bytes);
         if (snapshot.IsJoint() || snapshot.Index != request->SnapshotIndex || snapshot.Term != request->SnapshotTerm || snapshot.Voters != GetVoterIds())
             throw TMessageError("Snapshot metadata mismatch");
-        const auto knownSnapshot = State->GetSnapshot();
         PreserveStableSnapshotIdentity(knownSnapshot.get(), snapshot);
         ValidateSnapshot(snapshot);
         application->ValidateSnapshot(snapshot.Data, snapshot.Index);
