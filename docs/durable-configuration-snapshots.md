@@ -12,10 +12,11 @@ log, then persists the binding before Raft startup. The API does not establish
 that the caller's assertion is true; absent an independent trusted baseline, the
 store still cannot infer its voter set.
 
-The durable file layout is unchanged. The backend persists the snapshot together
-with its existing voter binding; it does not reinterpret that binding from the
-metadata. The history scanner also verifies that a joint baseline's old voters
-match the bound set.
+The current MRFTD004 durable format persists the snapshot, commit boundary and
+existing voter binding in the same atomic image; it does not reinterpret that
+binding from snapshot metadata. Older durable formats remain readable and use
+their snapshot boundary as the conservative commit floor. The history scanner
+also verifies that a joint baseline's old voters match the bound set.
 
 In alpha.45 these images were persistence for offline validation only. The
 alpha.46 follow-up enables runtime recovery and transfer of MRFTS003 stable

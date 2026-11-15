@@ -182,6 +182,8 @@ public:
 private:
     friend class TRequestProcessor;
     void RestoreAppliedIndex(uint64_t index);
+    void AdvanceCommitIndex(uint64_t index);
+    void AdvanceLeaderCommit();
     void OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotRequest> message);
     void OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message);
     TMessageHolder<TInstallSnapshotRequest> CreateInstallSnapshot(uint32_t nodeId);

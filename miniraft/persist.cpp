@@ -123,6 +123,8 @@ void TDiskState::Write(TMessageHolder<TMessage> message)
 void TDiskState::RemoveLast()
 {
     if (LastLogIndex > 0) {
+        if (LastLogIndex <= CommitIndex)
+            throw std::logic_error("Cannot remove a committed log entry");
         const auto previousTerm = LastLogIndex == 1 ? 0 : Get(LastLogIndex - 1)->Term;
         --LastLogIndex;
         LastLogTerm = previousTerm;

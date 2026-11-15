@@ -788,6 +788,34 @@ void test_durable_snapshot_storage_rejects_term_regression(void**) {
 }
 #endif
 
+void CheckSnapshotCannotConflictAtCommit(IState& state, std::function<std::string()> image = [] { return std::string{}; }) {
+    state.CurrentTerm = 2;
+    auto entry = NewHoldedMessage<TLogEntry>(); entry->Term = 2; state.Append(entry);
+    state.CommitIndex = 1; state.Commit();
+    const auto before = static_cast<TStateFields>(state);
+    const auto beforeImage = image();
+    Reject([&] { state.InstallSnapshot({1, 1, {1}, "conflicting committed boundary"}); });
+    assert_true(static_cast<TStateFields>(state) == before);
+    assert_true(image() == beforeImage);
+}
+void test_memory_snapshot_cannot_replace_committed_index_with_conflicting_term(void**) {
+    TState state; CheckSnapshotCannotConflictAtCommit(state);
+}
+#ifdef __linux__
+void test_durable_snapshot_cannot_replace_committed_index_with_conflicting_term(void**) {
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-committed-snapshot-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    auto name = (dir / "raft").string();
+    { TDurableState state(name, 1); CheckSnapshotCannotConflictAtCommit(state, [&] {
+        std::ifstream input(name + ".durable.1", std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(input), {});
+      }); }
+    { TDurableState state(name, 1); assert_int_equal(state.CommitIndex, 1); }
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+}
+#endif
+
 void test_remote_snapshot_retains_suffix_without_applying_it_before_commit(void**) {
     auto state = std::make_shared<TState>();
     TKv prefix;
@@ -854,7 +882,7 @@ void ExerciseBoundary(IState& state) {
     assert_int_equal(state.LastLogIndex, 3); assert_int_equal(state.SnapshotIndex, 2);
     assert_int_equal(state.LogTerm(1), 0); assert_int_equal(state.LogTerm(2), 2); assert_int_equal(state.Get(3)->Term, 3);
     assert_false(state.Get(1)); assert_false(state.Get(2));
-    state.RemoveLast(); state.RemoveLast();
+    state.RemoveLast();
     assert_int_equal(state.LastLogIndex, 2); assert_int_equal(state.LastLogTerm, 2);
     auto entry = NewHoldedMessage<TLogEntry>(); entry->Term = 3; state.Append(entry);
     assert_int_equal(state.LastLogIndex, 3); assert_int_equal(state.Get(3)->Term, 3);
@@ -943,16 +971,16 @@ void test_compaction_reclaims_durable_prefix_bytes(void**) {
     assert_true(after < before / 10); assert_int_equal(state.LastLogIndex, 30);
     assert_true(bool(state.Get(30))); assert_false(state.Get(29));
 }
-void test_durable_v2_semantic_corruption_rejects_without_rewriting(void**) {
+void test_durable_v4_semantic_corruption_rejects_without_rewriting(void**) {
     for (int invalid = 0; invalid < 3; ++invalid) {
         TFiles files;
         { TDurableState state(files.Name, 1); ExerciseBoundary(state); }
         const auto path = files.Name + ".durable.1";
         std::ifstream input(path, std::ios::binary);
         std::string bytes(std::istreambuf_iterator<char>(input), {}); input.close();
-        assert_true(bytes.substr(0, 8) == "MRFTD002");
+        assert_true(bytes.substr(0, 8) == "MRFTD004");
         if (invalid < 2) {
-            const auto offset = invalid == 0 ? 40 : 32; // snapshot length or retained entry count
+            const auto offset = invalid == 0 ? 52 : 32; // snapshot length or retained entry count
             for (size_t i = offset; i < size_t(offset + 8); ++i) bytes[i] = char(0xff);
         } else bytes.back() ^= 1; // inner snapshot checksum with a valid outer checksum
         const auto crc = NSnapshotCodec::Checksum(bytes.substr(0, 8) + bytes.substr(20));
@@ -983,6 +1011,7 @@ int main() {
         cmocka_unit_test(test_older_snapshot_cannot_exceed_compacted_boundary_term),
         cmocka_unit_test(test_snapshot_is_rechecked_when_commit_advances_mid_transfer),
         cmocka_unit_test(test_memory_snapshot_storage_rejects_term_regression),
+        cmocka_unit_test(test_memory_snapshot_cannot_replace_committed_index_with_conflicting_term),
         cmocka_unit_test(test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered),
         cmocka_unit_test(test_stable_configuration_snapshot_installs_and_recovers_with_fixed_membership),
         cmocka_unit_test(test_idle_partial_snapshot_expires_on_learner_despite_heartbeats),
@@ -992,12 +1021,13 @@ int main() {
         cmocka_unit_test(test_memory_snapshot_boundary_retains_matching_suffix_and_replaces_conflict),
 #ifdef __linux__
         cmocka_unit_test(test_durable_snapshot_storage_rejects_term_regression),
+        cmocka_unit_test(test_durable_snapshot_cannot_replace_committed_index_with_conflicting_term),
         cmocka_unit_test(test_durable_storage_rejects_index_exhaustion),
         cmocka_unit_test(test_durable_term_lookup_avoids_payload_copies_across_compaction),
         cmocka_unit_test(test_durable_compacted_boundary_survives_restart),
         cmocka_unit_test(test_snapshot_and_suffix_are_atomic_at_every_publication_stage),
         cmocka_unit_test(test_compaction_reclaims_durable_prefix_bytes),
-        cmocka_unit_test(test_durable_v2_semantic_corruption_rejects_without_rewriting),
+        cmocka_unit_test(test_durable_v4_semantic_corruption_rejects_without_rewriting),
 #endif
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);

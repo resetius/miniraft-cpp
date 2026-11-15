@@ -50,6 +50,10 @@ def snapshot_boundary(path):
         voters = struct.unpack("<I", data[40:44])[0]
         assert 0 < voters <= 4096
         length_offset = 44 + 4 * voters
+    elif data[:8] == b"MRFTD004":
+        voters = struct.unpack("<I", data[48:52])[0]
+        assert voters <= 4096
+        length_offset = 52 + 4 * voters
     else:
         return 0
     length = struct.unpack("<Q", data[length_offset:length_offset + 8])[0]

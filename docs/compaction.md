@@ -1,7 +1,8 @@
 # Compaction and InstallSnapshot: v0.1.0-alpha.16
 
-The [learner follow-up](learners.md) adds non-voting replication and v3 durable
-voter binding while retaining backward decoding of the v1/v2 formats below.
+The [learner follow-up](learners.md) adds non-voting replication and durable
+voter binding. Current MRFTD004 images also persist commit progress; the reader
+continues to accept the earlier v1/v2/v3 images below.
 
 This milestone adds prefix deletion and follower state transfer to the alpha.15
 KV checkpoint foundation. TState and Linux TDurableState support compacted logs;
@@ -22,7 +23,7 @@ Old binaries cannot read compacted durable images or process InstallSnapshot RPC
 The meaning of `--snapshots` changes from checkpoint-only to actual compaction.
 Mixed-version operation is unsupported. Existing v1 durable files and alpha.15
 checkpoints can be read without destructive migration. The first compaction or
-remote installation writes v2; downgrading that store is unsupported. Fixed voter
+remote installation writes the current durable format; downgrading that store is unsupported. Fixed voter
 IDs must match the embedded snapshot. Static `--node` edits remain unsafe as a
 membership-change mechanism.
 
@@ -63,15 +64,23 @@ does not install an image at or below known commitment, so stale snapshots canno
 rewind application state. Retained suffix entries are applied only after a leader
 establishes their commitment.
 
-TDurableState v2 (`MRFTD002`) publishes hard state, the complete encoded snapshot
-and suffix in one atomic image, using the existing temp-write/file-fsync/rename/
-directory-fsync protocol. Its header remains magic[8], payload length[8], CRC[4].
-The payload is CurrentTerm[8], VotedFor[4], retained count[8], snapshot length[8],
-the existing MRFTS001 image, then the existing term/flags/length/data records.
-The v2 CRC covers the version magic plus payload; v1's checksum rules are retained
-for backward reading. Recovery bounds the embedded length, validates both CRCs,
-the absolute count range and nondecreasing terms beginning at SnapshotTerm.
+MRFTD004 publishes hard state, the persisted commit boundary, voter binding,
+complete encoded snapshot and suffix in one atomic image, using the existing
+temp-write/file-fsync/rename/directory-fsync protocol. Its header remains
+magic[8], payload length[8], CRC[4]. The payload is CurrentTerm[8], VotedFor[4],
+retained count[8], CommitIndex[8], voter count[4], voter IDs, snapshot length[8],
+the encoded snapshot, then term/flags/length/data records. The CRC covers the v4
+magic plus payload. Recovery checks `SnapshotIndex <= CommitIndex <= LastLogIndex`,
+bounds the embedded image and retained count, and validates nondecreasing terms
+beginning at SnapshotTerm. Older v1/v2/v3 images remain readable and recover
+their commit floor as SnapshotIndex; a successful later publication writes v4.
 Malformed recovery does not rewrite the image. Live publication failure is fatal.
+
+Followers publish a newly learned commit index before acknowledging
+AppendEntries. Leaders publish quorum commit advancement before application
+processing. Snapshot installation commits at least the included boundary, and
+storage refuses to truncate a committed entry. The legacy TDiskState backend
+does not persist CommitIndex.
 
 ## Transfer protocol
 

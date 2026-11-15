@@ -11,6 +11,9 @@ struct TStateFields {
     uint64_t LastLogTerm = 0;
     uint64_t SnapshotIndex = 0;
     uint64_t SnapshotTerm = 0;
+    // Persisted commit boundary where the storage backend supports it. Older
+    // formats conservatively recover this as SnapshotIndex.
+    uint64_t CommitIndex = 0;
 
     bool operator==(const TStateFields& other) const = default;
 };
@@ -34,6 +37,9 @@ struct IState: TStateFields {
         return entry->Flags;
     }
     virtual void Commit() = 0;
+    // True only when Commit() durably records CommitIndex and recovery restores
+    // it. Membership protocols can require this before trusting recovered history.
+    virtual bool SupportsCommitIndexPersistence() const { return false; }
     virtual bool SupportsSnapshots() const { return false; }
     virtual std::shared_ptr<const TSnapshot> GetSnapshot() const { return {}; }
     virtual void InstallSnapshot(const TSnapshot&) { throw std::logic_error("Storage snapshots are unsupported"); }
@@ -121,6 +127,8 @@ struct TState: IState {
 
     void RemoveLast() override {
         if (Log.empty()) return;
+        if (LastLogIndex <= CommitIndex)
+            throw std::logic_error("Cannot remove a committed log entry");
         Log.pop_back();
         LastLogIndex = SnapshotIndex + Log.size();
         LastLogTerm = Log.empty() ? SnapshotTerm : Log.back()->Term;
@@ -166,6 +174,9 @@ struct TState: IState {
             throw std::invalid_argument("Snapshot would change bound voters");
         if (image.Index <= SnapshotIndex || image.Term < SnapshotTerm || image.Term > CurrentTerm)
             throw std::invalid_argument("Obsolete or future snapshot");
+        if (image.Index <= CommitIndex &&
+            (image.Index > LastLogIndex || LogTerm(image.Index) != image.Term))
+            throw std::invalid_argument("Snapshot would discard committed log entries");
         auto saved = std::make_shared<const TSnapshot>(std::move(image));
         std::vector<TMessageHolder<TLogEntry>> suffix;
         if (saved->Index <= LastLogIndex && LogTerm(saved->Index) == saved->Term)
@@ -176,6 +187,7 @@ struct TState: IState {
         SnapshotTerm = Snapshot->Term;
         LastLogIndex = SnapshotIndex + Log.size();
         LastLogTerm = Log.empty() ? SnapshotTerm : Log.back()->Term;
+        CommitIndex = std::max(CommitIndex, SnapshotIndex);
     }
 
     void Commit() override { }

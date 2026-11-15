@@ -21,8 +21,9 @@ The migration applies to `TDurableState`; legacy `TDiskState` remains unable to
 persist voter bindings. Since alpha.52, Raft rejects recovered log-only durable
 stores with no binding, so this migration must be completed before startup.
 
-Tests cover MRFTD001 log-only and MRFTD002 snapshot-backed migration, rejection
+Tests cover MRFTD001, MRFTD002 and MRFTD003 recovery, rejection
 of inconsistent vote/snapshot baselines and configuration log entries without
-rewriting the source file, and recovered MRFTD003 binding after restart.
+rewriting the source file, and the current MRFTD004 binding after publication
+and restart. Legacy formats recover their commit floor at the snapshot boundary.
 
 Self-review completed. No independent reviewer approval is claimed.

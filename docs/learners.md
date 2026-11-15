@@ -90,19 +90,21 @@ all-voter operation retains its previous startup contract until that proof exist
 A standalone alpha.15 checkpoint alone is not an embedded configuration witness.
 Never delete voter state or edit votes/terms to work around this validation.
 
-The new durable format `MRFTD003` retains the 20-byte header and stores:
-CurrentTerm[8], VotedFor[4], retained-log count[8], voter count[4], sorted voter
-IDs[4 each], snapshot length[8], optional MRFTS001, MRFTS002, or MRFTS003 image,
-then retained log records.
-An absent snapshot uses length zero. The CRC covers version magic plus payload.
-Recovery bounds and validates the voter list and requires any snapshot to name
-the same voters. Both v1 and v2 remain readable; the first binding writes v3 using
-the existing atomic write/fsync/rename/directory-fsync protocol. A crash before
-first binding leaves either a fresh unbound store with no votes/log, or a complete
-bound store. Publication failure is fatal before the node can serve traffic.
+Current durable images use `MRFTD004` and retain the 20-byte header. The payload
+stores CurrentTerm[8], VotedFor[4], retained-log count[8], CommitIndex[8], voter
+count[4], sorted voter IDs[4 each], snapshot length[8], optional MRFTS001,
+MRFTS002, or MRFTS003 image, then retained log records. The CRC covers version
+magic plus payload. Recovery bounds and validates the voter list, commit
+boundary and requires any snapshot to name the same voters. MRFTD001 through
+MRFTD003 remain readable; formats without commit metadata conservatively use
+SnapshotIndex as their commit floor. The next successful publication writes v4
+using the existing atomic write/fsync/rename/directory-fsync protocol. A crash
+before first binding leaves either a fresh unbound store with no votes/log, or a
+complete bound store. Publication failure is fatal before the node can serve
+traffic.
 
 Upgrade all voters before configuring any learners. Older binaries treat every
-peer as a voter and cannot read v3 stores; mixed-role/mixed-version operation is
+peer as a voter and cannot read v4 stores; mixed-role/mixed-version operation is
 unsupported. All fresh bootstrap configurations must agree. Persistent binding
 does not authenticate initial bootstrap choices or wrong-store copies. No cluster
 UUID, role negotiation or automatic migration from unknown membership is added.
