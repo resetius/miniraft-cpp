@@ -22,6 +22,7 @@ public:
     uint64_t RetainedLogTerm(int64_t index) const override;
     uint64_t RetainedLogFlags(int64_t index) const override;
     void Commit() override;
+    bool SupportsCommitIndexPersistence() const override { return true; }
     bool SupportsSnapshots() const override { return true; }
     std::shared_ptr<const TSnapshot> GetSnapshot() const override;
     void InstallSnapshot(const TSnapshot& snapshot) override;

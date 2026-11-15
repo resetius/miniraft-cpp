@@ -495,12 +495,12 @@ void test_unbound_durable_configuration_snapshot_recovery_fails_closed(void**) {
     }
     std::ifstream input(path, std::ios::binary);
     std::string bytes(std::istreambuf_iterator<char>(input), {}); input.close();
-    assert_true(bytes.substr(0, 8) == "MRFTD002");
+    assert_true(bytes.substr(0, 8) == "MRFTD004");
     auto snapshot = Sample(); snapshot.StableConfiguration = true;
     snapshot.ConfigurationIndex = 1; snapshot.ConfigurationTerm = 1;
     const auto image = EncodeSnapshot(snapshot);
-    constexpr size_t imageLengthOffset = 40;
-    constexpr size_t imageOffset = 48;
+    constexpr size_t imageLengthOffset = 52;
+    constexpr size_t imageOffset = 60;
     uint64_t oldLength = 0;
     for (int i = 0; i < 8; ++i) oldLength |= uint64_t(uint8_t(bytes[imageLengthOffset + i])) << (8 * i);
     assert_true(oldLength == bytes.size() - imageOffset);
@@ -643,7 +643,8 @@ void test_durable_kv_restart_restores_checkpoint_and_replays_only_tail(void**) {
     RestoreSnapshot(*snapshot, *raft, *kv);
     assert_true(Read(*kv, "a") == "one"); assert_true(Read(*kv, "b").empty());
     TRequestProcessor processor(raft, kv, {});
-    processor.ProcessCommitted(); assert_int_equal(kv->Applied, 0);
+    processor.ProcessCommitted(); assert_int_equal(kv->Applied, 1);
+    assert_true(Read(*kv, "b") == "tail");
     raft->ProcessTimeout(ITimeSource::Time{}); processor.ProcessCommitted();
     assert_int_equal(kv->Applied, 1);
     assert_true(Read(*kv, "a") == "one"); assert_true(Read(*kv, "b") == "tail");

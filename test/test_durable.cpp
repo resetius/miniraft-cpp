@@ -1,10 +1,12 @@
 #include <miniraft/durable.h>
 #include <miniraft/persist.h>
 #include <miniraft/raft.h>
+#include <miniraft/snapshot_codec.h>
 #include <filesystem>
 #include <fstream>
 #include <chrono>
 #include <iterator>
+#include <tuple>
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
@@ -33,11 +35,71 @@ struct TFiles {
     fs::path Image() const { return Name + ".durable.1"; }
     void Seed();
 };
+void Put(std::string& bytes, uint64_t value, unsigned width) {
+    for (unsigned i = 0; i < width; ++i) bytes.push_back(char(value >> (8 * i)));
+}
+uint32_t Crc32(std::string_view bytes) {
+    uint32_t crc = UINT32_MAX;
+    for (unsigned char byte : bytes) {
+        crc ^= byte;
+        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+std::string LegacyImage(std::string_view magic, bool hasSnapshot, bool configured) {
+    std::string payload;
+    Put(payload, 3, 8); // current term
+    Put(payload, 1, 4); // vote
+    Put(payload, 1, 8); // retained entry count
+    if (configured) {
+        Put(payload, 2, 4); Put(payload, 1, 4); Put(payload, 2, 4);
+    }
+    if (hasSnapshot) {
+        const auto image = EncodeSnapshot(TSnapshot{1, 2, {1, 2}, "legacy snapshot"});
+        Put(payload, image.size(), 8); payload.append(image);
+    }
+    Put(payload, 3, 8); Put(payload, 0, 8); Put(payload, 4, 4); payload.append("tail");
+    std::string checksumInput;
+    if (magic != "MRFTD001") checksumInput.append(magic);
+    checksumInput.append(payload);
+    std::string bytes(magic);
+    Put(bytes, payload.size(), 8); Put(bytes, Crc32(checksumInput), 4); bytes.append(payload);
+    return bytes;
+}
 TMessageHolder<TLogEntry> Entry(uint64_t term, const std::string& data) {
     auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + data.size());
     entry->Term = term;
     memcpy(entry->Data, data.data(), data.size());
     return entry;
+}
+std::string Data(TDurableState& state, int64_t index);
+
+void test_v1_v2_v3_images_recover_conservatively_and_upgrade_on_publish(void**) {
+    for (const auto [magic, hasSnapshot, configured] : {
+        std::tuple<std::string_view, bool, bool>{"MRFTD001", false, false},
+        {"MRFTD002", true, false},
+        {"MRFTD003", true, true},
+    }) {
+        TFiles files;
+        const auto legacy = LegacyImage(magic, hasSnapshot, configured);
+        { std::ofstream output(files.Image(), std::ios::binary); output.write(legacy.data(), legacy.size()); }
+        {
+            TDurableState state(files.Name, 1);
+            assert_int_equal(state.CurrentTerm, 3);
+            assert_int_equal(state.SnapshotIndex, hasSnapshot ? 1 : 0);
+            assert_int_equal(state.CommitIndex, state.SnapshotIndex);
+            assert_int_equal(state.LastLogIndex, hasSnapshot ? 2 : 1);
+            if (!configured) state.BindVotersFromTrustedBaseline({1, 2});
+            assert_true((state.GetBoundVoters() == std::vector<uint32_t>{1, 2}));
+            assert_true(state.SupportsCommitIndexPersistence());
+            if (hasSnapshot) assert_true(state.GetSnapshot()->Data == "legacy snapshot");
+            assert_string_equal(Data(state, state.LastLogIndex).c_str(), "tail");
+            state.Commit();
+        }
+        std::ifstream upgraded(files.Image(), std::ios::binary);
+        std::string published(8, '\0'); upgraded.read(published.data(), published.size());
+        assert_true(published == "MRFTD004");
+    }
 }
 void TFiles::Seed() {
     TDurableState state(Name, 1);
@@ -50,9 +112,13 @@ std::string Data(TDurableState& state, int64_t index) {
     auto entry = state.Get(index);
     return std::string(entry->Data, entry->Len - sizeof(TLogEntry));
 }
-enum class EOperation { Append, Truncate, Vote, Replace };
+enum class EOperation { Append, Truncate, Vote, Replace, CommitIndex };
 void Operate(TDurableState& state, EOperation operation) {
     if (operation == EOperation::Truncate) state.RemoveLast();
+    else if (operation == EOperation::CommitIndex) {
+        state.CommitIndex = 1;
+        state.Commit();
+    }
     else if (operation == EOperation::Vote) {
         state.CurrentTerm = 4;
         state.VotedFor = 3;
@@ -64,8 +130,9 @@ void Check(TDurableState& state, EOperation operation, bool updated) {
     assert_int_equal(state.VotedFor, updated && operation == EOperation::Vote ? 3 : 2);
     const auto oldCount = operation == EOperation::Replace ? 1 : 2;
     const auto count = !updated ? oldCount : operation == EOperation::Truncate ? 1 :
-        operation == EOperation::Vote ? 2 : oldCount + 1;
+        operation == EOperation::Vote || operation == EOperation::CommitIndex ? 2 : oldCount + 1;
     assert_int_equal(state.LastLogIndex, count);
+    assert_int_equal(state.CommitIndex, updated && operation == EOperation::CommitIndex ? 1 : 0);
     assert_string_equal(Data(state, 1).c_str(), "first");
     if (count >= 2) {
         const bool replaced = updated && operation == EOperation::Replace;
@@ -83,7 +150,7 @@ void Wait(pid_t child, int expected) {
 }
 
 void test_crash_at_every_publication_boundary(void**) {
-    for (auto operation : {EOperation::Append, EOperation::Truncate, EOperation::Vote, EOperation::Replace}) {
+    for (auto operation : {EOperation::Append, EOperation::Truncate, EOperation::Vote, EOperation::Replace, EOperation::CommitIndex}) {
         for (auto stage : {TStage::TempCreated, TStage::Written, TStage::FileSynced,
                            TStage::Renamed, TStage::DirectorySynced}) {
             TFiles files;
@@ -110,7 +177,7 @@ void test_crash_at_every_publication_boundary(void**) {
 }
 
 void test_acknowledged_updates_survive_immediate_exit(void**) {
-    for (auto operation : {EOperation::Append, EOperation::Truncate, EOperation::Vote, EOperation::Replace}) {
+    for (auto operation : {EOperation::Append, EOperation::Truncate, EOperation::Vote, EOperation::Replace, EOperation::CommitIndex}) {
         TFiles files;
         files.Seed();
         const auto child = fork();
@@ -127,6 +194,48 @@ void test_acknowledged_updates_survive_immediate_exit(void**) {
         TDurableState recovered(files.Name, 1);
         Check(recovered, operation, true);
     }
+}
+
+struct TEndpoint : INode {
+    std::vector<TMessageHolder<TMessage>> Sent;
+    std::vector<std::string>* Events = nullptr;
+    void Send(TMessageHolder<TMessage> message) override {
+        Sent.push_back(std::move(message));
+        if (Events) Events->push_back("ack");
+    }
+    void Drain() override {}
+};
+
+void test_follower_persists_commit_before_ack_and_recovers_it(void**) {
+    TFiles files;
+    std::vector<std::string> events;
+    auto peer = std::make_shared<TEndpoint>();
+    peer->Events = &events;
+    {
+        auto state = std::make_shared<TDurableState>(files.Name, 1, [&](auto stage) {
+            if (stage == TStage::DirectorySynced) events.push_back("durable");
+        });
+        TRaft raft(state, 1, {{2, peer}});
+        events.clear(); // Ignore initial image and voter-binding publications.
+        auto request = NewHoldedMessage(TMessageEx{.Src = 2, .Dst = 1, .Term = 1},
+            TAppendEntriesRequest{.PrevLogIndex = 0, .PrevLogTerm = 0, .LeaderCommit = 1,
+                                  .LeaderId = 2, .Nentries = 1});
+        request.InitPayload(1);
+        request.Payload[0] = Entry(1, "committed");
+        raft.Process(ITimeSource::Time{}, request);
+        assert_int_equal(state->CommitIndex, 1);
+        assert_int_equal(peer->Sent.size(), 1);
+        assert_true(peer->Sent.back().Cast<TAppendEntriesResponse>()->Success);
+        assert_true((events == std::vector<std::string>{"durable", "durable", "ack"}));
+    }
+    TDurableState recovered(files.Name, 1);
+    assert_int_equal(recovered.CommitIndex, 1);
+    assert_int_equal(recovered.LastLogIndex, 1);
+    bool protectedEntry = false;
+    try { recovered.RemoveLast(); }
+    catch (const std::logic_error&) { protectedEntry = true; }
+    assert_true(protectedEntry);
+    assert_int_equal(recovered.LastLogIndex, 1);
 }
 
 void test_publication_order(void**) {
@@ -306,7 +415,9 @@ int main() {
     const CMUnitTest tests[] = {
         cmocka_unit_test(test_crash_at_every_publication_boundary),
         cmocka_unit_test(test_acknowledged_updates_survive_immediate_exit),
+        cmocka_unit_test(test_follower_persists_commit_before_ack_and_recovers_it),
         cmocka_unit_test(test_publication_order),
+        cmocka_unit_test(test_v1_v2_v3_images_recover_conservatively_and_upgrade_on_publish),
         cmocka_unit_test(test_live_publication_failure_is_fatal),
         cmocka_unit_test(test_write_error_is_fatal_and_preserves_image),
         cmocka_unit_test(test_interrupted_initialization_is_not_reset),

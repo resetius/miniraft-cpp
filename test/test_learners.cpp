@@ -464,7 +464,7 @@ void test_durable_voter_binding_is_atomic_before_first_vote(void**) {
         assert_int_equal(state.CurrentTerm, 1); assert_int_equal(state.VotedFor, 0); assert_int_equal(state.LastLogIndex, 0);
     }
 }
-void test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2(void**) {
+void test_trusted_legacy_voter_baseline_migrates_durable_state(void**) {
     {
         TFiles files;
         {
@@ -491,7 +491,7 @@ void test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2(void**) {
         const auto path = files.Name + ".durable.1";
         std::ifstream originalInput(path, std::ios::binary);
         const std::string original(std::istreambuf_iterator<char>(originalInput), {});
-        assert_true(original.substr(0, 8) == "MRFTD001");
+        assert_true(original.substr(0, 8) == "MRFTD004");
 
         {
             auto state = std::make_shared<TDurableState>(files.Name, 1);
@@ -509,7 +509,7 @@ void test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2(void**) {
             assert_int_equal(state->RetainedLogTerm(1), 2);
         }
         { std::ifstream migrated(path, std::ios::binary); std::string magic(8, '\0');
-          migrated.read(magic.data(), magic.size()); assert_true(magic == "MRFTD003"); }
+          migrated.read(magic.data(), magic.size()); assert_true(magic == "MRFTD004"); }
         auto recovered = std::make_shared<TDurableState>(files.Name, 1);
         assert_true(static_cast<TStateFields>(*recovered) == before);
         assert_true(recovered->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
@@ -531,7 +531,7 @@ void test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2(void**) {
         const auto path = files.Name + ".durable.1";
         std::ifstream originalInput(path, std::ios::binary);
         const std::string original(std::istreambuf_iterator<char>(originalInput), {});
-        assert_true(original.substr(0, 8) == "MRFTD002");
+        assert_true(original.substr(0, 8) == "MRFTD004");
 
         {
             auto state = std::make_shared<TDurableState>(files.Name, 1);
@@ -546,7 +546,7 @@ void test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2(void**) {
             assert_true(state->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
         }
         { std::ifstream migrated(path, std::ios::binary); std::string magic(8, '\0');
-          migrated.read(magic.data(), magic.size()); assert_true(magic == "MRFTD003"); }
+          migrated.read(magic.data(), magic.size()); assert_true(magic == "MRFTD004"); }
         auto recovered = std::make_shared<TDurableState>(files.Name, 1);
         assert_true(static_cast<TStateFields>(*recovered) == before);
         assert_true(recovered->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
@@ -666,15 +666,15 @@ void test_durable_learner_snapshot_suffix_and_role_survive_restart(void**) {
     assert_true(Read(*app, "b") == "tail"); assert_int_equal(state->VotedFor, 0);
     assert_true(state->GetBoundVoters() == (std::vector<uint32_t>{1, 2, 3}));
 }
-void test_durable_v3_corrupt_roles_fail_without_rewriting(void**) {
-    for (size_t offset : {size_t(40), size_t(44), size_t(48), size_t(56)}) {
+void test_durable_v4_corrupt_commit_or_roles_fail_without_rewriting(void**) {
+    for (size_t offset : {size_t(40), size_t(52), size_t(56), size_t(64)}) {
         TFiles files;
         { auto state = std::make_shared<TDurableState>(files.Name, 4); TRaft raft(state, 4, Peers(4), {4}); }
         const auto path = files.Name + ".durable.4";
         std::ifstream input(path, std::ios::binary); std::string bytes(std::istreambuf_iterator<char>(input), {}); input.close();
-        assert_true(bytes.substr(0, 8) == "MRFTD003");
-        const auto width = offset == 56 ? 8 : 4;
-        for (size_t i = offset; i < offset + width; ++i) bytes[i] = offset == 44 || offset == 48 ? 0 : char(0xff);
+        assert_true(bytes.substr(0, 8) == "MRFTD004");
+        const auto width = offset == 40 || offset == 64 ? 8 : 4;
+        for (size_t i = offset; i < offset + width; ++i) bytes[i] = offset == 52 || offset == 56 ? 0 : char(0xff);
         const auto crc = NSnapshotCodec::Checksum(bytes.substr(0, 8) + bytes.substr(20));
         for (int i = 0; i < 4; ++i) bytes[16 + i] = char(crc >> (8 * i));
         { std::ofstream out(path, std::ios::binary); out.write(bytes.data(), bytes.size()); }
@@ -682,7 +682,7 @@ void test_durable_v3_corrupt_roles_fail_without_rewriting(void**) {
         std::ifstream after(path, std::ios::binary); assert_true(std::string(std::istreambuf_iterator<char>(after), {}) == bytes);
     }
 }
-void test_durable_v2_snapshot_adoption_preserves_vote_log_and_application(void**) {
+void test_durable_snapshot_adoption_preserves_vote_log_and_application(void**) {
     TFiles files; TStateFields before; std::string application;
     {
         TDurableState state(files.Name, 1); TKv app;
@@ -692,7 +692,7 @@ void test_durable_v2_snapshot_adoption_preserves_vote_log_and_application(void**
         state.Append(app.Prepare(Command("b", "tail"))); before = state;
     }
     const auto path = files.Name + ".durable.1";
-    { std::ifstream input(path, std::ios::binary); std::string magic(8, '\0'); input.read(magic.data(), 8); assert_true(magic == "MRFTD002"); }
+    { std::ifstream input(path, std::ios::binary); std::string magic(8, '\0'); input.read(magic.data(), 8); assert_true(magic == "MRFTD004"); }
     {
         auto state = std::make_shared<TDurableState>(files.Name, 1);
         auto raft = std::make_shared<TRaft>(state, 1, Peers(1), std::vector<uint32_t>{4});
@@ -766,9 +766,9 @@ int main() {
         cmocka_unit_test(test_legacy_recovered_vote_outside_voters_preserves_storage),
         cmocka_unit_test(test_durable_voter_binding_is_atomic_before_first_vote),
         cmocka_unit_test(test_durable_learner_snapshot_suffix_and_role_survive_restart),
-        cmocka_unit_test(test_durable_v3_corrupt_roles_fail_without_rewriting),
-        cmocka_unit_test(test_durable_v2_snapshot_adoption_preserves_vote_log_and_application),
-        cmocka_unit_test(test_trusted_legacy_voter_baseline_migrates_durable_v1_and_v2),
+        cmocka_unit_test(test_durable_v4_corrupt_commit_or_roles_fail_without_rewriting),
+        cmocka_unit_test(test_durable_snapshot_adoption_preserves_vote_log_and_application),
+        cmocka_unit_test(test_trusted_legacy_voter_baseline_migrates_durable_state),
         cmocka_unit_test(test_trusted_legacy_voter_baseline_refuses_configuration_logs),
         cmocka_unit_test(test_trusted_legacy_voter_baseline_must_precede_raft_startup),
         cmocka_unit_test(test_trusted_legacy_voter_binding_is_atomic_at_each_publish_stage),

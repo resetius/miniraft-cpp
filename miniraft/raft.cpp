@@ -260,8 +260,10 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
     if (!Learners.empty() && !State->SupportsVoterBinding())
         throw std::invalid_argument("Learners require voter-binding-capable storage");
     const auto bound = State->GetBoundVoters();
-    if (State->SnapshotIndex > State->LastLogIndex || State->LastLogIndex > uint64_t(INT64_MAX))
+    if (State->SnapshotIndex > State->LastLogIndex || State->LastLogIndex > uint64_t(INT64_MAX) ||
+        State->CommitIndex > State->LastLogIndex)
         throw std::invalid_argument("Invalid retained log bounds");
+    const bool commitFloorAdded = State->CommitIndex < State->SnapshotIndex;
     const auto snapshot = State->GetSnapshot();
     if (snapshot) {
         ValidateSnapshot(*snapshot);
@@ -297,9 +299,11 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, st
     const bool fresh = State->CurrentTerm == 1 && !State->VotedFor && !State->LastLogIndex;
     if (State->SupportsVoterBinding() && (!bound.empty() || fresh || snapshot || !Learners.empty()))
         State->BindVoters(Voters);
-    if (snapshot) {
-        VolatileState->CommitIndex = State->SnapshotIndex;
+    if (commitFloorAdded) {
+        State->CommitIndex = State->SnapshotIndex;
+        State->Commit();
     }
+    VolatileState->CommitIndex = State->CommitIndex;
     State->MarkRaftStarted();
 }
 
@@ -396,9 +400,9 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
         TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm, .Seqno = message->Seqno},
         TAppendEntriesResponse {.MatchIndex = matchIndex, .Success = success});
 
+    AdvanceCommitIndex(commitIndex);
     (*VolatileState)
         .SetLeaderId(message->LeaderId)
-        .SetCommitIndex(commitIndex)
         .SetElectionDue(MakeElection(now));
 
     Become(EState::FOLLOWER);
@@ -434,8 +438,8 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             .SetNextIndex(nodeId, matchIndex+1)
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
-            .SetBackOff(nodeId, 1)
-            .CommitAdvance(*VotingQuorum, Id, *State);
+            .SetBackOff(nodeId, 1);
+        AdvanceLeaderCommit();
     } else if (message->MatchIndex > 0) {
         // A compacted-prefix hint is not replication evidence. Probe its boundary
         // with AppendEntries before advancing MatchIndex or confirming reads.
@@ -701,7 +705,7 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
     }
 
     if (Nservers == 1) {
-        VolatileState->CommitAdvance(*VotingQuorum, Id, *State);
+        AdvanceLeaderCommit();
     }
 }
 
@@ -890,6 +894,7 @@ TSnapshot TRaft::Compact() {
         throw std::runtime_error("Compaction deferred while snapshot transfers pin multiple generations");
     auto snapshot = CaptureSnapshot(*this, *application);
     application->ValidateSnapshot(snapshot.Data, snapshot.Index);
+    AdvanceCommitIndex(VolatileState->CommitIndex);
     State->InstallSnapshot(snapshot);
     // Outstanding transfers own their immutable encoded bytes; discard any
     // otherwise-retained encoding of the old local snapshot.
@@ -944,7 +949,8 @@ void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> response)
         if (response->NextOffset != rpc.Bytes->size()) return;
         const auto index = std::max(VolatileState->MatchIndex[response->Src], response->SnapshotIndex);
         (*VolatileState).SetMatchIndex(response->Src, index).SetNextIndex(response->Src, index + 1)
-            .SetBatchSize(response->Src, 1024).SetBackOff(response->Src, 1).CommitAdvance(*VotingQuorum, Id, *State);
+            .SetBatchSize(response->Src, 1024).SetBackOff(response->Src, 1);
+        AdvanceLeaderCommit();
         VolatileState->SnapshotRpcs.erase(found);
         // Snapshot completion is not a fresh-read acknowledgement. AppendEntries
         // must still establish the next read barrier and replicate the suffix.
@@ -1044,7 +1050,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         application->LoadSnapshot(snapshot.Data, snapshot.Index);
         if (application->LastAppliedIndex != snapshot.Index) std::terminate();
     } catch (...) { std::terminate(); }
-    VolatileState->CommitIndex = snapshot.Index;
+    VolatileState->CommitIndex = State->CommitIndex;
     IncomingSnapshot.reset();
     reply(true, true, request->TotalBytes);
 }
@@ -1054,7 +1060,28 @@ void TRaft::RestoreAppliedIndex(uint64_t index) {
         throw std::invalid_argument("Application progress exceeds recovered Raft log");
     // A correctly recovered application marker is evidence of commitment.
     // Protect its prefix immediately, before any AppendEntries can be handled.
-    VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
+    AdvanceCommitIndex(std::max(VolatileState->CommitIndex, index));
+}
+
+void TRaft::AdvanceCommitIndex(uint64_t index) {
+    if (index > State->LastLogIndex)
+        throw std::logic_error("Invalid Raft commit index advance");
+    const auto target = std::max({index, VolatileState->CommitIndex, State->CommitIndex});
+    if (target > State->LastLogIndex)
+        throw std::logic_error("Invalid persisted Raft commit index");
+    if (State->CommitIndex < target) {
+        State->CommitIndex = target;
+        State->Commit();
+    }
+    VolatileState->CommitIndex = target;
+}
+
+void TRaft::AdvanceLeaderCommit() {
+    const auto previous = VolatileState->CommitIndex;
+    VolatileState->CommitAdvance(*VotingQuorum, Id, *State);
+    const auto updated = VolatileState->CommitIndex;
+    VolatileState->CommitIndex = previous;
+    AdvanceCommitIndex(updated);
 }
 
 TRequestProcessor::TRequestProcessor(std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, const TNodeDict& nodes)

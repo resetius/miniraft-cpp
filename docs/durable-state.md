@@ -1,5 +1,28 @@
 # Linux durable state: v0.1.0-alpha.3
 
+## Commit recovery: MRFTD004
+
+The current durable image stores `CommitIndex` alongside the current term, vote,
+voter binding, snapshot and retained log. Recovery requires
+`SnapshotIndex <= CommitIndex <= LastLogIndex`. Raft publishes a commit advance
+before it acknowledges the corresponding AppendEntries request or exposes the
+new boundary to application processing. Restart therefore replays committed
+entries even when the application checkpoint trails them. Installed snapshots
+advance the persisted commit floor to at least their included index, and storage
+rejects truncation of committed entries.
+
+MRFTD004 keeps the 20-byte file header: magic[8], payload length[8] and CRC[4].
+Its payload is CurrentTerm[8], VotedFor[4], retained-log count[8],
+CommitIndex[8], voter count[4], sorted voter IDs[4 each], snapshot length[8],
+optional encoded snapshot, then retained log records. The CRC covers the v4 magic
+and payload. MRFTD001, MRFTD002 and MRFTD003 remain readable; their commit floor
+is conservatively initialized to SnapshotIndex, since those formats did not
+record commit progress. Their next successful publication writes MRFTD004.
+
+This closes commit-boundary recovery for `TDurableState`; it does not implement
+live membership changes or joint consensus. The legacy `TDiskState` format does
+not persist this field and cannot provide the same recovery guarantee.
+
 TDurableState is an opt-in storage backend with synchronous durable publication.
 It closes the missing file-sync and atomic-publication gap for new stores, under
 the filesystem assumptions below. The legacy TDiskState backend is unchanged
@@ -31,10 +54,10 @@ Startup errors are exceptions and do not fall back to older/temp images.
 
 ## Format and ownership
 
-The image has version magic, payload length and CRC32 followed by term, vote,
-entry count and length-prefixed log entries. Recovery checks the checksum before
-decoding entries and validates bounds and term ordering. CRC32 detects accidental
-corruption but does not protect against malicious modification or all collisions.
+The image has version magic, payload length and CRC32. Recovery checks the
+checksum before decoding entries and validates bounds, commit metadata, snapshot
+identity and term ordering. CRC32 detects accidental corruption but does not
+protect against malicious modification or all collisions.
 
 The files are NAME.durable.ID, NAME.durable.ID.tmp and NAME.durable.ID.lock.
 A nonblocking advisory flock holds the lock for the object's lifetime. Use one
@@ -68,9 +91,9 @@ TDurableState construction throws an explicit unsupported-platform exception.
 
 ## Validation and self-review
 
-Twelve new tests cover publication ordering, 20 process-crash boundaries across
-append/truncation/vote/replacement operations, four immediate exits after returned
-updates, five interrupted initializations, a live injected failure, an actual
+Tests cover publication ordering, process-crash boundaries across
+append/truncation/vote/replacement/commit updates, immediate exits after returned
+updates, interrupted initializations, a live injected failure, an actual
 write error using a child-only file-size limit, corrupted/truncated images,
 single-writer exclusion, missing images, legacy-store refusal, entry ownership and Raft election/application replay across
 a storage restart.
