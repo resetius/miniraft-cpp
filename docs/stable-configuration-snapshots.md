@@ -18,12 +18,19 @@ trusted snapshot and commit boundary independently. MRFTS003 cannot assert that
 there was no earlier configuration entry; an explicit trusted baseline remains
 necessary for such histories.
 
-The runtime accepts MRFTS003 only when its voter list matches the node's existing
-fixed voter binding. It can recover the image at startup, restore the application,
-install it from a peer, and preserve its configuration identity through later
-compaction. The covered-snapshot path checks the stable configuration identity
-and voter list before acknowledging an already-covered boundary. These paths do
-not activate a changed voter set or enable joint consensus.
+The live runtime accepts MRFTS003 only when its voter list matches the node's
+configured fixed voter set and persisted binding. It can recover the image at
+startup, restore the application, install it from a peer, and preserve its
+configuration identity through later compaction. The covered-snapshot path
+checks the stable configuration identity and voter list before acknowledging an
+already-covered boundary. These paths do not activate a changed voter set or
+enable joint consensus.
+
+Since alpha.58, bound in-memory and durable storage can also retain an
+MRFTS003/MRFTS002 image whose active set differs from the original persisted
+binding, for offline history validation. That storage support does not make the
+image acceptable to live Raft or authenticate its membership claim; callers must
+provide a trusted history baseline.
 
 Older binaries may falsely acknowledge covered unknown formats; do not send these
 images to a mixed-version cluster. Joint snapshot installation, live

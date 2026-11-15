@@ -12,9 +12,13 @@ The caller must independently establish the baseline and commit index: the scan
 does not prove that any entry is committed, recover a commit index, authenticate
 the snapshot, or establish cluster identity. A fixed v1 snapshot does not identify
 its latest configuration entry, so its configuration identity must come from
-other trusted information. Experimental stable and joint snapshots contain that identity and the scan
-checks that the supplied baseline matches it. The scan checks snapshot and log
-boundaries, bound fixed voters, terms, configuration predecessors, and transitions.
+other trusted information. Experimental stable and joint snapshots contain that
+identity and the scan checks that the supplied active configuration matches it.
+The persisted voter binding identifies the original trusted set; configuration
+metadata can describe an active set reached by later transitions. Legacy images
+without configuration metadata still require the original and snapshot voter
+sets to agree. The scan checks snapshot and log boundaries, voter history, terms,
+configuration predecessors, and transitions.
 It requires a consistent, externally serialized view of the state; it does not
 mutate storage, apply entries, activate voters, or change Raft roles.
 
@@ -24,9 +28,8 @@ copying ordinary payloads; external backends using default metadata accessors ma
 read full entries. Configuration records are read and validated in full.
 
 Configuration entries and joint snapshots remain rejected by the live runtime.
-Stable metadata snapshots can be recovered and installed if their voter list
-matches the persisted fixed membership. Bound in-memory and durable stores can
-also retain joint metadata for offline validation; for joint snapshots, the
-scanner requires the baseline's old voter set to match that binding. Live
-membership activation, commit rules, and snapshot installation across membership
-transitions remain future work.
+Bound in-memory and durable stores can retain stable or joint metadata snapshots
+for offline validation while preserving the original voter binding. The scanner
+still requires a trusted configuration baseline; metadata presence alone does
+not authenticate a transition. Live membership activation, commit rules, and
+snapshot installation across membership transitions remain future work.

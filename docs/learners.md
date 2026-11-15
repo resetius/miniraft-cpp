@@ -95,9 +95,12 @@ stores CurrentTerm[8], VotedFor[4], retained-log count[8], CommitIndex[8], voter
 count[4], sorted voter IDs[4 each], snapshot length[8], optional MRFTS001,
 MRFTS002, or MRFTS003 image, then retained log records. The CRC covers version
 magic plus payload. Recovery bounds and validates the voter list, commit
-boundary and requires any snapshot to name the same voters. MRFTD001 through
-MRFTD003 remain readable; formats without commit metadata conservatively use
-SnapshotIndex as their commit floor. The next successful publication writes v4
+boundary. Legacy snapshots must name the original bound voters; configuration-
+bearing snapshots can describe a later active set while retaining that original
+binding for offline history scans. Raft startup still requires the runtime voter
+set and binding to match. MRFTD001 through MRFTD003 remain readable; formats
+without commit metadata conservatively use SnapshotIndex as their commit floor.
+The next successful publication writes v4
 using the existing atomic write/fsync/rename/directory-fsync protocol. A crash
 before first binding leaves either a fresh unbound store with no votes/log, or a
 complete bound store. Publication failure is fatal before the node can serve

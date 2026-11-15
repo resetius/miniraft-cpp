@@ -96,6 +96,8 @@ TBytes ReadAll(int fd) {
 struct TDurableState::TImpl {
     std::vector<TMessageHolder<TLogEntry>> Log;
     std::shared_ptr<const TSnapshot> Snapshot;
+    // Original trusted voter set; configuration snapshots can carry a later
+    // active set without rewriting this binding.
     std::vector<uint32_t> Voters;
     bool Recovered = false;
     bool RaftStarted = false;
@@ -179,11 +181,9 @@ TDurableState::TDurableState(const std::string& name, uint32_t id, THook hook)
             throw std::runtime_error("Invalid embedded snapshot size");
         if (length) {
             auto snapshot = DecodeSnapshot(std::string_view(reinterpret_cast<const char*>(bytes.data() + position), size_t(length)));
-            if (snapshot.HasConfigurationMetadata() && Impl->Voters.empty())
-                throw std::runtime_error("Configuration snapshot recovery requires a bound voter set");
+            if (!SnapshotCompatibleWithVoterBinding(snapshot, Impl->Voters))
+                throw std::runtime_error("Durable snapshot is incompatible with the persisted voter binding");
             if (snapshot.Term > CurrentTerm) throw std::runtime_error("Future durable snapshot term");
-            if (!Impl->Voters.empty() && snapshot.Voters != Impl->Voters)
-                throw std::runtime_error("Durable snapshot/voter mismatch");
             position += size_t(length);
             SnapshotIndex = snapshot.Index;
             SnapshotTerm = snapshot.Term;
@@ -200,7 +200,8 @@ TDurableState::TDurableState(const std::string& name, uint32_t id, THook hook)
             if (snapshot.HasConfigurationMetadata() && !configured)
                 throw std::runtime_error("Configuration snapshot recovery requires a bound voter set");
             if (snapshot.Term > CurrentTerm) throw std::runtime_error("Future durable snapshot term");
-            if (configured && snapshot.Voters != Impl->Voters) throw std::runtime_error("Durable snapshot/voter mismatch");
+            if (configured && !SnapshotCompatibleWithVoterBinding(snapshot, Impl->Voters))
+                throw std::runtime_error("Durable snapshot is incompatible with the persisted voter binding");
             position += size_t(length);
             SnapshotIndex = snapshot.Index;
             SnapshotTerm = snapshot.Term;
@@ -260,10 +261,10 @@ void TDurableState::Publish()
     Put(payload, Impl->Voters.size(), 4);
     if (!Impl->Voters.empty()) {
         ValidateFixedVoters(Impl->Voters);
-        if (Impl->Snapshot && Impl->Snapshot->Voters != Impl->Voters)
-            throw std::runtime_error("Snapshot would change bound voters");
         for (auto id : Impl->Voters) Put(payload, id, 4);
     }
+    if (Impl->Snapshot && !SnapshotCompatibleWithVoterBinding(*Impl->Snapshot, Impl->Voters))
+        throw std::runtime_error("Durable snapshot is incompatible with the persisted voter binding");
     const auto image = Impl->Snapshot ? EncodeSnapshot(*Impl->Snapshot) : std::string{};
     Put(payload, image.size(), 8);
     payload.insert(payload.end(), image.begin(), image.end());
@@ -350,10 +351,8 @@ void TDurableState::InstallSnapshot(const TSnapshot& snapshot) {
     TSnapshot image = snapshot;
     PreserveStableSnapshotIdentity(Impl->Snapshot.get(), image);
     ValidateSnapshot(image);
-    if (image.HasConfigurationMetadata() && Impl->Voters.empty())
-        throw std::invalid_argument("Configuration snapshots require a bound voter set");
-    if (!Impl->Voters.empty() && image.Voters != Impl->Voters)
-        throw std::invalid_argument("Snapshot would change bound voters");
+    if (!SnapshotCompatibleWithVoterBinding(image, Impl->Voters))
+        throw std::invalid_argument("Snapshot is incompatible with the persisted voter binding");
     if (image.Index <= SnapshotIndex || image.Term < SnapshotTerm || image.Term > CurrentTerm)
         throw std::invalid_argument("Obsolete or future durable snapshot");
     if (image.Index <= CommitIndex &&

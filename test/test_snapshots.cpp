@@ -530,7 +530,8 @@ void test_joint_snapshot_export_and_durable_roundtrip_but_runtime_rejects(void**
         assert_true(state.GetBoundVoters() == JointSample().Voters);
         assert_true(*state.GetSnapshot() == JointSample());
         const auto before = static_cast<TStateFields>(state);
-        auto mismatched = JointSample(); mismatched.Voters = {1, 2, 4};
+        // Legacy snapshots still cannot change the original voter binding.
+        TSnapshot mismatched{3, 1, {1, 2, 4}, "legacy changed voters"};
         std::ifstream input(path, std::ios::binary);
         bytes.assign(std::istreambuf_iterator<char>(input), {});
         Reject([&] { state.InstallSnapshot(mismatched); });

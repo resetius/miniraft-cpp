@@ -203,11 +203,10 @@ void test_scan_separates_commit_and_replaced_suffix(void**) {
 void test_scan_from_joint_snapshot_and_rejects_mismatched_baselines(void**) {
     TSnapshot snapshot{2, 2, {1, 2}, "image"};
     snapshot.JointVoters = {2, 3}; snapshot.ConfigurationIndex = 2; snapshot.ConfigurationTerm = 2;
-    // Synthetic offline state with the original voter set durably bound.
-    TState state; state.Snapshot = std::make_shared<TSnapshot>(snapshot);
-    state.SnapshotIndex = state.LastLogIndex = 2; state.SnapshotTerm = state.LastLogTerm = 2;
-    state.BoundVoters = snapshot.Voters;
-    state.CurrentTerm = 3; state.Append(Ordinary(2));
+    // The original binding is retained while the snapshot describes an active
+    // configuration reached by an earlier committed transition.
+    TState state; state.BindVoters({7, 8}); state.CurrentTerm = 2;
+    state.InstallSnapshot(snapshot); state.CurrentTerm = 3; state.Append(Ordinary(2));
     TConfigurationRecord final{EConfigurationPhase::Stable, 3, 2, 2, {1, 2}, {2, 3}};
     state.Append(EncodeConfigurationEntry(final));
     auto base = TConfigurationHistory::FromJointSnapshot(snapshot);
@@ -221,8 +220,8 @@ void test_scan_from_joint_snapshot_and_rejects_mismatched_baselines(void**) {
     auto wrong = snapshot; wrong.JointVoters = {2, 4};
     Reject([&] { ScanConfigurationHistory(state, TConfigurationHistory::FromJointSnapshot(wrong), 2); });
     state.BoundVoters = {1, 2, 4};
-    Reject([&] { ScanConfigurationHistory(state, base, 2); });
-    state.BoundVoters = snapshot.Voters;
+    assert_true(ScanConfigurationHistory(state, base, 2).Committed.IsJoint());
+    state.BoundVoters = {7, 8};
     state.LastLogTerm = 2;
     Reject([&] { ScanConfigurationHistory(state, base, 2); });
 }
@@ -232,8 +231,8 @@ void test_scan_from_stable_configuration_snapshot(void**) {
     auto decoded = DecodeSnapshot(EncodeSnapshot(snapshot));
     auto baseline = TConfigurationHistory::FromStableSnapshot(decoded);
     assert_false(baseline.IsJoint()); assert_int_equal(baseline.ConfigurationIndex(), 4);
-    TState state; state.Snapshot = std::make_shared<TSnapshot>(decoded);
-    state.SnapshotIndex = state.LastLogIndex = 5; state.SnapshotTerm = state.LastLogTerm = 2;
+    TState state; state.BindVoters({7, 8});
+    state.CurrentTerm = 2; state.InstallSnapshot(decoded);
     state.CurrentTerm = 3;
     TConfigurationRecord joint{EConfigurationPhase::Joint, 3, 4, 2, {1, 2}, {2, 3}};
     state.Append(EncodeConfigurationEntry(joint));
@@ -496,6 +495,72 @@ void test_persisted_commit_boundary_drives_committed_configuration_scan(void**) 
     });
     std::error_code ignored; std::filesystem::remove_all(dir, ignored);
 }
+
+void test_configuration_snapshots_preserve_original_binding_across_transitions(void**) {
+    auto dir = std::filesystem::temp_directory_path() / ("miniraft-config-snapshot-binding-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    assert_true(std::filesystem::create_directory(dir));
+    const auto name = (dir / "raft").string();
+    const std::vector<uint32_t> original{1, 2, 3};
+    const std::vector<uint32_t> firstActive{2, 3, 4};
+    const std::vector<uint32_t> secondActive{2, 4, 5};
+    const std::vector<uint32_t> thirdActive{4, 5, 6};
+
+    TSnapshot jointSnapshot{5, 4, firstActive, "joint image"};
+    jointSnapshot.JointVoters = secondActive;
+    jointSnapshot.ConfigurationIndex = 4; jointSnapshot.ConfigurationTerm = 3;
+    TConfigurationRecord stable{EConfigurationPhase::Stable, 5, 4, 3, firstActive, secondActive};
+
+    {
+        TDurableState state(name, 2);
+        state.BindVoters(original);
+        state.CurrentTerm = 4; state.Commit();
+        state.InstallSnapshot(jointSnapshot);
+        assert_true(state.GetBoundVoters() == original);
+        assert_true(*state.GetSnapshot() == jointSnapshot);
+    }
+
+    TSnapshot stableSnapshot{6, 5, secondActive, "stable image"};
+    stableSnapshot.StableConfiguration = true;
+    stableSnapshot.ConfigurationIndex = 6; stableSnapshot.ConfigurationTerm = 5;
+    TConfigurationRecord nextJoint{EConfigurationPhase::Joint, 6, 6, 5, secondActive, thirdActive};
+    {
+        TDurableState state(name, 2);
+        assert_true(state.GetBoundVoters() == original);
+        assert_true(*state.GetSnapshot() == jointSnapshot);
+        auto history = TConfigurationHistory::FromJointSnapshot(*state.GetSnapshot());
+        state.CurrentTerm = 5; state.Commit();
+        state.Append(EncodeConfigurationEntry(stable));
+        state.CommitIndex = state.LastLogIndex; state.Commit();
+        auto scan = ScanCommittedConfigurationHistory(state, history);
+        assert_false(scan.Committed.IsJoint());
+        assert_true(scan.Committed.OldVoters() == secondActive);
+
+        state.InstallSnapshot(stableSnapshot);
+        state.CurrentTerm = 6; state.Commit();
+        state.Append(EncodeConfigurationEntry(nextJoint));
+        state.CommitIndex = state.LastLogIndex; state.Commit();
+    }
+
+    {
+        auto state = std::make_shared<TDurableState>(name, 2);
+        assert_true(state->GetBoundVoters() == original);
+        assert_true(*state->GetSnapshot() == stableSnapshot);
+        auto baseline = TConfigurationHistory::FromStableSnapshot(*state->GetSnapshot());
+        const auto scan = ScanCommittedConfigurationHistory(*state, baseline);
+        assert_true(scan.Committed.IsJoint());
+        assert_true(scan.Committed.OldVoters() == secondActive);
+        assert_true(scan.Committed.NewVoters() == thirdActive);
+        assert_false(scan.HasUncommittedConfiguration());
+
+        const auto fields = static_cast<TStateFields>(*state);
+        Reject([&] { TRaft disabled(state, 2, {{4, std::make_shared<TEndpoint>()},
+            {5, std::make_shared<TEndpoint>()}}); });
+        assert_true(static_cast<TStateFields>(*state) == fields);
+        assert_true(state->GetBoundVoters() == original);
+    }
+    std::error_code ignored; std::filesystem::remove_all(dir, ignored);
+}
 #endif
 }
 int main() {
@@ -518,6 +583,7 @@ int main() {
         cmocka_unit_test(test_legacy_restart_uses_safe_flag_lookup_and_preserves_files),
         cmocka_unit_test(test_offline_history_scan_after_durable_snapshot_and_restart),
         cmocka_unit_test(test_persisted_commit_boundary_drives_committed_configuration_scan),
+        cmocka_unit_test(test_configuration_snapshots_preserve_original_binding_across_transitions),
 #endif
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);

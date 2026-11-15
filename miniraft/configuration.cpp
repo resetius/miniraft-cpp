@@ -178,8 +178,13 @@ TConfigurationScan ScanConfigurationHistory(const IState& state,
         throw std::invalid_argument("Invalid empty snapshot boundary");
     }
     const auto bound = state.GetBoundVoters();
-    if (!bound.empty() && bound != baseline.OldVoters())
-        throw std::invalid_argument("Configuration baseline differs from bound voters");
+    // The binding is the trusted original set. Configuration-bearing snapshots
+    // carry the active set and its identity after a transition, so those voters
+    // may legitimately differ. Legacy snapshots still require the original
+    // set because they cannot describe or validate that transition boundary.
+    if (!bound.empty() && bound != baseline.OldVoters() &&
+        (!snapshot || !snapshot->HasConfigurationMetadata()))
+        throw std::invalid_argument("Configuration baseline differs from the trusted voter history");
 
     auto latest = baseline;
     auto committed = baseline;

@@ -10,11 +10,11 @@ and that the supplied application image corresponds exactly to that boundary.
 The method validates snapshot metadata and size; it does not capture application
 state, compact or mutate storage, establish commitment, or activate voters.
 Joint configuration snapshots remain rejected by the live runtime. Stable
-metadata snapshots can be recovered and installed when they match the node's
-existing fixed voter binding; this does not enable voter changes.
-Bound storage can retain and recover stable or joint metadata snapshots for
-offline validation, provided the snapshot voter list matches the store's existing
-voter binding.
+metadata snapshots are runtime-compatible only when they match the node's
+existing fixed voter set. Bound storage can retain stable or joint metadata
+snapshots for offline validation while preserving the original voter binding,
+even when the active set in the snapshot differs. This does not enable voter
+changes.
 
 TConfigurationHistory checks a sequence of retained log entries against a trusted
 configuration baseline. It joins the experimental configuration-entry codec with

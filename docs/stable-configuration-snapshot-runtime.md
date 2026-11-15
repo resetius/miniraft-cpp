@@ -19,9 +19,12 @@ erasing configuration history and prevents a peer from replacing it with a
 conflicting baseline.
 
 This does not implement membership changes. Configuration log entries remain
-disabled, the voter binding cannot change, and a stable snapshot claiming a
-different voter list is rejected. Joint consensus, transition rollback and
-snapshot installation across a membership transition remain open. Upgrade all
+disabled, and the original voter binding cannot change. Raft startup and network
+installation still reject a stable snapshot whose active set differs from the
+configured fixed set. Since alpha.58, offline storage can retain such
+configuration-bearing snapshots without changing the original binding. Joint
+consensus, transition rollback and snapshot installation across a membership
+transition remain open. Upgrade all
 voters before sending MRFTS003 images because older binaries may acknowledge an
 already-covered unknown snapshot format.
 

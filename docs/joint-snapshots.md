@@ -25,9 +25,12 @@ snapshot store can export and load v2 images for testing or offline tooling.
 
 This is a format and offline persistence foundation, not live joint consensus or
 complete configuration history. A bound memory or durable store can install and
-recover a joint snapshot for offline validation when its persisted voter list
-matches the snapshot's old voter set. Raft startup and RPC paths still reject
-joint snapshots, and compaction only creates fixed-voter snapshots. A covered
+recover a joint snapshot for offline validation while preserving its original
+voter binding, which may differ from the snapshot's active old voter set after
+earlier transitions. The caller must supply a trusted history baseline; the
+snapshot codec and store do not prove that the transition was committed. Raft
+startup and RPC paths still reject joint snapshots, and compaction only creates
+fixed-voter snapshots. A covered
 snapshot is acknowledged only after its prefix identifies supported fixed v1 or
 stable v3 metadata, including when the prefix arrives in several chunks.
 Unsupported joint images are rejected without replacing application data or

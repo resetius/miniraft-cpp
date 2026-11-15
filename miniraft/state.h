@@ -47,6 +47,8 @@ struct IState: TStateFields {
     // True when this backend recovered a persistent image without a stored
     // voter identity; Raft must obtain proof before serving this state.
     virtual bool HasUnboundRecoveredState() const { return false; }
+    // Original trusted voter set persisted with this store. It may differ from
+    // the active set in a configuration-bearing offline snapshot.
     virtual std::vector<uint32_t> GetBoundVoters() const { return {}; }
     virtual void BindVoters(const std::vector<uint32_t>&) { throw std::logic_error("Storage voter binding is unsupported"); }
     // Storage backends can close startup-only migration paths once a Raft
@@ -88,6 +90,17 @@ inline void ValidateVoterBinding(const IState& state, const std::vector<uint32_t
     } else if (state.CurrentTerm != 1 || state.VotedFor || state.LastLogIndex) {
         throw std::invalid_argument("Unbound nonfresh store needs a verified snapshot before enabling learners");
     }
+}
+
+// A persisted voter binding identifies the original, trusted membership. For
+// offline history storage, explicit configuration metadata allows the snapshot
+// Voters field to describe a later active set while that original binding stays
+// put. Metadata still requires an existing binding; it is not proof by itself
+// and does not authorize runtime membership changes.
+inline bool SnapshotCompatibleWithVoterBinding(const TSnapshot& snapshot,
+    const std::vector<uint32_t>& voters) {
+    if (snapshot.HasConfigurationMetadata()) return !voters.empty();
+    return voters.empty() || snapshot.Voters == voters;
 }
 
 struct TState: IState {
@@ -168,10 +181,8 @@ struct TState: IState {
         TSnapshot image = snapshot;
         PreserveStableSnapshotIdentity(Snapshot.get(), image);
         ValidateSnapshot(image); // Validate before changing any state.
-        if (image.HasConfigurationMetadata() && BoundVoters.empty())
-            throw std::invalid_argument("Configuration snapshots require a bound voter set");
-        if (!BoundVoters.empty() && image.Voters != BoundVoters)
-            throw std::invalid_argument("Snapshot would change bound voters");
+        if (!SnapshotCompatibleWithVoterBinding(image, BoundVoters))
+            throw std::invalid_argument("Snapshot is incompatible with the persisted voter binding");
         if (image.Index <= SnapshotIndex || image.Term < SnapshotTerm || image.Term > CurrentTerm)
             throw std::invalid_argument("Obsolete or future snapshot");
         if (image.Index <= CommitIndex &&
