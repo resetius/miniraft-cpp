@@ -37,6 +37,13 @@ struct TEndpoint : INode {
     void Send(TMessageHolder<TMessage>) override { ++Sent; }
     void Drain() override {}
 };
+struct TCountingRsm : TDummyRsm {
+    unsigned Writes = 0;
+    TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> entry, uint64_t index) override {
+        ++Writes;
+        return TDummyRsm::Write(std::move(entry), index);
+    }
+};
 TMessageHolder<TLogEntry> Ordinary(uint64_t term) {
     auto entry = NewHoldedMessage<TLogEntry>(); entry->Term = term; return entry;
 }
@@ -374,18 +381,23 @@ void test_configuration_rpc_and_proposal_are_rejected_before_mutation(void**) {
     Reject([&] { leader.Append(proposed); });
     assert_true(static_cast<TStateFields>(*leaderState) == leaderBefore); assert_int_equal(proposed->Term, 2);
 }
-void test_unsupported_configuration_never_reaches_application_or_binds_voters(void**) {
+void test_configuration_application_advances_without_calling_state_machine(void**) {
     auto state = std::make_shared<TState>(); auto record = Joint(); record.Term = 1;
     record.PreviousIndex = record.PreviousTerm = 0;
     state->Append(EncodeConfigurationEntry(record));
     Reject([&] { TRaft invalid(state, 1, {}); });
     assert_true(state->GetBoundVoters().empty());
     auto live = std::make_shared<TState>(); auto raft = std::make_shared<TRaft>(live, 1, TNodeDict{});
-    auto app = std::make_shared<TDummyRsm>(); TRequestProcessor processor(raft, app, {});
+    auto app = std::make_shared<TCountingRsm>(); TRequestProcessor processor(raft, app, {});
+    raft->ProcessTimeout({});
+    processor.ProcessCommitted();
+    assert_int_equal(app->LastAppliedIndex, 1); // Leader's initial stub.
+    record.Term = live->CurrentTerm;
     live->Append(EncodeConfigurationEntry(record));
-    const_cast<TVolatileState*>(raft->GetVolatileState())->CommitIndex = 1;
-    Reject([&] { processor.ProcessCommitted(); });
-    assert_int_equal(app->LastAppliedIndex, 0);
+    raft->ProcessTimeout(ITimeSource::Time{} + std::chrono::seconds(1));
+    processor.ProcessCommitted();
+    assert_int_equal(app->LastAppliedIndex, 2);
+    assert_int_equal(app->Writes, 0);
     auto compacted = std::make_shared<TState>();
     { TRaft bootstrap(compacted, 1, {}); }
     compacted->Append(NewHoldedMessage<TLogEntry>());
@@ -600,7 +612,7 @@ int main() {
         cmocka_unit_test(test_configuration_roundtrips_both_phases_and_bounded_maximum),
         cmocka_unit_test(test_configuration_rejects_invalid_fields_and_valid_crc_corruption),
         cmocka_unit_test(test_configuration_rpc_and_proposal_are_rejected_before_mutation),
-        cmocka_unit_test(test_unsupported_configuration_never_reaches_application_or_binds_voters),
+        cmocka_unit_test(test_configuration_application_advances_without_calling_state_machine),
 #ifdef __linux__
         cmocka_unit_test(test_durable_restart_rejects_reserved_entry_without_rewriting),
         cmocka_unit_test(test_legacy_restart_uses_safe_flag_lookup_and_preserves_files),

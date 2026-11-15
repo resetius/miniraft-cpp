@@ -19,8 +19,11 @@ authentication. CRC is an accidental-corruption check, not authentication.
 
 Current Raft rejects entries carrying the reserved bit in local proposals and
 incoming AppendEntries, before changing term or log. Startup scans the retained
-suffix and rejects such entries before voter binding or serving traffic; the
-application path also refuses them. Joint snapshots remain rejected as described
+suffix and rejects such entries before voter binding or serving traffic. If a
+configuration record reaches committed replay in a controlled test or future
+runtime, the request processor validates it, advances its applied index, and
+does not pass it to the application state machine. This no-op application rule
+does not activate the configuration. Joint snapshots remain rejected as described
 in [joint snapshot metadata](joint-snapshots.md). The codec and storage backends
 can represent records for deterministic testing and offline tools, but they are
 not an active replication or recovery protocol.

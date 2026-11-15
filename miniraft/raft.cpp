@@ -13,6 +13,7 @@
 #include "raft.h"
 #include "messages.h"
 #include "timesource.h"
+#include "configuration.h"
 
 namespace {
 
@@ -1339,8 +1340,13 @@ void TRequestProcessor::ProcessCommitted() {
     auto& state = Raft->GetState();
     for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
         auto entry = state->Get(i);
-        if (entry->Flags & TLogEntry::EConfiguration)
-            throw std::logic_error("Configuration application is unsupported");
+        if (entry->Flags & TLogEntry::EConfiguration) {
+            // Configuration is Raft metadata, never an application command.
+            // Validate its control record and advance the application boundary
+            // without exposing it to the state machine.
+            DecodeConfigurationEntry(entry);
+            continue;
+        }
         if (entry->Flags == TLogEntry::EStub) {
             continue;
         }
