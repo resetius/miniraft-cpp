@@ -23,6 +23,11 @@ bounded before allocation. Fixed snapshots continue to encode as MRFTS001 with
 exactly the previous bytes; a golden v1 image tests compatibility. The standalone
 snapshot store can export and load v2 images for testing or offline tooling.
 
+The [alpha.59 continuity follow-up](configuration-snapshot-continuity.md) checks
+that a stored stable configuration advances to a joint image using the same old
+voters, and that a joint image can only continue with the same joint identity or
+move to a stable successor selecting its new voters.
+
 This is a format and offline persistence foundation, not live joint consensus or
 complete configuration history. A bound memory or durable store can install and
 recover a joint snapshot for offline validation while preserving its original

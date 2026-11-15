@@ -41,11 +41,44 @@ void Validate(const TSnapshot& snapshot) {
         validateVoters(snapshot.JointVoters);
     }
 }
-void CheckStableSnapshotIdentity(const TSnapshot* current, const TSnapshot& incoming) {
-    if (current && current->StableConfiguration && incoming.StableConfiguration &&
-        (incoming.ConfigurationIndex != current->ConfigurationIndex ||
-         incoming.ConfigurationTerm != current->ConfigurationTerm))
-        throw std::invalid_argument("Stable snapshot configuration identity changed");
+void CheckSnapshotConfigurationContinuity(const TSnapshot* current, const TSnapshot& incoming) {
+    if (!current || !current->HasConfigurationMetadata()) return;
+    if (current->StableConfiguration) {
+        if (incoming.StableConfiguration) {
+            if (incoming.ConfigurationIndex != current->ConfigurationIndex ||
+                incoming.ConfigurationTerm != current->ConfigurationTerm)
+                throw std::invalid_argument("Stable snapshot configuration identity changed");
+            if (incoming.Voters != current->Voters)
+                throw std::invalid_argument("Stable snapshot voters changed without a new configuration identity");
+            return;
+        }
+        if (incoming.IsJoint()) {
+            if (incoming.Voters != current->Voters ||
+                incoming.ConfigurationIndex <= current->Index ||
+                incoming.ConfigurationTerm < current->Term)
+                throw std::invalid_argument("Joint snapshot does not extend the stable configuration");
+            return;
+        }
+        if (incoming.Voters != current->Voters)
+            throw std::invalid_argument("Legacy snapshot would change the active voter set");
+        return;
+    }
+
+    if (incoming.IsJoint()) {
+        if (incoming.Voters != current->Voters || incoming.JointVoters != current->JointVoters ||
+            incoming.ConfigurationIndex != current->ConfigurationIndex ||
+            incoming.ConfigurationTerm != current->ConfigurationTerm)
+            throw std::invalid_argument("Joint snapshot configuration changed without a stable successor");
+        return;
+    }
+    if (incoming.StableConfiguration) {
+        if (incoming.Voters != current->JointVoters ||
+            incoming.ConfigurationIndex <= current->Index ||
+            incoming.ConfigurationTerm < current->Term)
+            throw std::invalid_argument("Stable snapshot does not extend the joint configuration");
+        return;
+    }
+    throw std::invalid_argument("Legacy snapshot cannot discard joint configuration metadata");
 }
 void CheckLocalLog(const TSnapshot& snapshot, const TRaft& raft) {
     Validate(snapshot);
@@ -76,14 +109,10 @@ void Sync(int fd) {
 void ValidateSnapshot(const TSnapshot& snapshot) { Validate(snapshot); }
 
 void PreserveStableSnapshotIdentity(const TSnapshot* current, TSnapshot& incoming) {
-    if (!current || !current->StableConfiguration) return;
-    CheckStableSnapshotIdentity(current, incoming);
-    if (incoming.StableConfiguration) {
-        return;
-    }
-    // A joint image carries an explicit new phase. A legacy image carries no
-    // configuration claim, so retain the already trusted stable identity.
-    if (!incoming.HasConfigurationMetadata()) {
+    CheckSnapshotConfigurationContinuity(current, incoming);
+    if (current && current->StableConfiguration && !incoming.HasConfigurationMetadata()) {
+        // Legacy images carry no membership claim, so retain the known stable
+        // identity after confirming their active voters are unchanged.
         incoming.StableConfiguration = true;
         incoming.ConfigurationIndex = current->ConfigurationIndex;
         incoming.ConfigurationTerm = current->ConfigurationTerm;
@@ -163,7 +192,8 @@ TSnapshot CaptureSnapshot(const TRaft& raft, const IRsm& rsm) {
 
 void RestoreSnapshot(const TSnapshot& snapshot, const TRaft& raft, IRsm& rsm) {
     const auto knownSnapshot = raft.GetState()->GetSnapshot();
-    CheckStableSnapshotIdentity(knownSnapshot.get(), snapshot);
+    ValidateSnapshot(snapshot);
+    CheckSnapshotConfigurationContinuity(knownSnapshot.get(), snapshot);
     CheckLocalLog(snapshot, raft);
     if (rsm.LastAppliedIndex >= snapshot.Index)
         throw std::runtime_error("Application is not behind the snapshot");

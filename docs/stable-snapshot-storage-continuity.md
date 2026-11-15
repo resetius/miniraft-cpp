@@ -18,6 +18,10 @@ does not enable joint snapshot recovery, live membership changes, or membership
 activation from an untrusted snapshot. Joint images remain explicit metadata and
 are still available to the existing offline durable format tests.
 
+The [alpha.59 follow-up](configuration-snapshot-continuity.md) extends this
+continuity check to active voter sets, stable-to-joint transitions and joint
+snapshot recovery, while retaining the same offline-only trust boundary.
+
 Tests install a legacy refresh and attempt a conflicting stable replacement
 through both memory and durable storage. They check metadata preservation,
 rejection atomicity, and durable recovery after restart. Release and ASan/UBSan

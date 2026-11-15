@@ -427,9 +427,80 @@ void CheckStableSnapshotIdentityContinuity(IState& state) {
     assert_true(static_cast<TStateFields>(state) == before);
     assert_true(*state.GetSnapshot() == preserved);
 }
+TSnapshot CheckConfigurationSnapshotTransitionContinuity(IState& state) {
+    const std::vector<uint32_t> original{1, 2, 3};
+    const std::vector<uint32_t> active{2, 3, 4};
+    const std::vector<uint32_t> next{3, 4, 5};
+    state.BindVoters(original);
+
+    TSnapshot stable{2, 1, active, "stable before transition"};
+    stable.StableConfiguration = true;
+    stable.ConfigurationIndex = 1; stable.ConfigurationTerm = 1;
+    state.InstallSnapshot(stable);
+
+    // Neither a legacy refresh nor a stable image with the same identity may
+    // silently restore the original or any other voter list.
+    TSnapshot legacyWithOriginal{3, 1, original, "legacy stale membership"};
+    Reject([&] { state.InstallSnapshot(legacyWithOriginal); });
+    auto stableWithConflict = stable; stableWithConflict.Index = 3;
+    stableWithConflict.Voters = original;
+    Reject([&] { state.InstallSnapshot(stableWithConflict); });
+    assert_true(*state.GetSnapshot() == stable);
+
+    TSnapshot legacy{3, 1, active, "legacy refresh"};
+    state.InstallSnapshot(legacy);
+    stable.Index = legacy.Index; stable.Data = legacy.Data;
+    assert_true(*state.GetSnapshot() == stable);
+
+    state.CurrentTerm = 2; state.Commit();
+    TSnapshot wrongJoint{4, 2, original, "wrong old set"};
+    wrongJoint.JointVoters = next;
+    wrongJoint.ConfigurationIndex = 4; wrongJoint.ConfigurationTerm = 2;
+    Reject([&] { state.InstallSnapshot(wrongJoint); });
+    TSnapshot staleJoint{4, 2, active, "configuration predates stable snapshot"};
+    staleJoint.JointVoters = next;
+    staleJoint.ConfigurationIndex = 3; staleJoint.ConfigurationTerm = 1;
+    Reject([&] { state.InstallSnapshot(staleJoint); });
+    assert_true(*state.GetSnapshot() == stable);
+
+    TSnapshot joint{4, 2, active, "joint transition"};
+    joint.JointVoters = next;
+    joint.ConfigurationIndex = 4; joint.ConfigurationTerm = 2;
+    state.InstallSnapshot(joint);
+    auto conflictingJoint = joint; conflictingJoint.Index = 5;
+    conflictingJoint.JointVoters = {3, 5, 6};
+    Reject([&] { state.InstallSnapshot(conflictingJoint); });
+
+    TSnapshot legacyDowngrade{5, 2, active, "cannot erase joint phase"};
+    Reject([&] { state.InstallSnapshot(legacyDowngrade); });
+    TSnapshot wrongStable{5, 2, active, "wrong stable set"};
+    wrongStable.StableConfiguration = true;
+    wrongStable.ConfigurationIndex = 5; wrongStable.ConfigurationTerm = 2;
+    Reject([&] { state.InstallSnapshot(wrongStable); });
+    TSnapshot regressedStable{5, 2, next, "configuration term predates joint snapshot"};
+    regressedStable.StableConfiguration = true;
+    regressedStable.ConfigurationIndex = 5; regressedStable.ConfigurationTerm = 1;
+    Reject([&] { state.InstallSnapshot(regressedStable); });
+
+    TSnapshot final{5, 2, next, "stable after transition"};
+    final.StableConfiguration = true;
+    final.ConfigurationIndex = 5; final.ConfigurationTerm = 2;
+    state.InstallSnapshot(final);
+
+    auto conflictingFinal = final; conflictingFinal.Index = 6;
+    conflictingFinal.Voters = {3, 4, 6};
+    Reject([&] { state.InstallSnapshot(conflictingFinal); });
+    assert_true(*state.GetSnapshot() == final);
+    assert_true(state.GetBoundVoters() == original);
+    return final;
+}
 void test_memory_snapshot_storage_preserves_stable_configuration_identity(void**) {
     TState state;
     CheckStableSnapshotIdentityContinuity(state);
+}
+void test_memory_snapshot_storage_checks_configuration_transition_continuity(void**) {
+    TState state;
+    CheckConfigurationSnapshotTransitionContinuity(state);
 }
 #ifdef __linux__
 void test_durable_snapshot_storage_preserves_stable_configuration_identity(void**) {
@@ -445,6 +516,18 @@ void test_durable_snapshot_storage_preserves_stable_configuration_identity(void*
     assert_int_equal(snapshot->ConfigurationIndex, 1);
     assert_int_equal(snapshot->ConfigurationTerm, 1);
     assert_true(snapshot->Data == "legacy refresh");
+}
+void test_durable_snapshot_storage_checks_configuration_transition_continuity(void**) {
+    TFiles files;
+    const std::vector<uint32_t> original{1, 2, 3};
+    TSnapshot final;
+    {
+        TDurableState state(files.Name, 1);
+        final = CheckConfigurationSnapshotTransitionContinuity(state);
+    }
+    TDurableState recovered(files.Name, 1);
+    assert_true(recovered.GetBoundVoters() == original);
+    assert_true(recovered.GetSnapshot() && *recovered.GetSnapshot() == final);
 }
 void test_stable_configuration_snapshot_durable_runtime_recovery_and_compaction(void**) {
     TFiles files;
@@ -671,8 +754,10 @@ int main() {
         cmocka_unit_test(test_restore_rejects_checkpoint_with_conflicting_stable_identity),
         cmocka_unit_test(test_startup_restores_stale_application_from_durable_snapshot_boundary),
         cmocka_unit_test(test_memory_snapshot_storage_preserves_stable_configuration_identity),
+        cmocka_unit_test(test_memory_snapshot_storage_checks_configuration_transition_continuity),
 #ifdef __linux__
         cmocka_unit_test(test_durable_snapshot_storage_preserves_stable_configuration_identity),
+        cmocka_unit_test(test_durable_snapshot_storage_checks_configuration_transition_continuity),
         cmocka_unit_test(test_stable_configuration_snapshot_durable_runtime_recovery_and_compaction),
         cmocka_unit_test(test_unbound_durable_configuration_snapshot_recovery_fails_closed),
         cmocka_unit_test(test_joint_snapshot_export_and_durable_roundtrip_but_runtime_rejects),

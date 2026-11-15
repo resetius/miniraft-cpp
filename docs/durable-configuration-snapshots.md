@@ -40,6 +40,9 @@ Since alpha.58, bound storage can preserve its original voter binding while
 installing configuration-bearing snapshots whose active set changed. Raft
 startup and network snapshot handling still reject those transition snapshots;
 the storage support is only for offline history validation and trusted inputs.
+The [alpha.59 follow-up](configuration-snapshot-continuity.md) checks that a
+replacement configuration snapshot extends the previously stored phase,
+identity, and active voter sets.
 
 Tests cover in-memory installation, durable joint and stable round-trips,
 rejection of unbound configuration snapshots and mismatched legacy snapshots,
