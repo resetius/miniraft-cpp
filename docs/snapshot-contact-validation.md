@@ -16,8 +16,9 @@ requests retain the existing preflight rule: their first chunk must contain a
 complete supported metadata prefix before hard state advances.
 
 Deterministic regression coverage checks an unsupported joint image split across
-chunks while the receiver is a candidate. The first partial prefix does not
-demote it or move its deadline; the chunk that identifies the unsupported
+chunks while the receiver is a candidate, both when its boundary is already
+covered and when it would require full installation. The first partial prefix
+does not demote it or move its deadline; the chunk that identifies the unsupported
 format is rejected with the same state preserved. Existing valid split-prefix,
 snapshot installation, stale-term and higher-term preflight tests continue to
 cover the accepted paths. No wire or storage format changed.

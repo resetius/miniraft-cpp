@@ -507,6 +507,38 @@ void test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered(void**)
     assert_true(static_cast<TStateFields>(*state) == before); assert_int_equal(app->Loads, 1);
     assert_true(Read(*app, "a") == "old");
 }
+void test_unsupported_new_snapshot_does_not_accept_leader_contact(void**) {
+    TKv source; source.Write(source.Prepare(Command("a", "joint")), 5);
+    TSnapshot joint{5, 2, {1, 2}, source.SaveSnapshot()};
+    joint.JointVoters = {2, 3}; joint.ConfigurationIndex = 4; joint.ConfigurationTerm = 2;
+    const auto bytes = EncodeSnapshot(joint);
+    std::vector<TMessageHolder<TInstallSnapshotResponse>> replies;
+    auto peer = std::make_shared<TEndpoint>([&](auto message) {
+        replies.push_back(message.template Cast<TInstallSnapshotResponse>());
+    });
+    auto state = std::make_shared<TState>();
+    auto raft = std::make_shared<TRaft>(state, 2, TNodeDict{{1, peer}});
+    auto app = std::make_shared<TApplication>(); TRequestProcessor processor(raft, app, {});
+    state->CurrentTerm = 3;
+    raft->Become(EState::CANDIDATE);
+    const auto before = static_cast<TStateFields>(*state);
+    const auto electionDue = raft->GetVolatileState()->ElectionDue;
+
+    // This image is newer than the local commit boundary, so it exercises the
+    // full installation path rather than the covered-prefix fast path.
+    raft->Process({}, Chunk(joint, bytes, 0, 4));
+    assert_true(replies.back()->Success); assert_false(replies.back()->Installed);
+    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    assert_true(raft->GetVolatileState()->ElectionDue == electionDue);
+    raft->Process({}, Chunk(joint, bytes, 4, 4));
+    assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
+    raft->Process({}, Chunk(joint, bytes, 0, static_cast<uint32_t>(bytes.size())));
+    assert_false(replies.back()->Success); assert_false(replies.back()->Installed);
+    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    assert_true(raft->GetVolatileState()->ElectionDue == electionDue);
+    assert_true(static_cast<TStateFields>(*state) == before);
+    assert_int_equal(app->Loads, 0); assert_int_equal(app->LastAppliedIndex, 0);
+}
 void test_stable_configuration_snapshot_installs_and_recovers_with_fixed_membership(void**) {
     TKv source; source.Write(source.Prepare(Command("a", "stable snapshot")), 5);
     TSnapshot snapshot{5, 1, {1, 2}, source.SaveSnapshot()};
@@ -1025,6 +1057,7 @@ int main() {
         cmocka_unit_test(test_memory_snapshot_storage_rejects_term_regression),
         cmocka_unit_test(test_memory_snapshot_cannot_replace_committed_index_with_conflicting_term),
         cmocka_unit_test(test_joint_snapshot_is_rejected_even_if_boundary_is_already_covered),
+        cmocka_unit_test(test_unsupported_new_snapshot_does_not_accept_leader_contact),
         cmocka_unit_test(test_stable_configuration_snapshot_installs_and_recovers_with_fixed_membership),
         cmocka_unit_test(test_idle_partial_snapshot_expires_on_learner_despite_heartbeats),
         cmocka_unit_test(test_remote_snapshot_retains_suffix_without_applying_it_before_commit),
