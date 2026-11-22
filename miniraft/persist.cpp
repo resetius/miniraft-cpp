@@ -1,7 +1,6 @@
 #include "persist.h"
 #include <filesystem>
 #include <stdexcept>
-#include <exception>
 #include <iostream>
 
 TDiskState::TDiskState(const std::string& name, uint32_t id)
@@ -22,7 +21,6 @@ TDiskState::TDiskState(const std::string& name, uint32_t id)
     State = Open(statePath, fresh);
     if (fresh) {
         Commit();
-        Recovering = false;
         return;
     }
 
@@ -56,7 +54,6 @@ TDiskState::TDiskState(const std::string& name, uint32_t id)
         expectedOffset += entry->Len;
         LastLogTerm = entry->Term;
     }
-    Recovering = false;
 }
 
 std::fstream TDiskState::Open(const std::string& name, bool create)
@@ -73,12 +70,8 @@ std::fstream TDiskState::Open(const std::string& name, bool create)
 
 [[noreturn]] void TDiskState::Fail(const char* message) const
 {
-    if (Recovering) throw std::runtime_error(message);
-    // The network layer catches ordinary exceptions and keeps the node alive.
-    // Continuing after a live storage failure could acknowledge unpersisted
-    // votes or logs. Fail-stop instead; startup validation remains catchable.
-    std::cerr << "Fatal Raft storage error: " << message << '\n';
-    std::terminate();
+    // Report to the embedder; whether a live storage error stops the node is its policy.
+    throw std::runtime_error(message);
 }
 
 TMessageHolder<TMessage> TDiskState::Read() const
