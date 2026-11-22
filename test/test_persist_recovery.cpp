@@ -249,30 +249,17 @@ void test_live_storage_failure_is_reported(void**) {
     try { state.Get(1); } catch (const std::runtime_error&) { rejected = true; }
     assert_true(rejected);
 }
-#ifndef _WIN32
-void test_live_invalid_log_term_is_fatal(void**) {
+void test_live_invalid_log_term_is_reported(void**) {
     for (uint64_t term : {uint64_t(0), uint64_t(8)}) {
         TFiles files;
         files.Seed();
-        const auto child = fork();
-        assert_true(child >= 0);
-        if (child == 0) {
-            std::set_terminate([] { _exit(73); });
-            try {
-                TDiskState state(files.Name, 1);
-                files.Overwrite("entries", sizeof(TMessage), term);
-                state.Get(1);
-            } catch (...) { _exit(74); }
-            _exit(75);
-        }
-        int status = 0;
-        assert_int_equal(waitpid(child, &status, 0), child);
-        assert_true(WIFEXITED(status));
-        assert_int_equal(WEXITSTATUS(status), 73);
+        TDiskState state(files.Name, 1);
+        files.Overwrite("entries", sizeof(TMessage), term);
+        bool rejected = false;
+        try { state.Get(1); } catch (const std::runtime_error&) { rejected = true; }
+        assert_true(rejected);
     }
 }
-
-#endif
 }
 
 int main() {
@@ -293,9 +280,7 @@ int main() {
         cmocka_unit_test(test_decreasing_log_terms_are_rejected),
         cmocka_unit_test(test_equal_and_skipped_terms_and_full_width_current_term_recover),
         cmocka_unit_test(test_invalid_terms_in_logically_removed_suffix_are_ignored),
-#ifndef _WIN32
-        cmocka_unit_test(test_live_invalid_log_term_is_fatal),
-#endif
+        cmocka_unit_test(test_live_invalid_log_term_is_reported),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
