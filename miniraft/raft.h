@@ -41,7 +41,7 @@ private:
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
 struct TVolatileState {
-    struct TAppendRpc { uint64_t Seqno, LastIndex; };
+    struct TAppendRpc { uint64_t Seqno, PrevIndex, LastIndex; };
     static constexpr size_t MaxPendingAppendRpcs = 256;
     uint64_t CommitIndex = 0;
     // Successful current-term RPC acknowledgements, separately from log indices.
