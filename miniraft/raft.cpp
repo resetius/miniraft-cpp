@@ -265,6 +265,7 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     });
     if (request == requests.end() ||
         (message->Success && message->MatchIndex != request->LastIndex)) return;
+    const auto rpc = *request;
     // A newer response supersedes older RPCs. Reordered/duplicate failures
     // must not undo progress or repeatedly increase backoff.
     requests.erase(requests.begin(), std::next(request));
@@ -282,6 +283,12 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             .SetBackOff(nodeId, 1)
             .CommitAdvance(Nservers, *State);
     } else {
+        if (rpc.PrevIndex <= VolatileState->MatchIndex[nodeId]) {
+            // The follower lost an entry it acknowledged in this term, so it
+            // restarted without stable storage: forget its progress to let the
+            // backoff reach its log. CommitIndex never moves back.
+            VolatileState->MatchIndex[nodeId] = 0;
+        }
         auto backOff = std::max(VolatileState->BackOff[nodeId], 1);
         auto nextIndex = VolatileState->NextIndex[nodeId] > backOff
             ? VolatileState->NextIndex[nodeId] - backOff
@@ -341,7 +348,7 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     }
     VolatileState->LastSentSeqno[nodeId] = mes->Seqno;
     auto& pending = VolatileState->PendingAppendRpcs[nodeId];
-    pending.push_back({mes->Seqno, lastIndex});
+    pending.push_back({mes->Seqno, prevIndex, lastIndex});
     if (pending.size() > TVolatileState::MaxPendingAppendRpcs) pending.pop_front();
     return mes;
 }

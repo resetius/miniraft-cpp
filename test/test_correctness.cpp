@@ -696,6 +696,28 @@ void test_even_cluster_partition_requires_majority(void**) {
     for (auto& node : cluster.Nodes) assert_int_equal(node->GetVolatileState()->CommitIndex, index);
     cluster.AssertCommittedPrefix();
 }
+
+void test_follower_restarted_without_storage_catches_up(void**) {
+    TCluster cluster(3);
+    cluster.Elect(1);
+    for (int i = 0; i < 3; ++i) cluster.Nodes[0]->Append(NewHoldedMessage<TLogEntry>());
+    cluster.Replicate(1);
+    const auto last = cluster.Nodes[0]->GetState()->LastLogIndex;
+    const auto committed = cluster.Nodes[0]->GetVolatileState()->CommitIndex;
+    assert_int_equal(cluster.Nodes[2]->GetState()->LastLogIndex, last);
+    // Node 3 restarts with an empty in-memory log while node 1 stays leader.
+    TNodeDict peers;
+    for (uint32_t dst : {1u, 2u}) {
+        peers[dst] = std::make_shared<TEndpoint>([&cluster](auto m) { cluster.Packets.push_back(std::move(m)); });
+    }
+    cluster.Nodes[2] = std::make_shared<TRaft>(std::make_shared<TState>(), 3, peers);
+    cluster.Replicate(1);
+    assert_int_equal(cluster.Nodes[0]->CurrentStateName(), EState::LEADER);
+    assert_int_equal(cluster.Nodes[2]->GetState()->LastLogIndex, last);
+    assert_int_equal(cluster.Nodes[0]->GetVolatileState()->MatchIndex.at(3), last);
+    assert_true(cluster.Nodes[0]->GetVolatileState()->CommitIndex >= committed);
+    cluster.AssertCommittedPrefix();
+}
 }
 
 int main() {
@@ -708,6 +730,7 @@ int main() {
         cmocka_unit_test(test_loss_reorder_duplicate_and_recovery),
         cmocka_unit_test(test_partition_leader_replacement_and_heal),
         cmocka_unit_test(test_even_cluster_partition_requires_majority),
+        cmocka_unit_test(test_follower_restarted_without_storage_catches_up),
         cmocka_unit_test(test_strong_reads_require_fresh_majority_in_all_cluster_sizes),
         cmocka_unit_test(test_stale_leader_with_one_follower_cannot_serve_strong_read),
         cmocka_unit_test(test_new_read_cannot_reuse_previous_read_quorum),
