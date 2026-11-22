@@ -269,3 +269,8 @@ TMessageHolder<T> NewHoldedMessage(TMessageEx h, T t) {
     memcpy((char*)m.Mes + sizeof(TMessageEx), (char*)&t + sizeof(TMessageEx), sizeof(T) - sizeof(TMessageEx));
     return m;
 }
+
+// A message that fails ValidateMessageTree cannot be sent. A command response
+// becomes an error reply with the same cookie, so the client does not wait
+// forever; anything else is dropped (empty holder).
+TMessageHolder<TMessage> MakeSendable(TMessageHolder<TMessage> message, const TMessageLimits& limits = {});
