@@ -218,10 +218,16 @@ NNet::TVoidTask TRaftServer<TSocket>::Idle() {
     auto dt = std::chrono::milliseconds(2000);
     auto sleep = std::chrono::milliseconds(100);
     while (true) {
-        Raft->ProcessTimeout(TimeSource->Now());
-        RequestProcessor->CheckStateChange();
-        RequestProcessor->ProcessCommitted();
-        RequestProcessor->ProcessWaiting();
+        try {
+            Raft->ProcessTimeout(TimeSource->Now());
+            RequestProcessor->CheckStateChange();
+            RequestProcessor->ProcessCommitted();
+            RequestProcessor->ProcessWaiting();
+        } catch (const std::exception& ex) {
+            // An escaping exception would end this coroutine and the timer with it.
+            // Log and retry on the next tick, e.g. an SQL write that found the database busy.
+            std::cerr << "Error in timer loop: " << ex.what() << "\n";
+        }
         DrainNodes();
         auto t1 = TimeSource->Now();
         if (t1 > t0 + dt) {
