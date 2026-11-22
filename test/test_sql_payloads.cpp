@@ -274,6 +274,18 @@ void test_sql_busy_write_does_not_consume_entry(void**) {
         assert_int_equal(sql.LastAppliedIndex, 2);
     }
 }
+void test_sql_write_error_classification(void**) {
+    // SQLITE_TOOBIG at the default 10^9-byte limit needs about 1 GB, and TSql keeps its
+    // connection private, so the classification is checked directly.
+    for (int code : {SQLITE_ERROR, SQLITE_AUTH, SQLITE_CONSTRAINT, SQLITE_CONSTRAINT_UNIQUE,
+                     SQLITE_MISMATCH, SQLITE_TOOBIG, SQLITE_RANGE}) {
+        assert_true(IsDeterministicSqlError(code));
+    }
+    for (int code : {SQLITE_BUSY, SQLITE_LOCKED, SQLITE_IOERR, SQLITE_IOERR_WRITE, SQLITE_NOMEM,
+                     SQLITE_FULL, SQLITE_INTERRUPT, SQLITE_READONLY, SQLITE_CORRUPT}) {
+        assert_false(IsDeterministicSqlError(code));
+    }
+}
 void test_sql_write_rejects_embedded_nul_before_admission(void**) {
     TSql sql(":memory:", 1);
     const std::string text = std::string("CREATE TABLE t (x);") + '\0' + "COMMIT";
@@ -310,6 +322,7 @@ int main() {
         cmocka_unit_test(test_sql_automatic_rollback_is_consumed_without_partial_data),
         cmocka_unit_test(test_sql_metadata_failure_rolls_back_data_and_does_not_advance),
         cmocka_unit_test(test_sql_progress_restores_full_uint64_range),
+        cmocka_unit_test(test_sql_write_error_classification),
         cmocka_unit_test(test_sql_invalid_progress_fails_closed),
         cmocka_unit_test(test_sql_busy_write_does_not_consume_entry),
         cmocka_unit_test(test_sql_write_rejects_embedded_nul_before_admission),
