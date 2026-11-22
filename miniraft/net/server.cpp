@@ -45,15 +45,6 @@ NNet::TVoidSuspendedTask TNode<TSocket>::DoDrain() {
 }
 
 template<typename TSocket>
-void TNode<TSocket>::Disconnect() {
-    Connected = false;
-    if (Drainer) { Drainer.destroy(); Drainer = {}; }
-    if (Connector) { Connector.destroy(); Connector = {}; }
-    std::destroy_at(&Socket);
-    std::construct_at(&Socket);
-}
-
-template<typename TSocket>
 void TNode<TSocket>::Connect() {
     if (Address && (!Connector || Connector.done())) {
         if (Connector && Connector.done()) {
@@ -141,7 +132,6 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
     // read forwarded replies
     while (true) {
         bool error = false;
-        const bool wasConnected = node->IsConnected();
         try {
             if (!node->IsConnected()) {
                 throw std::runtime_error("Not connected");
@@ -160,7 +150,6 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
         }
         if (error) {
             RequestProcessor->OnPeerDisconnected(node);
-            if (wasConnected) node->Disconnect();
             DrainNodes();
             co_await Poller.Sleep(std::chrono::milliseconds(1000));
         }

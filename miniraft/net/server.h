@@ -121,8 +121,6 @@ public:
 
     void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
-    // Called after a failed outbound read, once its reader has unwound.
-    void Disconnect();
     bool IsConnected() { return Connected; }
     TSocket& Sock() {
         return Socket;
