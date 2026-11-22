@@ -14,7 +14,6 @@ struct TDiskState : IState {
     void Commit() override;
 
 private:
-    bool Recovering = true;
     [[noreturn]] void Fail(const char* message) const;
     std::fstream Open(const std::string& name, bool create);
     TMessageHolder<TMessage> Read() const;
