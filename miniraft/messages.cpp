@@ -43,3 +43,17 @@ void ValidateMessageTree(const TMessageHolder<TMessage>& message, const TMessage
         throw TMessageError("Invalid AppendEntries entry count");
     for (uint32_t i = 0; i < count; ++i) validate(message.Payload[i], true);
 }
+
+TMessageHolder<TMessage> MakeSendable(TMessageHolder<TMessage> message, const TMessageLimits& limits) {
+    try {
+        ValidateMessageTree(message, limits);
+        return message;
+    } catch (const TMessageError&) {
+    }
+    auto response = message.Maybe<TCommandResponse>();
+    if (!response) {
+        return {};
+    }
+    auto rejected = response.Cast();
+    return NewHoldedMessage(TCommandResponse{.Index = rejected->Index, .Cookie = rejected->Cookie, .ErrorCode = 2});
+}

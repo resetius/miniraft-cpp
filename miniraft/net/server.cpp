@@ -11,7 +11,10 @@
 
 template<typename TSocket>
 void TNode<TSocket>::Send(TMessageHolder<TMessage> message) {
-    Messages.emplace_back(std::move(message));
+    // Check here: a write error in DoDrain would drop the rest of the batch.
+    if (auto sendable = MakeSendable(std::move(message))) {
+        Messages.emplace_back(std::move(sendable));
+    }
 }
 
 template<typename TSocket>

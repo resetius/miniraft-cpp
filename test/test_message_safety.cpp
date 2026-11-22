@@ -83,6 +83,20 @@ void test_invalid_proposal_does_not_mutate_persistent_state(void**) {
         assert_int_equal(entry->Term, 99);
     }
 }
+void test_unsendable_reply_becomes_error_reply(void**) {
+    auto oversized = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + TMessageLimits{}.MaxFrameBytes);
+    oversized->Index = 7;
+    oversized->Cookie = 42;
+    auto reply = MakeSendable(oversized).Cast<TCommandResponse>();
+    assert_int_equal(reply->Len, sizeof(TCommandResponse));
+    assert_int_equal(reply->Index, 7);
+    assert_int_equal(reply->Cookie, 42);
+    assert_int_equal(reply->ErrorCode, 2);
+    auto valid = NewHoldedMessage<TCommandResponse>();
+    assert_true(MakeSendable(valid).Mes == valid.Mes);
+    auto request = NewHoldedMessage<TCommandRequest>(sizeof(TCommandRequest) + TMessageLimits{}.MaxFrameBytes);
+    assert_false(MakeSendable(request));
+}
 }
 int main() {
     const CMUnitTest tests[] = {
@@ -90,6 +104,7 @@ int main() {
         cmocka_unit_test(test_short_wrong_type_and_empty_casts_are_rejected),
         cmocka_unit_test(test_raft_batches_respect_budget_and_continue_replication),
         cmocka_unit_test(test_invalid_proposal_does_not_mutate_persistent_state),
+        cmocka_unit_test(test_unsendable_reply_becomes_error_reply),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
