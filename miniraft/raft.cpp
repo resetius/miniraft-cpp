@@ -813,9 +813,7 @@ void TRequestProcessor::ProcessCommitted() {
         if (entry->Flags == TLogEntry::EStub) {
             continue;
         }
-        TMessageHolder<TMessage> reply;
-        try { reply = Rsm->Write(entry, i); }
-        catch (...) { std::terminate(); }
+        auto reply = Rsm->Write(entry, i);
         auto pending = PendingWriteTerms.find(i);
         if (pending != PendingWriteTerms.end() && pending->second == entry->Term) {
             WriteAnswers.emplace(i, TAnswer {

@@ -1,9 +1,5 @@
 #include "../examples/kv.h"
 #include "../examples/kv_messages.h"
-#ifndef _WIN32
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
@@ -136,28 +132,18 @@ void test_read_application_error_does_not_stop_completion(void**) {
     assert_int_equal(endpoint->Cookies[1], 11);
     assert_int_equal(raft->CurrentStateName(), EState::LEADER);
 }
-#ifndef _WIN32
-void test_invalid_committed_application_is_fatal(void**) {
-    const auto child = fork();
-    assert_true(child >= 0);
-    if (child == 0) {
-        std::set_terminate([] { _exit(73); });
-        auto state = std::make_shared<TState>();
-        auto entry = NewHoldedMessage<TKvLogEntry>();
-        entry->KeySize = UINT16_MAX;
-        state->Append(entry);
-        auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
-        const_cast<TVolatileState*>(raft->GetVolatileState())->CommitIndex = 1;
-        TRequestProcessor processor(raft, std::make_shared<TKv>(), {});
-        try { processor.ProcessCommitted(); } catch (...) { _exit(74); }
-        _exit(75);
-    }
-    int status = 0;
-    assert_int_equal(waitpid(child, &status, 0), child);
-    assert_true(WIFEXITED(status));
-    assert_int_equal(WEXITSTATUS(status), 73);
+void test_invalid_committed_application_is_reported(void**) {
+    auto state = std::make_shared<TState>();
+    auto entry = NewHoldedMessage<TKvLogEntry>();
+    entry->KeySize = UINT16_MAX;
+    state->Append(entry);
+    auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+    const_cast<TVolatileState*>(raft->GetVolatileState())->CommitIndex = 1;
+    auto kv = std::make_shared<TKv>();
+    TRequestProcessor processor(raft, kv, {});
+    Reject([&] { processor.ProcessCommitted(); });
+    assert_int_equal(kv->LastAppliedIndex, 0);
 }
-#endif
 }
 int main() {
     const CMUnitTest tests[] = {
@@ -170,9 +156,7 @@ int main() {
         cmocka_unit_test(test_invalid_request_is_rejected_before_queue_or_forward),
         cmocka_unit_test(test_oversized_factory_argument_is_not_truncated),
         cmocka_unit_test(test_read_application_error_does_not_stop_completion),
-#ifndef _WIN32
-        cmocka_unit_test(test_invalid_committed_application_is_fatal),
-#endif
+        cmocka_unit_test(test_invalid_committed_application_is_reported),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
