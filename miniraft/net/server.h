@@ -107,7 +107,9 @@ template<typename TSocket>
 class TNode: public INode {
 public:
     // A reader or writer holds the connection while it uses the socket, so the
-    // socket is not closed while the poller can still resume them.
+    // socket is not closed while the poller can still resume them. Retiring it
+    // wakes them through TSocket::Shutdown() or shutdown() on TSocket::Fd(); a
+    // transport with neither (coroio's TSslSocket) waits for the peer to close.
     struct TConnection {
         explicit TConnection(TSocket socket)
             : Socket(std::move(socket))
@@ -129,9 +131,13 @@ public:
     bool IsConnected() const;
     // Null while disconnected.
     std::shared_ptr<TConnection> GetConnection() const;
-    // Called by a reader whose read failed. A stale connection is left alone.
+    // Called by a reader after OnPeerDisconnected, with the connection that
+    // failed or null: drops the queued messages and retires the connection if
+    // it is still the current one.
     void Disconnect(const std::shared_ptr<TConnection>& connection);
-    // Retires the connections and drops the queued messages.
+    // Retires the connections and drops the queued messages. With the pinned
+    // coroio on kqueue, Close(), Disconnect() or ~TNode resume a reader and a
+    // writer waiting on one socket twice each; TRaftServer never does that.
     void Close();
 
 private:

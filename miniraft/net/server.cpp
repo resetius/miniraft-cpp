@@ -91,9 +91,8 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
         }
         if (error) {
             RequestProcessor->OnPeerDisconnected(node);
-            if (connection) {
-                node->Disconnect(connection);
-            }
+            // Forwarded requests have just failed: none of them may go out later.
+            node->Disconnect(connection);
             DrainNodes();
             co_await Poller.Sleep(std::chrono::milliseconds(1000));
         }

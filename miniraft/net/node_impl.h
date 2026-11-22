@@ -99,6 +99,10 @@ struct TNode<TSocket>::TState: std::enable_shared_from_this<TState> {
         }
         if (state->Attempt == attempt) {
             state->Attempt = nullptr;
+            if (attempt->Closed) {
+                // The peer is unreachable; Raft resends what it still needs.
+                state->Messages.clear();
+            }
         }
         if (attempt->Closed) {
             co_return;
@@ -113,12 +117,13 @@ struct TNode<TSocket>::TState: std::enable_shared_from_this<TState> {
             auto message = std::move(state->Messages.front());
             state->Messages.pop_front();
             try {
-                co_await TMessageWriter(connection->Socket).Write(message);
+                co_await TMessageWriter(connection->Socket).Write(std::move(message));
             } catch (const std::exception& ex) {
                 std::cout << "Error on write: " << state->Name << " " << ex.what() << "\n";
-                // Not delivered: it goes first on the next connection.
-                if (!state->Closed) {
-                    state->Messages.push_front(std::move(message));
+                // The cut message is dropped with the queue; Raft resends what
+                // it needs. A stale connection leaves the queue alone.
+                if (state->Connection == connection) {
+                    state->Messages.clear();
                 }
                 state->Retire(connection);
             }
@@ -160,8 +165,7 @@ void TNode<TSocket>::Send(TMessageHolder<TMessage> message) {
     if (State->Closed) {
         return;
     }
-    // Check here: DoDrain resends a message whose write fails, so it must
-    // only meet messages that can be sent.
+    // Check here: a write error in DoDrain drops the whole queue.
     if (auto sendable = MakeSendable(std::move(message))) {
         State->Messages.emplace_back(std::move(sendable));
     }
@@ -188,6 +192,7 @@ std::shared_ptr<typename TNode<TSocket>::TConnection> TNode<TSocket>::GetConnect
 
 template<typename TSocket>
 void TNode<TSocket>::Disconnect(const std::shared_ptr<TConnection>& connection) {
+    State->Messages.clear();
     if (connection) {
         State->Retire(connection);
     }
