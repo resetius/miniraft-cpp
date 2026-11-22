@@ -17,8 +17,9 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
             "client", std::move(socket), TimeSource
         );
         Nodes.insert(client);
+        auto connection = client->GetConnection();
         while (true) {
-            auto mes = co_await TMessageReader(client->Sock()).Read();
+            auto mes = co_await TMessageReader(connection->Socket).Read();
             // client request
             if (auto maybeCommandRequest = mes.template Maybe<TCommandRequest>()) {
                 RequestProcessor->OnCommandRequest(std::move(maybeCommandRequest.Cast()), client);
@@ -35,6 +36,10 @@ NNet::TVoidTask TRaftServer<TSocket>::InboundConnection(TSocket socket) {
         }
     } catch (const std::exception & ex) {
         std::cerr << "Exception: " << ex.what() << "\n";
+    }
+    if (client) {
+        // Wakes a reply write still suspended on the socket.
+        client->Close();
     }
     Nodes.erase(client);
     RequestProcessor->CleanUp(client);
@@ -66,13 +71,13 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
     // read forwarded replies
     while (true) {
         bool error = false;
-        const bool wasConnected = node->IsConnected();
-        const auto generation = node->GetConnectionGeneration();
+        // Held until the reader is done with it: a reconnect cannot close it.
+        auto connection = node->GetConnection();
         try {
-            if (!node->IsConnected()) {
+            if (!connection) {
                 throw std::runtime_error("Not connected");
             }
-            auto mes = co_await TMessageReader(node->Sock()).Read();
+            auto mes = co_await TMessageReader(connection->Socket).Read();
             if (auto maybeCommandResponse = mes.template Maybe<TCommandResponse>()) {
                 RequestProcessor->OnCommandResponse(std::move(maybeCommandResponse.Cast()), node);
                 DrainNodes();
@@ -86,7 +91,9 @@ NNet::TVoidTask TRaftServer<TSocket>::OutboundServe(std::shared_ptr<TNode<TSocke
         }
         if (error) {
             RequestProcessor->OnPeerDisconnected(node);
-            if (wasConnected) node->Disconnect(generation);
+            if (connection) {
+                node->Disconnect(connection);
+            }
             DrainNodes();
             co_await Poller.Sleep(std::chrono::milliseconds(1000));
         }

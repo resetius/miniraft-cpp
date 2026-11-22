@@ -6,6 +6,7 @@
 #include <string_view>
 #include <charconv>
 #include <optional>
+#include <deque>
 
 #include <coroio/all.hpp>
 
@@ -105,50 +106,37 @@ struct THost {
 template<typename TSocket>
 class TNode: public INode {
 public:
-    TNode(const std::function<TSocket(const NNet::TAddress&)> factory, const std::string& name, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts)
-        : Name(name)
-        , Address(address)
-        , TimeSource(ts)
-        , SocketFactory(factory)
-    { }
+    // A reader or writer holds the connection while it uses the socket, so the
+    // socket is not closed while the poller can still resume them.
+    struct TConnection {
+        explicit TConnection(TSocket socket)
+            : Socket(std::move(socket))
+        { }
 
-    TNode(const std::string& name, TSocket socket, const std::shared_ptr<ITimeSource>& ts)
-        : Name(name)
-        , Socket(std::move(socket))
-        , Connected(true)
-        , TimeSource(ts)
-    { }
+        TSocket Socket;
+        bool Closed = false;
+        bool Draining = false;
+    };
+
+    TNode(const std::function<TSocket(const NNet::TAddress&)> factory, const std::string& name, NNet::TAddress address, const std::shared_ptr<ITimeSource>& ts);
+    TNode(const std::string& name, TSocket socket, const std::shared_ptr<ITimeSource>& ts);
+    TNode(const TNode&) = delete;
+    TNode& operator=(const TNode&) = delete;
+    ~TNode() override;
 
     void Send(TMessageHolder<TMessage> message) override;
     void Drain() override;
-    // Called after a failed outbound read, once its reader has unwound. A stale
-    // reader cannot disconnect a newer connection or its pending connector.
-    void Disconnect() { Disconnect(ConnectionGeneration); }
-    void Disconnect(uint64_t generation);
-    uint64_t GetConnectionGeneration() const { return ConnectionGeneration; }
-    bool IsConnected() { return Connected; }
-    TSocket& Sock() {
-        return Socket;
-    }
+    bool IsConnected() const;
+    // Null while disconnected.
+    std::shared_ptr<TConnection> GetConnection() const;
+    // Called by a reader whose read failed. A stale connection is left alone.
+    void Disconnect(const std::shared_ptr<TConnection>& connection);
+    // Retires the connections and drops the queued messages.
+    void Close();
 
 private:
-    void Connect();
-
-    NNet::TVoidSuspendedTask DoDrain();
-    NNet::TVoidSuspendedTask DoConnect();
-
-    std::string Name;
-    std::optional<NNet::TAddress> Address;
-    std::shared_ptr<ITimeSource> TimeSource;
-    std::function<TSocket(const NNet::TAddress&)> SocketFactory;
-    TSocket Socket;
-    bool Connected = false;
-    uint64_t ConnectionGeneration = 0;
-
-    std::coroutine_handle<> Drainer;
-    std::coroutine_handle<> Connector;
-
-    std::vector<TMessageHolder<TMessage>> Messages;
+    struct TState;
+    std::shared_ptr<TState> State;
 };
 
 template<typename TSocket>
