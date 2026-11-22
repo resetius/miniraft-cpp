@@ -205,12 +205,8 @@ TMessageHolder<TMessage> TSql::Write(TMessageHolder<TLogEntry> message, uint64_t
     }
     if (rc != SQLITE_OK) {
         if (!sqlite3_get_autocommit(Db)) RequireExecute("ROLLBACK");
-        switch (rc & 0xff) {
-        case SQLITE_ERROR: case SQLITE_AUTH: case SQLITE_CONSTRAINT: case SQLITE_MISMATCH:
-            break; // SQL/application rejection: consume this entry without its effects.
-        default:
-            throw std::runtime_error("SQL application execution failed: " + error);
-        }
+        // A deterministic rejection consumes this entry without its effects; anything else is retried.
+        if (!IsDeterministicSqlError(rc)) throw std::runtime_error("SQL application execution failed: " + error);
         // Some errors (including OR ROLLBACK) already rolled back the transaction.
         // Start a new one to record the rejected entry; never ignore failure here.
         RequireExecute("BEGIN IMMEDIATE");
@@ -243,3 +239,16 @@ TMessageHolder<TLogEntry> TSql::Prepare(TMessageHolder<TCommandRequest> command)
     return entry;
 }
 
+bool IsDeterministicSqlError(int code) {
+    // These depend only on the statement, the data and the SQLite limits, which are
+    // the same on every replica, so a retry would fail again everywhere (SQLITE_TOOBIG
+    // included). Busy or locked databases, I/O, disk space and memory (SQLITE_NOMEM)
+    // depend on the node and may succeed later.
+    switch (code & 0xff) {
+    case SQLITE_ERROR: case SQLITE_AUTH: case SQLITE_CONSTRAINT: case SQLITE_MISMATCH:
+    case SQLITE_TOOBIG: case SQLITE_RANGE:
+        return true;
+    default:
+        return false;
+    }
+}

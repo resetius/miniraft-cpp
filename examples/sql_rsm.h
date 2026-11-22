@@ -63,3 +63,6 @@ private:
     sqlite3* Db = nullptr;
 };
 
+// Whether a failed SQL write fails the same way on every replica.
+bool IsDeterministicSqlError(int code);
+
