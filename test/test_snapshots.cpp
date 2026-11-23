@@ -191,11 +191,11 @@ struct TCluster {
             Nodes.at(ex->Dst - 1).Raft->Process(Now, m);
         }
     }
-    // Only leaders run their timers; elections happen in Elect.
-    void Step(std::chrono::milliseconds dt = std::chrono::milliseconds(500)) {
+    // Only leaders run their timers unless all = true; elections happen in Elect.
+    void Step(std::chrono::milliseconds dt = std::chrono::milliseconds(500), bool all = false) {
         Now += dt;
         for (auto& node : Nodes) {
-            if (node.Raft->CurrentStateName() == EState::LEADER) node.Raft->ProcessTimeout(Now);
+            if (all || node.Raft->CurrentStateName() == EState::LEADER) node.Raft->ProcessTimeout(Now);
         }
         Drain();
         for (auto& node : Nodes) node.Processor->ProcessCommitted();
@@ -548,9 +548,10 @@ void test_refused_image_is_not_sent_again(void**) {
     const auto sent = chunks;
     const auto term = cluster[1].State->CurrentTerm;
     assert_int_equal(sent, 3);
-    // The follower only gets heartbeats: no new attempts, and its election never comes.
+    // The follower only gets heartbeats: no new attempts, and with every timer running
+    // nobody starts an election.
     cluster.Write(1, "4");
-    cluster.Replicate(100);
+    for (int i = 0; i < 100; ++i) cluster.Step(std::chrono::milliseconds(500), true);
     assert_int_equal(chunks, sent);
     assert_true(cluster[3].Raft->GetVolatileState()->ElectionDue > cluster.Now);
     assert_int_equal(cluster[1].Raft->CurrentStateName(), EState::LEADER);
