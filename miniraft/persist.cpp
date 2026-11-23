@@ -344,6 +344,8 @@ void TDiskState::InstallSnapshot(TMessageHolder<TInstallSnapshotRequest> snapsho
     SnapshotIndex = index;
     SnapshotTerm = term;
     Commit();
+    // An fsync of the new files and the metadata is desirable here: without it a power
+    // loss after the removal below can lose both generations.
     for (const std::string kind : {"entries", "index", "snapshot"}) {
         std::error_code ignored;
         std::filesystem::remove(Path(kind, previous), ignored);
