@@ -1,6 +1,8 @@
 #include <miniraft/raft.h>
+#include <miniraft/persist.h>
 #include <chrono>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <set>
 #include <stdarg.h>
@@ -11,6 +13,8 @@ extern "C" {
 }
 
 namespace {
+namespace fs = std::filesystem;
+
 struct TEndpoint : INode {
     std::function<void(TMessageHolder<TMessage>)> Deliver;
     explicit TEndpoint(std::function<void(TMessageHolder<TMessage>)> f) : Deliver(std::move(f)) {}
@@ -84,6 +88,20 @@ struct TPlainRsm : IRsm {
         LastAppliedIndex = index;
         return {};
     }
+};
+
+struct TFiles {
+    fs::path Directory;
+    std::string Name;
+    TFiles() {
+        static unsigned counter = 0;
+        Directory = fs::temp_directory_path() /
+            ("miniraft-snapshots-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+             "-" + std::to_string(counter++));
+        assert_true(fs::create_directory(Directory));
+        Name = (Directory / "raft").string();
+    }
+    ~TFiles() { std::error_code ignored; fs::remove_all(Directory, ignored); }
 };
 
 // Virtual time and a manually scheduled network, one application per node.
@@ -256,6 +274,50 @@ void test_append_entries_below_the_snapshot_match_its_prefix(void**) {
     assert_int_equal(raft.GetVolatileState()->CommitIndex, snapshot + 1);
 }
 
+void test_restart_restores_the_application_from_snapshot_and_tail(void**) {
+    TFiles files;
+    TCluster cluster(1);
+    cluster.Start(1, std::make_shared<TDiskState>(files.Name, 1));
+    cluster.Elect(1);
+    for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
+    cluster.Replicate(2);
+    cluster.Compact(1);
+    const auto snapshot = cluster[1].State->SnapshotIndex;
+    assert_true(snapshot >= 4);
+    // The prefix is gone from disk: only files of the snapshot remain.
+    assert_false(fs::exists(files.Name + ".entries.1"));
+    assert_false(fs::exists(files.Name + ".index.1"));
+    assert_true(fs::exists(files.Name + ".snapshot.1." + std::to_string(snapshot)));
+    cluster.Write(1, "4");
+    cluster.Replicate(2);
+    auto last = cluster[1].State->LastLogIndex;
+
+    // A volatile application rebuilds from the image and the retained tail.
+    for (int restart = 0; restart < 2; ++restart) {
+        cluster.Start(1, std::make_shared<TDiskState>(files.Name, 1));
+        auto& node = cluster[1];
+        assert_int_equal(node.State->SnapshotIndex, snapshot);
+        assert_int_equal(node.State->LastLogIndex, last);
+        assert_int_equal(node.Raft->GetVolatileState()->CommitIndex, snapshot);
+        node.Processor->ProcessCommitted();
+        assert_int_equal(node.Rsm->Restores, 1);
+        assert_int_equal(node.Rsm->LastAppliedIndex, snapshot);
+        assert_true(node.Rsm->Values == Values({1, 2, 3}));
+        cluster.Elect(1);
+        cluster.Replicate(2);
+        assert_true(node.Rsm->Values == Values({1, 2, 3, 4}));
+        last = node.State->LastLogIndex;
+    }
+    // A durable application that is ahead of the snapshot keeps its progress.
+    auto durable = std::make_shared<TListRsm>();
+    durable->Values = Values({1, 2, 3, 4});
+    durable->LastAppliedIndex = cluster[1].Rsm->LastAppliedIndex;
+    cluster.Start(1, std::make_shared<TDiskState>(files.Name, 1), durable);
+    cluster[1].Processor->ProcessCommitted();
+    assert_int_equal(durable->Restores, 0);
+    assert_true(durable->Values == Values({1, 2, 3, 4}));
+}
+
 void test_applications_without_snapshots_work_as_before(void**) {
     TCluster cluster(3);
     std::vector<std::shared_ptr<TPlainRsm>> applications;
@@ -312,6 +374,7 @@ int main() {
         cmocka_unit_test(test_compaction_drops_the_applied_prefix),
         cmocka_unit_test(test_compaction_needs_a_committed_image),
         cmocka_unit_test(test_append_entries_below_the_snapshot_match_its_prefix),
+        cmocka_unit_test(test_restart_restores_the_application_from_snapshot_and_tail),
         cmocka_unit_test(test_applications_without_snapshots_work_as_before),
         cmocka_unit_test(test_storage_without_snapshots_rejects_compaction),
     };
