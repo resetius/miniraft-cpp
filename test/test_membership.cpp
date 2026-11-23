@@ -744,6 +744,37 @@ TEST(Membership, snapshot_holds_the_configuration_at_its_index) {
     ASSERT_EQ(TRaft(old, 1, {}).GetConfiguration(), (TConfiguration{.Voters = {1}}));
 }
 
+TEST(Membership, truncation_falls_back_to_the_configuration_in_the_snapshot) {
+    TCluster cluster(6, TConfiguration{.Voters = {1, 2, 3, 4, 5}});
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    ASSERT_NE(cluster[1].AddLearner(6), 0);
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    // Node 3 keeps the configuration with the learner only in its snapshot.
+    ASSERT_NO_FATAL_FAILURE(cluster.Compact(3));
+    const auto snapshot = cluster[3].GetState()->SnapshotIndex;
+    const TConfiguration learner{.Index = snapshot, .Voters = {1, 2, 3, 4, 5}, .Learners = {6}};
+    ASSERT_EQ(cluster[3].GetConfiguration(), learner);
+
+    // Only node 3 gets the next change, and the leader does not hear back.
+    cluster.Drop = [](const auto& m) { return (m->Src == 1 && m->Dst != 3) || (m->Src == 3 && m->Dst == 1); };
+    const auto removed = cluster[1].RemoveServer(6);
+    ASSERT_NE(removed, 0);
+    ASSERT_NO_FATAL_FAILURE(cluster.Step());
+    ASSERT_EQ(cluster[3].GetConfiguration().Index, removed);
+
+    // Node 2 wins with nodes 4 and 5 and overwrites the entry on node 3.
+    cluster.Drop = [](const auto& m) { return m->Src == 1 || m->Dst == 1 || m->Src == 3 || m->Dst == 3; };
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
+    cluster.Drop = [](const auto& m) { return m->Src == 1 || m->Dst == 1; };
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] {
+        return cluster[3].GetLastIndex() == cluster[2].GetLastIndex() && cluster[3].GetState()->LastLogTerm == cluster.Term(2);
+    }));
+    ASSERT_EQ(cluster[3].GetConfiguration(), learner);
+    cluster.Restart(3);
+    ASSERT_EQ(cluster[3].GetConfiguration(), learner);
+}
+
 TEST(Membership, joiner_does_not_compact_before_it_has_a_configuration) {
     TCluster cluster(4, TConfiguration{.Voters = {1, 2, 3}});
     ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
