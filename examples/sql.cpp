@@ -1,5 +1,7 @@
 #include <sqlite3.h>
+#include <charconv>
 #include <iostream>
+#include <string_view>
 
 #include <miniraft/raft.h>
 #include <miniraft/persist.h>
@@ -67,8 +69,28 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket) {
     co_return;
 }
 
+// The embedder decides when to compact: here after every `every` applied entries.
+template<typename TPoller>
+NNet::TVoidTask Compact(TPoller& poller, std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, uint64_t every) {
+    uint64_t lastTried = 0;
+    while (true) {
+        co_await poller.Sleep(std::chrono::milliseconds(1000));
+        // Compact drops an image without new progress; do not re-serialize it every tick.
+        if (rsm->LastAppliedIndex < raft->GetState()->SnapshotIndex + every || rsm->LastAppliedIndex == lastTried) {
+            continue;
+        }
+        lastTried = rsm->LastAppliedIndex;
+        try {
+            raft->Compact(rsm->Snapshot());
+        } catch (const std::exception& ex) {
+            std::cerr << "Compaction failed: " << ex.what() << "\n";
+        }
+    }
+    co_return;
+}
+
 void usage(const char* prog) {
-    std::cerr << prog << "--client|--server --id myid --node ip:port:id [--node ip:port:id ...]" << "\n";
+    std::cerr << prog << "--client|--server --id myid --node ip:port:id [--node ip:port:id ...] [--compact entries]" << "\n";
     exit(0);
 }
 
@@ -80,6 +102,7 @@ int main(int argc, char** argv)
     TNodeDict nodes;
     uint32_t id = 0;
     bool server = false;
+    uint64_t compact = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--server")) {
             server = true;
@@ -88,6 +111,12 @@ int main(int argc, char** argv)
             hosts.push_back(THost{argv[++i]});
         } else if (!strcmp(argv[i], "--id") && i < argc - 1) {
             id = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--compact") && i < argc - 1) {
+            const std::string_view value(argv[++i]);
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), compact);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+                usage(argv[0]);
+            }
         } else if (!strcmp(argv[i], "--help")) {
             usage(argv[0]);
         }
@@ -125,6 +154,9 @@ int main(int argc, char** argv)
         socket.Listen();
         TRaftServer server(loop.Poller(), std::move(socket), raft, rsm, nodes, timeSource);
         server.Serve();
+        if (compact) {
+            Compact(loop.Poller(), raft, rsm, compact);
+        }
         loop.Loop();
     } else {
         NNet::TAddress addr{hosts[0].Address, hosts[0].Port};

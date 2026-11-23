@@ -37,12 +37,11 @@ public:
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     // convert request to log message
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
-    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override {
-        throw std::runtime_error("Not implemented");
-    }
-    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override {
-        throw std::runtime_error("Not implemented");
-    }
+    // The database file (sqlite3_serialize) in records of SnapshotRecordBytes.
+    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override;
+    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override;
+
+    static constexpr size_t SnapshotRecordBytes = 1024 * 1024;
 
 private:
     int Execute(const std::string& q);
