@@ -218,6 +218,28 @@ void test_fragmented_roundtrip_keeps_consecutive_frame_boundaries(void**) {
     assert_int_equal(next->Len, sizeof(TCommandRequest));
     assert_int_equal(stream.Position, stream.Bytes.size());
 }
+void test_install_snapshot_carries_records_and_only_records(void**) {
+    auto root = NewHoldedMessage(TInstallSnapshotRequest{
+        .LastIncludedIndex = 5, .LastIncludedTerm = 2, .Offset = 7, .Nentries = 2, .Done = 1});
+    root.InitPayload(2);
+    root.Payload[0] = NewHoldedMessage<TLogEntry>();
+    root.Payload[1] = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + 3);
+    memcpy(root.Payload[1].Cast<TLogEntry>()->Data, "abc", 3);
+    TStream stream;
+    auto task = TMessageWriter(stream).Write(root);
+    task.await_resume();
+    stream.Bytes = stream.Output;
+    auto received = Read(stream).Cast<TInstallSnapshotRequest>();
+    assert_int_equal(received->LastIncludedIndex, 5);
+    assert_int_equal(received->Offset, 7);
+    assert_int_equal(received->Done, 1);
+    assert_int_equal(received.PayloadSize, 2);
+    assert_memory_equal(received.Payload[1].Cast<TLogEntry>()->Data, "abc", 3);
+    TStream invalid;
+    invalid.Add(NewHoldedMessage(TInstallSnapshotRequest{.Nentries = 1}));
+    invalid.Add(NewHoldedMessage<TCommandRequest>());
+    assert_true(Rejected(invalid));
+}
 }
 
 int main() {
@@ -236,6 +258,7 @@ int main() {
         cmocka_unit_test(test_failed_reader_cannot_resume_at_another_frame),
         cmocka_unit_test(test_writer_validates_entire_batch_before_first_byte),
         cmocka_unit_test(test_fragmented_roundtrip_keeps_consecutive_frame_boundaries),
+        cmocka_unit_test(test_install_snapshot_carries_records_and_only_records),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
