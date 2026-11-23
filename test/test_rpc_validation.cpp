@@ -22,6 +22,12 @@ struct TFixture {
     }
     TMessageHolder<TAppendEntriesRequest> Send() {
         Raft.Become(EState::LEADER);
+        // Node 3 refuses every entry but answers, so the leader keeps a majority.
+        if (!Other->Sent.empty()) {
+            Raft.Process(Now, NewHoldedMessage(
+                TMessageEx{.Src = 3, .Dst = 1, .Term = 3, .Seqno = Other->Sent.back().Cast<TMessageEx>()->Seqno},
+                TAppendEntriesResponse{.MatchIndex = 0, .Success = 0}));
+        }
         Raft.ProcessTimeout(Now);
         return Peer->Sent.back().Cast<TAppendEntriesRequest>();
     }

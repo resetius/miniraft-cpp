@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <queue>
 #include <deque>
 #include <string>
@@ -69,6 +70,11 @@ struct TVolatileState {
     std::unordered_map<uint32_t, int> BatchSize;
     std::unordered_map<uint32_t, int> BackOff;
     ITimeSource::Time ElectionDue;
+    // Last message from the leader of the current term.
+    ITimeSource::Time LeaderSeen = ITimeSource::Time::min();
+    // Leader: peers that replied since the last check of the majority, and the next check.
+    std::unordered_set<uint32_t> Replied;
+    std::optional<ITimeSource::Time> QuorumCheckDue;
 
     std::vector<uint64_t> Indices;
 
@@ -174,6 +180,7 @@ private:
     void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
     void OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotRequest> message);
     void OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message);
+    void StepDown(ITimeSource::Time now);
 
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
