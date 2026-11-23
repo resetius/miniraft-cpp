@@ -149,7 +149,10 @@ void TRaftServer<TSocket>::DebugPrint() {
             << "\n";
     }
     PersistentFields = state;
-    VolatileFields = volatileState;
+    // Only the compared fields: a full copy would keep snapshot images alive.
+    VolatileFields.CommitIndex = volatileState.CommitIndex;
+    VolatileFields.NextIndex = volatileState.NextIndex;
+    VolatileFields.MatchIndex = volatileState.MatchIndex;
 }
 
 template<typename TSocket>
