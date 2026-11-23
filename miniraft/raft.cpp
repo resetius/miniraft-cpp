@@ -583,7 +583,9 @@ uint64_t TRaft::AppendConfiguration(TConfiguration configuration) {
 }
 
 uint64_t TRaft::AddLearner(uint32_t id) {
-    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change the configuration");
+    if (StateName != EState::LEADER) {
+        throw std::logic_error("Only a leader can change the configuration");
+    }
     auto configuration = GetConfiguration();
     if (id == Id || !Nodes.contains(id)) {
         throw std::invalid_argument("Unknown Raft server");
@@ -599,7 +601,9 @@ uint64_t TRaft::AddLearner(uint32_t id) {
 }
 
 uint64_t TRaft::PromoteLearner(ITimeSource::Time now, uint32_t id) {
-    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change the configuration");
+    if (StateName != EState::LEADER) {
+        throw std::logic_error("Only a leader can change the configuration");
+    }
     auto configuration = GetConfiguration();
     if (!configuration.Learners.erase(id)) {
         throw std::invalid_argument("Raft server is not a learner");
@@ -613,7 +617,9 @@ uint64_t TRaft::PromoteLearner(ITimeSource::Time now, uint32_t id) {
 }
 
 uint64_t TRaft::RemoveServer(uint32_t id) {
-    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change the configuration");
+    if (StateName != EState::LEADER) {
+        throw std::logic_error("Only a leader can change the configuration");
+    }
     auto configuration = GetConfiguration();
     if (!configuration.Voters.erase(id) && !configuration.Learners.erase(id)) {
         throw std::invalid_argument("Raft server is not a member");
