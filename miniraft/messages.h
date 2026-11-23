@@ -47,6 +47,8 @@ struct TLogEntry: public TMessage {
     enum EFlags {
         ENone = 0,
         EStub = 1,
+        // A cluster configuration, written by Raft, never applied by the application.
+        EConfiguration = 2,
     };
     uint64_t Term = 1;
     uint64_t Flags = 0;

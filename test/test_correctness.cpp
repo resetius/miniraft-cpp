@@ -193,11 +193,11 @@ TEST(Correctness, nonleader_proposal_rejection_preserves_store_and_input) {
             ASSERT_EQ(raft->CurrentStateName(), EState::CANDIDATE);
         } else if (phase == 2) {
             ASSERT_NO_FATAL_FAILURE(cluster.Elect(1); cluster.Replicate(1));
-            auto vote = NewHoldedMessage(
+            // A leader ignores vote requests; a reply with a newer term makes it step down.
+            auto newer = NewHoldedMessage(
                 TMessageEx{.Src = 2, .Dst = 1, .Term = raft->GetState()->CurrentTerm + 1},
-                TRequestVoteRequest{.LastLogIndex = raft->GetLastIndex(),
-                    .LastLogTerm = raft->GetState()->LastLogTerm, .CandidateId = 2});
-            raft->Process(cluster.Now, vote);
+                TAppendEntriesResponse{.MatchIndex = 0, .Success = 0});
+            raft->Process(cluster.Now, newer);
             ASSERT_EQ(raft->CurrentStateName(), EState::FOLLOWER);
         }
         const auto before = static_cast<TStateFields>(*raft->GetState());
@@ -556,7 +556,10 @@ TEST(Correctness, ready_read_is_cancelled_on_leadership_change) {
     TReadClient client(cluster.Nodes[0]);
     client.Read(11);
     cluster.RoundTrip(1, 2);
-    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2)); // Lose leadership before the application processes reads.
+    // Lose leadership before the application processes reads: node 1 fails, its
+    // heartbeat to node 3 is lost and does not hold node 3's vote back.
+    cluster.Packets.clear();
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     client.Poll();
     ASSERT_EQ(client.Replies.size(), 1);
     ASSERT_EQ(client.Replies[0].Error, 1);
@@ -626,6 +629,8 @@ TEST(Correctness, old_term_read_is_rejected_after_reelection) {
     cluster.Replicate(1);
     TReadClient client(cluster.Nodes[0]);
     client.Read(11);
+    // Node 1 fails: the heartbeats of the read are lost and do not hold the votes back.
+    cluster.Packets.clear();
     ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
@@ -648,8 +653,10 @@ TEST(Correctness, majority_all_cluster_sizes) {
         state.Append(NewHoldedMessage<TLogEntry>());
         for (int copies = 1; copies <= count; ++copies) {
             TVolatileState v;
+            std::set<uint32_t> voters;
+            for (int id = 1; id <= count; ++id) voters.insert(id);
             for (int peer = 1; peer < copies; ++peer) v.MatchIndex[peer + 1] = 1;
-            v.CommitAdvance(count, state);
+            v.CommitAdvance(voters, 1, state);
             ASSERT_EQ(v.CommitIndex, copies >= count / 2 + 1 ? 1 : 0);
         }
     }
