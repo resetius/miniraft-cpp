@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <string>
 #include <gtest/gtest.h>
 
 namespace {
@@ -579,6 +580,9 @@ TEST(Membership, at_most_one_uncommitted_change_under_failures) {
     };
     cluster.Drop = [&](const auto&) { return random() % 10 == 0; };
     std::map<uint64_t, uint32_t> leaders;
+    // Each committed entry as it was first seen committed, and the highest commit index ever.
+    std::map<uint64_t, std::string> committed;
+    uint64_t highest = 0;
     int changes = 0;
     for (int step = 0; step < 3000; ++step) {
         if (step % 97 == 0) {
@@ -610,15 +614,20 @@ TEST(Membership, at_most_one_uncommitted_change_under_failures) {
             cluster.Write(id);
         }
         ASSERT_NO_FATAL_FAILURE(cluster.Step());
-        uint64_t committed = 0;
+        // State Machine Safety: a committed entry never changes, on any node.
         for (uint32_t id = 1; id <= 5; ++id) {
-            committed = std::max(committed, cluster.Commit(id));
+            const auto& state = cluster[id].GetState();
+            const auto commit = cluster.Commit(id);
+            highest = std::max(highest, commit);
+            for (auto i = state->SnapshotIndex + 1; i <= commit; ++i) {
+                auto entry = state->Get(i);
+                std::string bytes(reinterpret_cast<const char*>(entry.Mes), entry->Len);
+                auto [first, _] = committed.emplace(i, bytes);
+                ASSERT_EQ(first->second, bytes) << "index " << i << ", node " << id << ", step " << step;
+            }
         }
         for (uint32_t id = 1; id <= 5; ++id) {
-            ASSERT_LE(cluster.Changes(id, committed), 1) << "node " << id << ", step " << step;
-        }
-        if (step % 100 == 0) {
-            ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
+            ASSERT_LE(cluster.Changes(id, highest), 1) << "node " << id << ", step " << step;
         }
     }
     ASSERT_GT(changes, 20);
