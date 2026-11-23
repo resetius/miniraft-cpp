@@ -72,6 +72,21 @@ struct TVolatileState {
 
     std::vector<uint64_t> Indices;
 
+    // Leader: the image sent to a peer, kept for the whole transfer.
+    struct TSnapshotTransfer {
+        TMessageHolder<TInstallSnapshotRequest> Snapshot;
+        uint64_t Offset = 0; // records the peer holds
+        uint64_t End = 0; // end of the chunk in flight
+        uint64_t Seqno = 0; // of that chunk, its retries keep it
+    };
+    std::unordered_map<uint32_t, TSnapshotTransfer> SnapshotTransfers;
+    // Leader: the image index a peer refused; that image is not sent again.
+    std::unordered_map<uint32_t, uint64_t> RejectedSnapshot;
+    // Follower: the image received so far from the leader of IncomingTerm.
+    uint64_t IncomingTerm = 0;
+    TMessageHolder<TInstallSnapshotRequest> Incoming;
+    std::vector<TMessageHolder<TMessage>> IncomingRecords;
+
     TVolatileState& Vote(uint32_t id);
     TVolatileState& CommitAdvance(int nservers, const IState& state);
     TVolatileState& SetCommitIndex(uint64_t index);
@@ -159,6 +174,8 @@ private:
     void OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
     void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
     void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
+    void OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotRequest> message);
+    void OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message);
 
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
@@ -166,6 +183,7 @@ private:
 
     TMessageHolder<TRequestVoteRequest> CreateVote(uint32_t nodeId);
     TMessageHolder<TAppendEntriesRequest> CreateAppendEntries(uint32_t nodeId);
+    TMessageHolder<TInstallSnapshotRequest> CreateInstallSnapshot(uint32_t nodeId);
     ITimeSource::Time MakeElection(ITimeSource::Time now);
     uint64_t NextSeqno();
     bool ValidateRpc(TMessageHolder<TMessage> message) const;

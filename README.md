@@ -31,7 +31,7 @@ log replication, and fault tolerance in a distributed system.
 - **Leader Election** (supported)
 - **Log Replication** (supported)
 - **Persistence** (supported)
-- **Snapshots** (not supported yet)
+- **Snapshots** (supported)
 - **Membership Change** (not supported yet)
 
 The project focuses on a clear, modular design that leverages C++20 coroutines to simplify asynchronous flows.

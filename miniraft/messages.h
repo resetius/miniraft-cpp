@@ -27,8 +27,8 @@ enum class EMessageType : uint32_t {
     REQUEST_VOTE_RESPONSE = 3,
     APPEND_ENTRIES_REQUEST = 4,
     APPEND_ENTRIES_RESPONSE = 5,
-    INSTALL_SNAPSHOT_REQUEST = 6, // TODO: not implemented it
-    INSTALL_SNAPSHOT_RESPONSE = 7, // TODO: not implemented it
+    INSTALL_SNAPSHOT_REQUEST = 6,
+    INSTALL_SNAPSHOT_RESPONSE = 7,
     COMMAND_REQUEST = 8,
     COMMAND_RESPONSE = 9,
 };
@@ -114,6 +114,19 @@ struct TInstallSnapshotRequest: public TMessageEx {
 };
 
 static_assert(sizeof(TInstallSnapshotRequest) == sizeof(TMessageEx) + 40);
+
+struct TInstallSnapshotResponse: public TMessageEx {
+    static constexpr EMessageType MessageType = EMessageType::INSTALL_SNAPSHOT_RESPONSE;
+    // LastIncludedIndex once the image is installed or the log already has it.
+    uint64_t MatchIndex = 0;
+    // Records of the image the follower holds so far.
+    uint64_t Offset = 0;
+    // Zero when the follower refuses the image.
+    uint32_t Success = 0;
+    uint32_t Padding = 0;
+};
+
+static_assert(sizeof(TInstallSnapshotResponse) == sizeof(TMessageEx) + 24);
 
 struct TCommandRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
@@ -201,7 +214,7 @@ struct TMessageHolder {
     }
 
     bool IsEx() const {
-        return Mes && Mes->Len >= sizeof(TMessageEx) && (2 <= Mes->Type && Mes->Type <= 5);
+        return Mes && Mes->Len >= sizeof(TMessageEx) && (2 <= Mes->Type && Mes->Type <= 7);
     }
 
     template<typename U>
@@ -237,6 +250,8 @@ struct TMessageHolder {
     }
 };
 
+// Number of log entries that follow an AppendEntries or InstallSnapshot frame.
+uint32_t PayloadCount(const TMessageHolder<TMessage>& message);
 // Validate the complete frame/batch before emitting any bytes.
 void ValidateMessageTree(const TMessageHolder<TMessage>& message, const TMessageLimits& limits = {});
 

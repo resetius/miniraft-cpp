@@ -327,6 +327,113 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     }
 }
 
+void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotRequest> message) {
+    auto reply = [&](bool success, uint64_t matchIndex, uint64_t offset) {
+        Nodes[message->Src]->Send(NewHoldedMessage(
+            TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm, .Seqno = message->Seqno},
+            TInstallSnapshotResponse {.MatchIndex = matchIndex, .Offset = offset, .Success = success}));
+    };
+    if (message->Term < State->CurrentTerm) {
+        reply(false, 0, 0);
+        return;
+    }
+
+    (*VolatileState)
+        .SetLeaderId(message->LeaderId)
+        .SetElectionDue(MakeElection(now));
+    Become(EState::FOLLOWER);
+
+    const auto index = message->LastIncludedIndex;
+    const auto term = message->LastIncludedTerm;
+    auto& incoming = VolatileState->Incoming;
+    auto& records = VolatileState->IncomingRecords;
+    if (index < State->SnapshotIndex || (index <= State->LastLogIndex && State->LogTerm(index) == term)) {
+        // The log has this prefix already, it is committed with the image.
+        incoming = {};
+        records.clear();
+        VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
+        reply(true, index, 0);
+        return;
+    }
+
+    const bool same = incoming && VolatileState->IncomingTerm == message->Term &&
+        incoming->LastIncludedIndex == index && incoming->LastIncludedTerm == term;
+    if (!same) {
+        // Another image starts with its first chunk; the leader restarts from it.
+        if (message->Offset) {
+            reply(true, 0, 0);
+            return;
+        }
+        incoming = message;
+        VolatileState->IncomingTerm = message->Term;
+        records.clear();
+    }
+    if (message->Offset <= records.size()) {
+        for (auto i = records.size() - message->Offset; i < message.PayloadSize; ++i) {
+            records.push_back(message.Payload[i]);
+        }
+    }
+    if (!message->Done || records.size() != message->Offset + message.PayloadSize) {
+        reply(true, 0, records.size());
+        return;
+    }
+
+    // Nothing changes before the last chunk.
+    auto snapshot = NewHoldedMessage(TMessageEx {}, TInstallSnapshotRequest {
+        .LastIncludedIndex = index,
+        .LastIncludedTerm = term,
+        .Nentries = uint32_t(records.size()),
+        .Done = 1,
+    });
+    if (!records.empty()) {
+        snapshot.InitPayload(records.size());
+        std::copy(records.begin(), records.end(), snapshot.Payload.get());
+    }
+    incoming = {};
+    records.clear();
+    try {
+        State->InstallSnapshot(snapshot);
+    } catch (const std::exception&) {
+        // A storage that cannot take the image refuses it: the leader stops sending it.
+        reply(false, 0, 0);
+        return;
+    }
+    VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
+    reply(true, index, 0);
+}
+
+void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message) {
+    if (message->Term != State->CurrentTerm) {
+        return;
+    }
+
+    const auto nodeId = message->Src;
+    auto transfer = VolatileState->SnapshotTransfers.find(nodeId);
+    if (transfer == VolatileState->SnapshotTransfers.end() || !transfer->second.Seqno ||
+        transfer->second.Seqno != message->Seqno) return;
+    const auto index = transfer->second.Snapshot->LastIncludedIndex;
+    if (message->MatchIndex && message->MatchIndex != index) return;
+    transfer->second.Seqno = 0;
+    VolatileState->RpcDue[nodeId] = ITimeSource::Time{};
+    if (!message->Success) {
+        VolatileState->RejectedSnapshot[nodeId] = index;
+        VolatileState->SnapshotTransfers.erase(transfer);
+    } else if (message->MatchIndex) {
+        VolatileState->SnapshotTransfers.erase(transfer);
+        // Not a read acknowledgement: AppendEntries confirms reads.
+        auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], index);
+        (*VolatileState)
+            .SetMatchIndex(nodeId, matchIndex)
+            .SetNextIndex(nodeId, matchIndex+1)
+            .SetBatchSize(nodeId, 1024)
+            .SetBackOff(nodeId, 1)
+            .CommitAdvance(Nservers, *State);
+    } else {
+        // The follower cannot hold records it was not sent.
+        transfer->second.Offset = std::min(message->Offset, transfer->second.End);
+    }
+}
+
 TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
     auto mes = NewHoldedMessage(
         TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm},
@@ -383,11 +490,50 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     return mes;
 }
 
+TMessageHolder<TInstallSnapshotRequest> TRaft::CreateInstallSnapshot(uint32_t nodeId) {
+    auto& transfer = VolatileState->SnapshotTransfers[nodeId];
+    // A newer compaction does not restart a transfer, or it might never end.
+    if (!transfer.Snapshot || transfer.Snapshot->LastIncludedIndex < VolatileState->NextIndex[nodeId]) {
+        transfer = TVolatileState::TSnapshotTransfer {.Snapshot = State->GetSnapshot()};
+    }
+    const auto& snapshot = transfer.Snapshot;
+    const TMessageLimits limits;
+    uint64_t bytes = sizeof(TInstallSnapshotRequest);
+    auto end = transfer.Offset;
+    while (end < snapshot.PayloadSize && end - transfer.Offset < limits.MaxEntries &&
+        snapshot.Payload[end]->Len <= limits.MaxBatchBytes - bytes)
+    {
+        bytes += snapshot.Payload[end++]->Len;
+    }
+    if (!transfer.Seqno) {
+        transfer.Seqno = NextSeqno();
+    }
+    transfer.End = end;
+
+    auto mes = NewHoldedMessage(
+        TMessageEx {.Src = Id, .Dst = nodeId, .Term = State->CurrentTerm, .Seqno = transfer.Seqno},
+        TInstallSnapshotRequest {
+            .LastIncludedIndex = snapshot->LastIncludedIndex,
+            .LastIncludedTerm = snapshot->LastIncludedTerm,
+            .Offset = transfer.Offset,
+            .LeaderId = Id,
+            .Nentries = uint32_t(end - transfer.Offset),
+            .Done = end == snapshot.PayloadSize,
+        });
+    if (end > transfer.Offset) {
+        mes.InitPayload(end - transfer.Offset);
+        std::copy(snapshot.Payload.get() + transfer.Offset, snapshot.Payload.get() + end, mes.Payload.get());
+    }
+    return mes;
+}
+
 void TRaft::Follower(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeRequestVote = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeRequestVote.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
         OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
+    } else if (auto maybeInstallSnapshot = message.Maybe<TInstallSnapshotRequest>()) {
+        OnInstallSnapshot(now, std::move(maybeInstallSnapshot.Cast()));
     }
 }
 
@@ -398,16 +544,22 @@ void TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
         OnRequestVote(now, std::move(maybeRequestVote.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
         OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
+    } else if (auto maybeInstallSnapshot = message.Maybe<TInstallSnapshotRequest>()) {
+        OnInstallSnapshot(now, std::move(maybeInstallSnapshot.Cast()));
     }
 }
 
 void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
         OnAppendEntries(std::move(maybeAppendEntries.Cast()));
+    } else if (auto maybeInstallSnapshot = message.Maybe<TInstallSnapshotResponse>()) {
+        OnInstallSnapshot(std::move(maybeInstallSnapshot.Cast()));
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
         OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
+    } else if (auto maybeInstallSnapshot = message.Maybe<TInstallSnapshotRequest>()) {
+        OnInstallSnapshot(now, std::move(maybeInstallSnapshot.Cast()));
     }
 }
 
@@ -427,6 +579,7 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
             State->Commit();
             StateName = EState::FOLLOWER;
             VolatileState->LeaderId = 0;
+            VolatileState->SnapshotTransfers.clear();
             if (VolatileState->ElectionDue <= now || VolatileState->ElectionDue == ITimeSource::Max) {
                 VolatileState->ElectionDue = MakeElection(now);
             }
@@ -468,6 +621,21 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
         return reply->Success <= 1 && reply->MatchIndex <= maxIndex &&
             (reply->Success ? reply->MatchIndex <= State->LastLogIndex : reply->MatchIndex == 0);
     }
+    case EMessageType::INSTALL_SNAPSHOT_RESPONSE: {
+        auto reply = message.Cast<TInstallSnapshotResponse>();
+        return reply->Success <= 1 && reply->MatchIndex <= State->LastLogIndex;
+    }
+    case EMessageType::INSTALL_SNAPSHOT_REQUEST: {
+        auto snapshot = message.Cast<TInstallSnapshotRequest>();
+        const auto index = snapshot->LastIncludedIndex;
+        const auto term = snapshot->LastIncludedTerm;
+        if (snapshot->LeaderId != header->Src || !index || index > maxIndex || !term || term > header->Term ||
+            snapshot->Done > 1 || snapshot->Offset > UINT32_MAX - snapshot->Nentries) return false;
+        // An image never contradicts the committed prefix.
+        const auto commitIndex = VolatileState->CommitIndex;
+        if (index > commitIndex) return term >= State->LogTerm(commitIndex);
+        return index < State->SnapshotIndex ? term <= State->SnapshotTerm : State->LogTerm(index) == term;
+    }
     case EMessageType::APPEND_ENTRIES_REQUEST: {
         auto append = message.Cast<TAppendEntriesRequest>();
         if (append->LeaderId != header->Src || append->PrevLogIndex > maxIndex ||
@@ -506,13 +674,22 @@ void TRaft::CandidateTimeout(ITimeSource::Time now) {
 
 void TRaft::LeaderTimeout(ITimeSource::Time now) {
     for (auto& [id, node] : Nodes) {
+        const auto nextIndex = VolatileState->NextIndex[id];
+        // A peer behind the snapshot gets it, unless it has refused this image;
+        // then it only gets heartbeats.
+        const bool install = nextIndex <= State->SnapshotIndex &&
+            VolatileState->RejectedSnapshot[id] != State->SnapshotIndex;
+        const bool behind = nextIndex <= State->LastLogIndex && (install || nextIndex > State->SnapshotIndex);
         if (VolatileState->HeartbeatDue[id] <= now
-            || (VolatileState->NextIndex[id] <= State->LastLogIndex &&
-            VolatileState->RpcDue[id] <= now))
+            || (behind && VolatileState->RpcDue[id] <= now))
         {
             VolatileState->HeartbeatDue[id] = now + TTimeout::Election / 2;
             VolatileState->RpcDue[id] = now + TTimeout::Rpc;
-            node->Send(CreateAppendEntries(id));
+            if (install) {
+                node->Send(CreateInstallSnapshot(id));
+            } else {
+                node->Send(CreateAppendEntries(id));
+            }
         }
     }
 
@@ -527,7 +704,10 @@ uint64_t TRaft::ApproveRead() {
     // emitted below is newer than this barrier; old replies cannot satisfy it.
     const uint64_t seqno = NextSeqno();
     for (auto& [id, node] : Nodes) {
-        node->Send(CreateAppendEntries(id));
+        // A peer behind the snapshot cannot confirm a read.
+        if (VolatileState->NextIndex[id] > State->SnapshotIndex) {
+            node->Send(CreateAppendEntries(id));
+        }
     }
     return seqno;
 }

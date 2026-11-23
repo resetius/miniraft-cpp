@@ -37,15 +37,16 @@ private:
         co_await NNet::TByteReader(Socket).Read(&header, sizeof(header));
         ValidateMessageHeader(header.Type, header.Len, Limits);
         if (logOnly && header.Type != uint32_t(EMessageType::LOG_ENTRY))
-            throw TMessageError("AppendEntries children must be log entries");
+            throw TMessageError("Message children must be log entries");
         if (header.Len > remaining) throw TMessageError("Message batch exceeds byte limit");
         remaining -= header.Len;
         auto message = NewHoldedMessage<TMessage>(header.Type, header.Len);
         co_await NNet::TByteReader(Socket).Read(message->Value, header.Len - sizeof(TMessage));
-        if (header.Type == uint32_t(EMessageType::APPEND_ENTRIES_REQUEST)) {
-            const auto count = message.template Cast<TAppendEntriesRequest>()->Nentries;
+        if (header.Type == uint32_t(EMessageType::APPEND_ENTRIES_REQUEST) ||
+            header.Type == uint32_t(EMessageType::INSTALL_SNAPSHOT_REQUEST)) {
+            const auto count = PayloadCount(message);
             if (count > Limits.MaxEntries || uint64_t(count) * sizeof(TLogEntry) > remaining)
-                throw TMessageError("AppendEntries count exceeds limits");
+                throw TMessageError("Message entry count exceeds limits");
             message.InitPayload(count);
             for (uint32_t i = 0; i < count; ++i)
                 message.Payload[i] = co_await ReadFrame(true, remaining);
