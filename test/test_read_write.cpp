@@ -11,12 +11,7 @@
 #include <miniraft/timesource.h>
 #include <coroio/all.hpp>
 
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 
 namespace {
 
@@ -31,7 +26,7 @@ TMessageHolder<TLogEntry> MakeEntry(const char* text) {
 
 } // namespace
 
-void test_message_send_recv(void**) {
+TEST(ReadWrite, message_send_recv) {
     auto mes = MakeEntry("MESSAGE");
 
     NNet::TLoop<NNet::TPoll> loop;
@@ -65,14 +60,14 @@ void test_message_send_recv(void**) {
     }
 
     auto maybeCasted = received.Maybe<TLogEntry>();
-    assert_true(maybeCasted);
+    ASSERT_TRUE(maybeCasted);
     auto casted = maybeCasted.Cast();
-    assert_string_equal(mes->Data, casted->Data);
+    ASSERT_STREQ(mes->Data, casted->Data);
 
     h1.destroy(); h2.destroy();
 }
 
-void test_read_write(void**) {
+TEST(ReadWrite, read_write) {
     auto mes = MakeEntry("MESSAGE");
 
     NNet::TLoop<NNet::TPoll> loop;
@@ -102,14 +97,14 @@ void test_read_write(void**) {
     }
 
     auto maybeCasted = received.Maybe<TLogEntry>();
-    assert_true(maybeCasted);
+    ASSERT_TRUE(maybeCasted);
     auto casted = maybeCasted.Cast();
-    assert_string_equal(mes->Data, casted->Data);
+    ASSERT_STREQ(mes->Data, casted->Data);
 
     h1.destroy(); h2.destroy();
 }
 
-void test_read_write_payload(void**) {
+TEST(ReadWrite, read_write_payload) {
     auto mes = NewHoldedMessage<TAppendEntriesRequest>();
     char buf[1024];
     mes.InitPayload(1337);
@@ -146,18 +141,10 @@ void test_read_write_payload(void**) {
     }
 
     auto maybeCasted = received.Maybe<TAppendEntriesRequest>();
-    assert_true(maybeCasted);
+    ASSERT_TRUE(maybeCasted);
     auto casted = maybeCasted.Cast();
-    assert_int_equal(mes->Nentries, casted->Nentries);
+    ASSERT_EQ(mes->Nentries, casted->Nentries);
 
     h1.destroy(); h2.destroy();
 }
 
-int main() {
-    const struct CMUnitTest tests[] = {
-        cmocka_unit_test(test_message_send_recv),
-        cmocka_unit_test(test_read_write),
-        cmocka_unit_test(test_read_write_payload),
-    };
-    return cmocka_run_group_tests(tests, NULL, NULL);
-};

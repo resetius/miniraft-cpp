@@ -4,12 +4,7 @@
 #include <functional>
 #include <map>
 #include <iterator>
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 
 namespace {
 namespace fs = std::filesystem;
@@ -21,7 +16,10 @@ struct TFiles {
         Directory = fs::temp_directory_path() /
             ("miniraft-recovery-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
              "-" + std::to_string(counter++));
-        assert_true(fs::create_directory(Directory));
+        EXPECT_TRUE(fs::create_directory(Directory));
+        if (!fs::is_directory(Directory)) {
+            throw std::runtime_error("cannot create " + Directory.string());
+        }
         Name = (Directory / "raft").string();
     }
     ~TFiles() { std::error_code ignored; fs::remove_all(Directory, ignored); }
@@ -47,7 +45,7 @@ struct TFiles {
         file.seekp(offset);
         file.write(reinterpret_cast<const char*>(&value), sizeof(value));
         file.flush();
-        assert_true(bool(file));
+        ASSERT_TRUE(bool(file));
     }
     void RejectRecovery() {
         auto contents = [&] {
@@ -63,152 +61,152 @@ struct TFiles {
         bool rejected = false;
         try { TDiskState state(Name, 1); }
         catch (const std::runtime_error&) { rejected = true; }
-        assert_true(rejected);
-        assert_true(before == contents());
+        ASSERT_TRUE(rejected);
+        ASSERT_TRUE(before == contents());
     }
 };
 
-void test_truncated_metadata_is_not_reset(void**) {
+TEST(PersistRecovery, truncated_metadata_is_not_reset) {
     for (uint64_t size : {0, 1, 8, 16, 19}) {
         TFiles files;
         files.Seed();
         fs::resize_file(files.Path("state"), size);
-        files.RejectRecovery();
-        assert_int_equal(fs::file_size(files.Path("state")), size);
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
+        ASSERT_EQ(fs::file_size(files.Path("state")), size);
     }
 }
-void test_oversized_metadata_is_rejected(void**) {
+TEST(PersistRecovery, oversized_metadata_is_rejected) {
     TFiles files;
     files.Seed();
     fs::resize_file(files.Path("state"), 21);
-    files.RejectRecovery();
-    assert_int_equal(fs::file_size(files.Path("state")), 21);
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
+    ASSERT_EQ(fs::file_size(files.Path("state")), 21);
 }
-void test_missing_storage_is_not_recreated(void**) {
+TEST(PersistRecovery, missing_storage_is_not_recreated) {
     for (const std::string kind : {"state", "index", "entries"}) {
         TFiles files;
         files.Seed();
         fs::remove(files.Path(kind));
-        files.RejectRecovery();
-        assert_false(fs::exists(files.Path(kind)));
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
+        ASSERT_FALSE(fs::exists(files.Path(kind)));
     }
 }
-void test_short_index_is_rejected(void**) {
+TEST(PersistRecovery, short_index_is_rejected) {
     TFiles files;
     files.Seed();
     fs::resize_file(files.Path("index"), sizeof(uint64_t));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
-void test_short_entry_is_rejected(void**) {
+TEST(PersistRecovery, short_entry_is_rejected) {
     TFiles files;
     files.Seed();
     fs::resize_file(files.Path("entries"), sizeof(TLogEntry) + 4);
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
-void test_invalid_entry_header_is_rejected(void**) {
+TEST(PersistRecovery, invalid_entry_header_is_rejected) {
     for (uint32_t len : {0u, 7u, 8u, uint32_t(sizeof(TLogEntry) - 1), UINT32_MAX}) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", sizeof(uint32_t), len);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
     TFiles files;
     files.Seed();
     files.Overwrite("entries", 0, uint32_t(EMessageType::COMMAND_REQUEST));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
-void test_invalid_offsets_are_rejected(void**) {
+TEST(PersistRecovery, invalid_offsets_are_rejected) {
     for (uint64_t offset : {uint64_t(0), uint64_t(1), UINT64_MAX}) {
         TFiles files;
         files.Seed();
         files.Overwrite("index", sizeof(uint64_t), offset);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
-void test_invalid_term_is_rejected(void**) {
+TEST(PersistRecovery, invalid_term_is_rejected) {
     TFiles files;
     files.Seed();
     files.Overwrite("state", sizeof(uint64_t), uint64_t(0));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
-void test_invalid_log_count_is_rejected(void**) {
+TEST(PersistRecovery, invalid_log_count_is_rejected) {
     TFiles files;
     files.Seed();
     files.Overwrite("state", 0, UINT64_MAX);
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
-void test_truncate_updates_last_term_and_restarts(void**) {
+TEST(PersistRecovery, truncate_updates_last_term_and_restarts) {
     TFiles files;
     files.Seed();
     {
         TDiskState state(files.Name, 1);
         state.RemoveLast();
-        assert_int_equal(state.LastLogIndex, 1);
-        assert_int_equal(state.LastLogTerm, 2);
+        ASSERT_EQ(state.LastLogIndex, 1);
+        ASSERT_EQ(state.LastLogTerm, 2);
     }
     {
         TDiskState state(files.Name, 1);
-        assert_int_equal(state.CurrentTerm, 7);
-        assert_int_equal(state.VotedFor, 2);
-        assert_int_equal(state.LastLogTerm, 2);
+        ASSERT_EQ(state.CurrentTerm, 7);
+        ASSERT_EQ(state.VotedFor, 2);
+        ASSERT_EQ(state.LastLogTerm, 2);
         state.RemoveLast();
-        assert_int_equal(state.LastLogIndex, 0);
-        assert_int_equal(state.LastLogTerm, 0);
+        ASSERT_EQ(state.LastLogIndex, 0);
+        ASSERT_EQ(state.LastLogTerm, 0);
     }
     {
         // Logical truncation leaves a suffix on disk. Reopen it as an empty
         // log, then ensure the replacement really starts at byte zero.
         TDiskState state(files.Name, 1);
-        assert_int_equal(state.LastLogIndex, 0);
-        assert_int_equal(state.LastLogTerm, 0);
+        ASSERT_EQ(state.LastLogIndex, 0);
+        ASSERT_EQ(state.LastLogTerm, 0);
         auto entry = NewHoldedMessage<TLogEntry>();
         entry->Term = 7;
         state.Append(entry);
-        assert_int_equal(state.Get(1)->Term, 7);
+        ASSERT_EQ(state.Get(1)->Term, 7);
     }
     TDiskState recovered(files.Name, 1);
-    assert_int_equal(recovered.LastLogIndex, 1);
-    assert_int_equal(recovered.LastLogTerm, 7);
-    assert_int_equal(recovered.Get(1)->Term, 7);
-    assert_int_equal(recovered.VotedFor, 2);
+    ASSERT_EQ(recovered.LastLogIndex, 1);
+    ASSERT_EQ(recovered.LastLogTerm, 7);
+    ASSERT_EQ(recovered.Get(1)->Term, 7);
+    ASSERT_EQ(recovered.VotedFor, 2);
     // Also replace an empty log without reopening: the shared stream position
     // is still at the end of the removed entry, rather than at byte zero.
     recovered.RemoveLast();
     auto replacement = NewHoldedMessage<TLogEntry>();
     replacement->Term = 6;
     recovered.Append(replacement);
-    assert_int_equal(recovered.Get(1)->Term, 6);
-    assert_int_equal(recovered.LastLogTerm, 6);
+    ASSERT_EQ(recovered.Get(1)->Term, 6);
+    ASSERT_EQ(recovered.LastLogTerm, 6);
 }
-void test_zero_log_entry_terms_are_rejected_without_mutation(void**) {
+TEST(PersistRecovery, zero_log_entry_terms_are_rejected_without_mutation) {
     for (uint64_t index : {0, 1}) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", index * sizeof(TLogEntry) + sizeof(TMessage), uint64_t(0));
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
-void test_log_terms_newer_than_current_term_are_rejected(void**) {
+TEST(PersistRecovery, log_terms_newer_than_current_term_are_rejected) {
     for (uint64_t term : {uint64_t(8), UINT64_MAX}) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", sizeof(TLogEntry) + sizeof(TMessage), term);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
     TFiles files;
     files.Seed();
     files.Overwrite("state", sizeof(uint64_t), uint64_t(4));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
-void test_decreasing_log_terms_are_rejected(void**) {
+TEST(PersistRecovery, decreasing_log_terms_are_rejected) {
     for (uint64_t index : {0, 1}) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", index * sizeof(TLogEntry) + sizeof(TMessage), uint64_t(index == 0 ? 6 : 1));
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
-void test_equal_and_skipped_terms_and_full_width_current_term_recover(void**) {
+TEST(PersistRecovery, equal_and_skipped_terms_and_full_width_current_term_recover) {
     TFiles files;
     {
         TDiskState state(files.Name, 1);
@@ -221,15 +219,15 @@ void test_equal_and_skipped_terms_and_full_width_current_term_recover(void**) {
         }
     }
     TDiskState recovered(files.Name, 1);
-    assert_true(recovered.CurrentTerm == UINT64_MAX);
-    assert_true(recovered.LastLogTerm == UINT64_MAX);
-    assert_int_equal(recovered.LastLogIndex, 5);
-    assert_int_equal(recovered.VotedFor, 2);
-    assert_int_equal(recovered.Get(1)->Term, 1);
-    assert_int_equal(recovered.Get(2)->Term, 1);
-    assert_int_equal(recovered.Get(3)->Term, 5);
+    ASSERT_TRUE(recovered.CurrentTerm == UINT64_MAX);
+    ASSERT_TRUE(recovered.LastLogTerm == UINT64_MAX);
+    ASSERT_EQ(recovered.LastLogIndex, 5);
+    ASSERT_EQ(recovered.VotedFor, 2);
+    ASSERT_EQ(recovered.Get(1)->Term, 1);
+    ASSERT_EQ(recovered.Get(2)->Term, 1);
+    ASSERT_EQ(recovered.Get(3)->Term, 5);
 }
-void test_invalid_terms_in_logically_removed_suffix_are_ignored(void**) {
+TEST(PersistRecovery, invalid_terms_in_logically_removed_suffix_are_ignored) {
     TFiles files;
     files.Seed();
     {
@@ -238,13 +236,13 @@ void test_invalid_terms_in_logically_removed_suffix_are_ignored(void**) {
     }
     files.Overwrite("entries", sizeof(TLogEntry) + sizeof(TMessage), uint64_t(0));
     TDiskState recovered(files.Name, 1);
-    assert_int_equal(recovered.LastLogIndex, 1);
-    assert_int_equal(recovered.LastLogTerm, 2);
+    ASSERT_EQ(recovered.LastLogIndex, 1);
+    ASSERT_EQ(recovered.LastLogTerm, 2);
     auto entry = NewHoldedMessage<TLogEntry>();
     entry->Term = 7;
     recovered.Append(entry);
-    assert_int_equal(recovered.LastLogIndex, 2);
-    assert_int_equal(recovered.Get(2)->Term, 7);
+    ASSERT_EQ(recovered.LastLogIndex, 2);
+    ASSERT_EQ(recovered.Get(2)->Term, 7);
 }
 
 TMessageHolder<TInstallSnapshotRequest> Image(uint64_t index, uint64_t term, std::initializer_list<std::string> values) {
@@ -272,57 +270,57 @@ void AppendTerm(TDiskState& state, uint64_t term) {
     entry->Term = term;
     state.Append(entry);
 }
-void test_compacted_log_and_image_survive_restart(void**) {
+TEST(PersistRecovery, compacted_log_and_image_survive_restart) {
     TFiles files;
     files.Seed();
-    assert_int_equal(fs::file_size(files.Path("state")), 20);
+    ASSERT_EQ(fs::file_size(files.Path("state")), 20);
     {
         TDiskState state(files.Name, 1);
         AppendTerm(state, 7);
         state.InstallSnapshot(Image(2, 5, {"a", "b"}));
-        assert_int_equal(state.SnapshotIndex, 2);
-        assert_int_equal(state.LastLogIndex, 3);
-        assert_int_equal(state.LastLogTerm, 7);
-        assert_false(state.Get(2));
-        assert_int_equal(state.Get(3)->Term, 7);
+        ASSERT_EQ(state.SnapshotIndex, 2);
+        ASSERT_EQ(state.LastLogIndex, 3);
+        ASSERT_EQ(state.LastLogTerm, 7);
+        ASSERT_FALSE(state.Get(2));
+        ASSERT_EQ(state.Get(3)->Term, 7);
     }
-    assert_int_equal(fs::file_size(files.Path("state")), 36);
-    assert_false(fs::exists(files.Path("entries")));
-    assert_false(fs::exists(files.Path("index")));
+    ASSERT_EQ(fs::file_size(files.Path("state")), 36);
+    ASSERT_FALSE(fs::exists(files.Path("entries")));
+    ASSERT_FALSE(fs::exists(files.Path("index")));
     {
         TDiskState state(files.Name, 1);
-        assert_int_equal(state.SnapshotIndex, 2);
-        assert_int_equal(state.SnapshotTerm, 5);
-        assert_int_equal(state.LastLogIndex, 3);
-        assert_int_equal(state.LogTerm(2), 5);
-        assert_int_equal(state.Get(3)->Term, 7);
-        assert_true(Records(state.GetSnapshot()) == (std::vector<std::string>{"a", "b"}));
+        ASSERT_EQ(state.SnapshotIndex, 2);
+        ASSERT_EQ(state.SnapshotTerm, 5);
+        ASSERT_EQ(state.LastLogIndex, 3);
+        ASSERT_EQ(state.LogTerm(2), 5);
+        ASSERT_EQ(state.Get(3)->Term, 7);
+        ASSERT_TRUE(Records(state.GetSnapshot()) == (std::vector<std::string>{"a", "b"}));
         AppendTerm(state, 7);
         state.RemoveLast();
         state.RemoveLast();
-        assert_int_equal(state.LastLogIndex, 2);
-        assert_int_equal(state.LastLogTerm, 5);
+        ASSERT_EQ(state.LastLogIndex, 2);
+        ASSERT_EQ(state.LastLogTerm, 5);
         // Removal never reaches into the snapshot.
         state.RemoveLast();
-        assert_int_equal(state.LastLogIndex, 2);
+        ASSERT_EQ(state.LastLogIndex, 2);
         AppendTerm(state, 7);
         // An image from a leader that the local log does not match replaces the whole log.
         state.InstallSnapshot(Image(5, 7, {"c"}));
-        assert_int_equal(state.LastLogIndex, 5);
-        assert_int_equal(state.LastLogTerm, 7);
+        ASSERT_EQ(state.LastLogIndex, 5);
+        ASSERT_EQ(state.LastLogTerm, 7);
     }
-    assert_false(fs::exists(files.Path("snapshot", 2)));
+    ASSERT_FALSE(fs::exists(files.Path("snapshot", 2)));
     TDiskState state(files.Name, 1);
-    assert_int_equal(state.SnapshotIndex, 5);
-    assert_int_equal(state.LastLogIndex, 5);
-    assert_true(Records(state.GetSnapshot()) == std::vector<std::string>{"c"});
+    ASSERT_EQ(state.SnapshotIndex, 5);
+    ASSERT_EQ(state.LastLogIndex, 5);
+    ASSERT_TRUE(Records(state.GetSnapshot()) == std::vector<std::string>{"c"});
     AppendTerm(state, 7);
-    assert_int_equal(state.Get(6)->Term, 7);
+    ASSERT_EQ(state.Get(6)->Term, 7);
     bool rejected = false;
     try { state.InstallSnapshot(Image(5, 7, {})); } catch (const std::invalid_argument&) { rejected = true; }
-    assert_true(rejected);
+    ASSERT_TRUE(rejected);
 }
-void test_interrupted_snapshot_publication_recovers_one_side(void**) {
+TEST(PersistRecovery, interrupted_snapshot_publication_recovers_one_side) {
     // Before the metadata commit: the files of the new index are left over.
     {
         TFiles files;
@@ -333,11 +331,11 @@ void test_interrupted_snapshot_publication_recovers_one_side(void**) {
         }
         fs::resize_file(files.Path("snapshot", 2), 3);
         TDiskState state(files.Name, 1);
-        assert_int_equal(state.SnapshotIndex, 1);
-        assert_int_equal(state.LastLogIndex, 2);
-        assert_int_equal(state.Get(2)->Term, 5);
+        ASSERT_EQ(state.SnapshotIndex, 1);
+        ASSERT_EQ(state.LastLogIndex, 2);
+        ASSERT_EQ(state.Get(2)->Term, 5);
         for (const std::string kind : {"entries", "index", "snapshot"}) {
-            assert_false(fs::exists(files.Path(kind, 2)));
+            ASSERT_FALSE(fs::exists(files.Path(kind, 2)));
         }
     }
     // After it: the files of the previous index are left over.
@@ -353,15 +351,15 @@ void test_interrupted_snapshot_publication_recovers_one_side(void**) {
         std::ofstream(files.Name + name) << "foreign";
     }
     TDiskState state(files.Name, 1);
-    assert_int_equal(state.SnapshotIndex, 1);
-    assert_int_equal(state.Get(2)->Term, 5);
-    assert_false(fs::exists(files.Path("entries")));
-    assert_false(fs::exists(files.Path("index")));
+    ASSERT_EQ(state.SnapshotIndex, 1);
+    ASSERT_EQ(state.Get(2)->Term, 5);
+    ASSERT_FALSE(fs::exists(files.Path("entries")));
+    ASSERT_FALSE(fs::exists(files.Path("index")));
     for (const std::string name : {".entries.1.07", ".index.1.0", ".snapshot.1.2x", ".entries.10"}) {
-        assert_true(fs::exists(files.Name + name));
+        ASSERT_TRUE(fs::exists(files.Name + name));
     }
 }
-void test_incomplete_or_corrupt_compacted_store_is_rejected(void**) {
+TEST(PersistRecovery, incomplete_or_corrupt_compacted_store_is_rejected) {
     const std::vector<std::function<void(TFiles&)>> damages = {
         [](TFiles& f) { fs::remove(f.Path("snapshot", 1)); },
         [](TFiles& f) { fs::remove(f.Path("entries", 1)); },
@@ -379,20 +377,20 @@ void test_incomplete_or_corrupt_compacted_store_is_rejected(void**) {
         files.Seed();
         { TDiskState state(files.Name, 1); state.InstallSnapshot(Image(1, 2, {"a"})); }
         damage(files);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
 
-void test_live_storage_failure_is_reported(void**) {
+TEST(PersistRecovery, live_storage_failure_is_reported) {
     TFiles files;
     files.Seed();
     TDiskState state(files.Name, 1);
     fs::resize_file(files.Path("entries"), 0);
     bool rejected = false;
     try { state.Get(1); } catch (const std::runtime_error&) { rejected = true; }
-    assert_true(rejected);
+    ASSERT_TRUE(rejected);
 }
-void test_live_invalid_log_term_is_reported(void**) {
+TEST(PersistRecovery, live_invalid_log_term_is_reported) {
     for (uint64_t term : {uint64_t(0), uint64_t(8)}) {
         TFiles files;
         files.Seed();
@@ -400,33 +398,8 @@ void test_live_invalid_log_term_is_reported(void**) {
         files.Overwrite("entries", sizeof(TMessage), term);
         bool rejected = false;
         try { state.Get(1); } catch (const std::runtime_error&) { rejected = true; }
-        assert_true(rejected);
+        ASSERT_TRUE(rejected);
     }
 }
 }
 
-int main() {
-    const CMUnitTest tests[] = {
-        cmocka_unit_test(test_truncated_metadata_is_not_reset),
-        cmocka_unit_test(test_oversized_metadata_is_rejected),
-        cmocka_unit_test(test_missing_storage_is_not_recreated),
-        cmocka_unit_test(test_short_index_is_rejected),
-        cmocka_unit_test(test_short_entry_is_rejected),
-        cmocka_unit_test(test_invalid_entry_header_is_rejected),
-        cmocka_unit_test(test_invalid_offsets_are_rejected),
-        cmocka_unit_test(test_invalid_term_is_rejected),
-        cmocka_unit_test(test_invalid_log_count_is_rejected),
-        cmocka_unit_test(test_truncate_updates_last_term_and_restarts),
-        cmocka_unit_test(test_live_storage_failure_is_reported),
-        cmocka_unit_test(test_zero_log_entry_terms_are_rejected_without_mutation),
-        cmocka_unit_test(test_log_terms_newer_than_current_term_are_rejected),
-        cmocka_unit_test(test_decreasing_log_terms_are_rejected),
-        cmocka_unit_test(test_equal_and_skipped_terms_and_full_width_current_term_recover),
-        cmocka_unit_test(test_invalid_terms_in_logically_removed_suffix_are_ignored),
-        cmocka_unit_test(test_live_invalid_log_term_is_reported),
-        cmocka_unit_test(test_compacted_log_and_image_survive_restart),
-        cmocka_unit_test(test_interrupted_snapshot_publication_recovers_one_side),
-        cmocka_unit_test(test_incomplete_or_corrupt_compacted_store_is_rejected),
-    };
-    return cmocka_run_group_tests(tests, nullptr, nullptr);
-}

@@ -79,7 +79,7 @@ Then link against miniraft.net which also brings in miniraft internally.
 ### Prerequisites
 - A C++20-compatible compiler
 - CMake (for building)
-- [Cmocka](https://cmocka.org/) (for unit tests only)
+- [GoogleTest](https://github.com/google/googletest) and pkg-config (for unit tests only)
 
 ### Building the Project
 1. Clone the repository:
@@ -100,6 +100,7 @@ Then link against miniraft.net which also brings in miniraft internally.
    cmake .
    make
    ```
+   Tests are not built by default; add `-DMINIRAFT_BUILD_TESTS=ON` to build them (needs GoogleTest and pkg-config).
 
 ### Running the Application
 

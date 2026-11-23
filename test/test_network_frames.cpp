@@ -1,11 +1,6 @@
 #include <miniraft/net/server.h>
 #include <algorithm>
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 
 namespace {
 // Immediate deterministic I/O: no sockets, sleeps, pollers or wall clock.
@@ -43,7 +38,10 @@ struct TStream {
 };
 TMessageHolder<TMessage> Read(TStream& stream) {
     auto task = TMessageReader(stream).Read();
-    assert_true(task.done());
+    EXPECT_TRUE(task.done());
+    if (!task.done()) {
+        throw std::logic_error("reader did not complete");
+    }
     return task.await_resume();
 }
 bool Rejected(TStream& stream) {
@@ -51,7 +49,7 @@ bool Rejected(TStream& stream) {
     return false;
 }
 
-void test_fragmented_header_and_body_are_read_exactly(void**) {
+TEST(NetworkFrames, fragmented_header_and_body_are_read_exactly) {
     TStream stream;
     stream.Chunk = 1;
     auto original = NewHoldedMessage(TRequestVoteRequest{.LastLogIndex = 7, .LastLogTerm = 2, .CandidateId = 1});
@@ -59,80 +57,80 @@ void test_fragmented_header_and_body_are_read_exactly(void**) {
     bool complete = false;
     try {
         auto received = Read(stream).Cast<TRequestVoteRequest>();
-        assert_int_equal(received->LastLogIndex, 7);
-        assert_int_equal(received->LastLogTerm, 2);
-        assert_int_equal(stream.Position, original->Len);
+        ASSERT_EQ(received->LastLogIndex, 7);
+        ASSERT_EQ(received->LastLogTerm, 2);
+        ASSERT_EQ(stream.Position, original->Len);
         complete = true;
     } catch (const std::runtime_error&) {}
-    assert_true(complete);
+    ASSERT_TRUE(complete);
 }
-void test_short_fixed_frame_is_rejected(void**) {
+TEST(NetworkFrames, short_fixed_frame_is_rejected) {
     TStream stream;
     stream.Add(uint32_t(EMessageType::REQUEST_VOTE_REQUEST), sizeof(TMessage));
-    assert_true(Rejected(stream));
+    ASSERT_TRUE(Rejected(stream));
 }
-void test_unknown_and_unimplemented_types_are_rejected(void**) {
+TEST(NetworkFrames, unknown_and_unimplemented_types_are_rejected) {
     for (auto type : {0u, 6u, 7u, 10u, UINT32_MAX}) {
         TStream stream;
         stream.Add(type, sizeof(TMessage));
-        assert_true(Rejected(stream));
+        ASSERT_TRUE(Rejected(stream));
     }
 }
-void test_append_entries_rejects_non_log_child(void**) {
+TEST(NetworkFrames, append_entries_rejects_non_log_child) {
     TStream stream;
     stream.Add(NewHoldedMessage(TAppendEntriesRequest{.Nentries = 1}));
     stream.Add(NewHoldedMessage<TCommandRequest>());
-    assert_true(Rejected(stream));
+    ASSERT_TRUE(Rejected(stream));
 }
-void test_append_entries_rejects_nested_append(void**) {
+TEST(NetworkFrames, append_entries_rejects_nested_append) {
     TStream stream;
     stream.Add(NewHoldedMessage(TAppendEntriesRequest{.Nentries = 1}));
     stream.Add(NewHoldedMessage<TAppendEntriesRequest>());
-    assert_true(Rejected(stream));
+    ASSERT_TRUE(Rejected(stream));
 }
-void test_oversized_frame_is_rejected_before_body_read(void**) {
+TEST(NetworkFrames, oversized_frame_is_rejected_before_body_read) {
     TStream stream;
     stream.Add(uint32_t(EMessageType::COMMAND_REQUEST), 16 * 1024 * 1024 + 1);
-    assert_true(Rejected(stream));
-    assert_true(stream.MaxRequested <= sizeof(TMessage));
+    ASSERT_TRUE(Rejected(stream));
+    ASSERT_TRUE(stream.MaxRequested <= sizeof(TMessage));
 }
-void test_all_truncated_headers_are_rejected(void**) {
+TEST(NetworkFrames, all_truncated_headers_are_rejected) {
     for (size_t size = 0; size < sizeof(TMessage); ++size) {
         TStream stream;
         stream.Add(uint32_t(EMessageType::COMMAND_REQUEST), sizeof(TCommandRequest));
         stream.Bytes.resize(size);
         stream.Chunk = 1;
-        assert_true(Rejected(stream));
+        ASSERT_TRUE(Rejected(stream));
     }
 }
-void test_invalid_lengths_are_rejected_before_body_read(void**) {
+TEST(NetworkFrames, invalid_lengths_are_rejected_before_body_read) {
     for (auto length : {0u, 1u, 7u, 8u, 15u, UINT32_MAX}) {
         TStream stream;
         stream.Add(uint32_t(EMessageType::COMMAND_REQUEST), length);
-        assert_true(Rejected(stream));
-        assert_int_equal(stream.Reads, 1);
+        ASSERT_TRUE(Rejected(stream));
+        ASSERT_EQ(stream.Reads, 1);
     }
     TStream stream;
     stream.Add(uint32_t(EMessageType::REQUEST_VOTE_REQUEST), sizeof(TRequestVoteRequest) + 1);
-    assert_true(Rejected(stream));
-    assert_int_equal(stream.Reads, 1);
+    ASSERT_TRUE(Rejected(stream));
+    ASSERT_EQ(stream.Reads, 1);
 }
-void test_all_truncated_bodies_are_rejected(void**) {
+TEST(NetworkFrames, all_truncated_bodies_are_rejected) {
     auto message = NewHoldedMessage<TRequestVoteRequest>();
     for (size_t size = sizeof(TMessage); size < message->Len; ++size) {
         TStream stream;
         stream.Add(message);
         stream.Bytes.resize(size);
         stream.Chunk = 3;
-        assert_true(Rejected(stream));
+        ASSERT_TRUE(Rejected(stream));
     }
 }
-void test_count_and_minimum_batch_budget_are_checked_before_children(void**) {
+TEST(NetworkFrames, count_and_minimum_batch_budget_are_checked_before_children) {
     for (auto count : {4097u, UINT32_MAX}) {
         TStream stream;
         stream.Add(NewHoldedMessage(TAppendEntriesRequest{.Nentries = count}));
-        assert_true(Rejected(stream));
-        assert_int_equal(stream.Reads, 2);
+        ASSERT_TRUE(Rejected(stream));
+        ASSERT_EQ(stream.Reads, 2);
     }
     TStream stream;
     stream.Add(NewHoldedMessage(TAppendEntriesRequest{.Nentries = 1}));
@@ -141,10 +139,10 @@ void test_count_and_minimum_batch_budget_are_checked_before_children(void**) {
     auto task = TMessageReader(stream, limits).Read();
     bool rejected = false;
     try { task.await_resume(); } catch (const TMessageError&) { rejected = true; }
-    assert_true(rejected);
-    assert_int_equal(stream.Reads, 2);
+    ASSERT_TRUE(rejected);
+    ASSERT_EQ(stream.Reads, 2);
 }
-void test_aggregate_budget_is_shared_between_entries(void**) {
+TEST(NetworkFrames, aggregate_budget_is_shared_between_entries) {
     for (bool enough : {false, true}) {
         TStream stream;
         stream.Add(NewHoldedMessage(TAppendEntriesRequest{.Nentries = 2}));
@@ -156,14 +154,14 @@ void test_aggregate_budget_is_shared_between_entries(void**) {
         bool rejected = false;
         try {
             auto message = task.await_resume();
-            assert_int_equal(message.PayloadSize, 2);
+            ASSERT_EQ(message.PayloadSize, 2);
         } catch (const TMessageError&) { rejected = true; }
-        assert_int_equal(rejected, !enough);
-        if (!enough) assert_int_equal(stream.Position,
+        ASSERT_EQ(rejected, !enough);
+        if (!enough) ASSERT_EQ(stream.Position,
             sizeof(TAppendEntriesRequest) + sizeof(TLogEntry) + 1 + sizeof(TMessage));
     }
 }
-void test_failed_reader_cannot_resume_at_another_frame(void**) {
+TEST(NetworkFrames, failed_reader_cannot_resume_at_another_frame) {
     TStream stream;
     stream.Add(10, sizeof(TMessage));
     stream.Add(NewHoldedMessage<TCommandRequest>());
@@ -172,11 +170,11 @@ void test_failed_reader_cannot_resume_at_another_frame(void**) {
         auto task = reader.Read();
         bool rejected = false;
         try { task.await_resume(); } catch (const TMessageError&) { rejected = true; }
-        assert_true(rejected);
-        assert_int_equal(stream.Position, sizeof(TMessage));
+        ASSERT_TRUE(rejected);
+        ASSERT_EQ(stream.Position, sizeof(TMessage));
     }
 }
-void test_writer_validates_entire_batch_before_first_byte(void**) {
+TEST(NetworkFrames, writer_validates_entire_batch_before_first_byte) {
     for (int invalid = 0; invalid < 7; ++invalid) {
         auto root = NewHoldedMessage(TAppendEntriesRequest{.Nentries = 1});
         root.InitPayload(1);
@@ -193,11 +191,11 @@ void test_writer_validates_entire_batch_before_first_byte(void**) {
         auto task = TMessageWriter(stream, limits).Write(root);
         bool rejected = false;
         try { task.await_resume(); } catch (const TMessageError&) { rejected = true; }
-        assert_true(rejected);
-        assert_true(stream.Output.empty());
+        ASSERT_TRUE(rejected);
+        ASSERT_TRUE(stream.Output.empty());
     }
 }
-void test_fragmented_roundtrip_keeps_consecutive_frame_boundaries(void**) {
+TEST(NetworkFrames, fragmented_roundtrip_keeps_consecutive_frame_boundaries) {
     auto root = NewHoldedMessage(TAppendEntriesRequest{.Nentries = 2});
     root.InitPayload(2);
     root.Payload[0] = NewHoldedMessage<TLogEntry>();
@@ -211,14 +209,14 @@ void test_fragmented_roundtrip_keeps_consecutive_frame_boundaries(void**) {
     command.await_resume();
     stream.Bytes = stream.Output;
     auto received = Read(stream);
-    assert_int_equal(received.PayloadSize, 2);
+    ASSERT_EQ(received.PayloadSize, 2);
     auto entry = received.Payload[1].Cast<TLogEntry>();
-    assert_memory_equal(entry->Data, "abc", 3);
+    ASSERT_EQ(0, memcmp(entry->Data, "abc", 3));
     auto next = Read(stream).Cast<TCommandRequest>();
-    assert_int_equal(next->Len, sizeof(TCommandRequest));
-    assert_int_equal(stream.Position, stream.Bytes.size());
+    ASSERT_EQ(next->Len, sizeof(TCommandRequest));
+    ASSERT_EQ(stream.Position, stream.Bytes.size());
 }
-void test_install_snapshot_carries_records_and_only_records(void**) {
+TEST(NetworkFrames, install_snapshot_carries_records_and_only_records) {
     auto root = NewHoldedMessage(TInstallSnapshotRequest{
         .LastIncludedIndex = 5, .LastIncludedTerm = 2, .Offset = 7, .Nentries = 2, .Done = 1});
     root.InitPayload(2);
@@ -230,35 +228,15 @@ void test_install_snapshot_carries_records_and_only_records(void**) {
     task.await_resume();
     stream.Bytes = stream.Output;
     auto received = Read(stream).Cast<TInstallSnapshotRequest>();
-    assert_int_equal(received->LastIncludedIndex, 5);
-    assert_int_equal(received->Offset, 7);
-    assert_int_equal(received->Done, 1);
-    assert_int_equal(received.PayloadSize, 2);
-    assert_memory_equal(received.Payload[1].Cast<TLogEntry>()->Data, "abc", 3);
+    ASSERT_EQ(received->LastIncludedIndex, 5);
+    ASSERT_EQ(received->Offset, 7);
+    ASSERT_EQ(received->Done, 1);
+    ASSERT_EQ(received.PayloadSize, 2);
+    ASSERT_EQ(0, memcmp(received.Payload[1].Cast<TLogEntry>()->Data, "abc", 3));
     TStream invalid;
     invalid.Add(NewHoldedMessage(TInstallSnapshotRequest{.Nentries = 1}));
     invalid.Add(NewHoldedMessage<TCommandRequest>());
-    assert_true(Rejected(invalid));
+    ASSERT_TRUE(Rejected(invalid));
 }
 }
 
-int main() {
-    const CMUnitTest tests[] = {
-        cmocka_unit_test(test_fragmented_header_and_body_are_read_exactly),
-        cmocka_unit_test(test_short_fixed_frame_is_rejected),
-        cmocka_unit_test(test_unknown_and_unimplemented_types_are_rejected),
-        cmocka_unit_test(test_append_entries_rejects_non_log_child),
-        cmocka_unit_test(test_append_entries_rejects_nested_append),
-        cmocka_unit_test(test_oversized_frame_is_rejected_before_body_read),
-        cmocka_unit_test(test_all_truncated_headers_are_rejected),
-        cmocka_unit_test(test_invalid_lengths_are_rejected_before_body_read),
-        cmocka_unit_test(test_all_truncated_bodies_are_rejected),
-        cmocka_unit_test(test_count_and_minimum_batch_budget_are_checked_before_children),
-        cmocka_unit_test(test_aggregate_budget_is_shared_between_entries),
-        cmocka_unit_test(test_failed_reader_cannot_resume_at_another_frame),
-        cmocka_unit_test(test_writer_validates_entire_batch_before_first_byte),
-        cmocka_unit_test(test_fragmented_roundtrip_keeps_consecutive_frame_boundaries),
-        cmocka_unit_test(test_install_snapshot_carries_records_and_only_records),
-    };
-    return cmocka_run_group_tests(tests, nullptr, nullptr);
-}

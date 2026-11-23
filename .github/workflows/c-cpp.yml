@@ -21,13 +21,13 @@ jobs:
     - name: apt-get update
       run: sudo apt-get update
     - name: Install packages
-      run: sudo apt-get install libcmocka-dev liburing-dev cmake ninja-build
+      run: sudo apt-get install libgtest-dev pkg-config liburing-dev cmake ninja-build
     - name: configure
       run: |        
         mkdir build 
         echo 'add_compile_options(-fsanitize=address)' > build/local.cmake
         echo 'add_link_options(-fsanitize=address)' >> build/local.cmake
-        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMINIRAFT_BUILD_TESTS=ON
     - name: make
       run: cmake --build build
     - name: test
