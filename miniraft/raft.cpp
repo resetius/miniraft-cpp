@@ -271,6 +271,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
         .SetLeaderId(message->LeaderId)
         .SetCommitIndex(commitIndex)
         .SetElectionDue(MakeElection(now));
+    VolatileState->LeaderSeen = now;
 
     Become(EState::FOLLOWER);
     Nodes[reply->Dst]->Send(std::move(reply));
@@ -341,6 +342,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
     (*VolatileState)
         .SetLeaderId(message->LeaderId)
         .SetElectionDue(MakeElection(now));
+    VolatileState->LeaderSeen = now;
     Become(EState::FOLLOWER);
 
     const auto index = message->LastIncludedIndex;
@@ -579,6 +581,12 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
     if (!ValidateRpc(message)) return;
     if (message.IsEx()) {
         auto messageEx = message.Cast<TMessageEx>();
+        // Ongaro's thesis, 4.2.3: while the leader is heard from, a vote request does not
+        // change the term, so a server that misses its heartbeats cannot depose it.
+        if (messageEx->Type == uint32_t(EMessageType::REQUEST_VOTE_REQUEST) && messageEx->Term > State->CurrentTerm &&
+            (StateName == EState::LEADER || now < VolatileState->LeaderSeen + TTimeout::Election)) {
+            return;
+        }
         if (messageEx->Term > State->CurrentTerm) {
             State->CurrentTerm = messageEx->Term;
             State->VotedFor = 0;
