@@ -1158,8 +1158,12 @@ void TRaft::Compact(TMessageHolder<TInstallSnapshotRequest> snapshot) {
         }
         ValidateMessageHeader(record->Type, record->Len);
     }
-    const auto term = State->LogTerm(index);
     const auto configuration = ConfigurationAt(index);
+    if (configuration.Voters.empty()) {
+        // A server that joins has no configuration at this index yet, and an image needs one.
+        return;
+    }
+    const auto term = State->LogTerm(index);
     auto image = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
         .LastIncludedIndex = index,
         .LastIncludedTerm = term,

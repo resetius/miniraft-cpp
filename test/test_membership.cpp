@@ -733,6 +733,27 @@ TEST(Membership, snapshot_holds_the_configuration_at_its_index) {
     ASSERT_EQ(TRaft(old, 1, {}).GetConfiguration(), (TConfiguration{.Voters = {1}}));
 }
 
+TEST(Membership, joiner_does_not_compact_before_it_has_a_configuration) {
+    TCluster cluster(4, TConfiguration{.Voters = {1, 2, 3}});
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
+    cluster.Write(1, 3);
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    ASSERT_NE(cluster[1].AddLearner(4), 0);
+    // The entries before the one that adds node 4 come first.
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return cluster.Commit(4) > 0; }));
+    ASSERT_EQ(cluster[4].GetConfiguration(), TConfiguration{});
+    ASSERT_NO_FATAL_FAILURE(cluster.Compact(4));
+    ASSERT_EQ(cluster[4].GetState()->SnapshotIndex, 0);
+    cluster.Restart(4);
+
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    ASSERT_NO_FATAL_FAILURE(cluster.Compact(4));
+    const auto snapshot = cluster[4].GetState()->SnapshotIndex;
+    ASSERT_GT(snapshot, 0);
+    cluster.Restart(4);
+    ASSERT_EQ(cluster[4].GetConfiguration(), (TConfiguration{.Index = snapshot, .Voters = {1, 2, 3}, .Learners = {4}}));
+}
+
 TEST(Membership, configuration_changes_are_checked) {
     TCluster cluster(3);
     ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
