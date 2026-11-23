@@ -107,7 +107,24 @@ struct TPlainRsm : IRsm {
 
 struct TRefusingState : TCheckedState {
     void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest>) override {
-        throw std::runtime_error("No space left");
+        throw std::logic_error("Snapshot refused");
+    }
+};
+
+// Fails once, before taking the image or after it, like a failed metadata write.
+struct TFailingState : TCheckedState {
+    bool AfterInstall = false;
+    bool Failed = false;
+    void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest> snapshot) override {
+        if (!AfterInstall && !Failed) {
+            Failed = true;
+            throw std::runtime_error("No space left");
+        }
+        TState::InstallSnapshot(snapshot);
+        if (!Failed) {
+            Failed = true;
+            throw std::runtime_error("Cannot write Raft metadata");
+        }
     }
 };
 
@@ -548,6 +565,31 @@ void test_refused_image_is_not_sent_again(void**) {
     assert_int_equal(chunks, 2 * sent);
 }
 
+void test_storage_failure_reaches_the_embedder_and_is_retried(void**) {
+    for (bool afterInstall : {false, true}) {
+        TCluster cluster(3);
+        auto state = std::make_shared<TFailingState>();
+        state->AfterInstall = afterInstall;
+        cluster.Start(3, state);
+        cluster.Lag();
+        int chunks = 0;
+        cluster.Drop = [&](const auto& m) {
+            chunks += IsType(m, EMessageType::INSTALL_SNAPSHOT_REQUEST);
+            return false;
+        };
+        int reported = 0;
+        for (int i = 0; i < 40; ++i) {
+            try { cluster.Step(); } catch (const std::runtime_error&) { ++reported; }
+        }
+        // Only the last chunk comes again: it installs the kept image or finds it installed.
+        assert_int_equal(reported, 1);
+        assert_int_equal(chunks, 4);
+        assert_int_equal(cluster[3].State->SnapshotIndex, cluster[1].State->SnapshotIndex);
+        assert_int_equal(cluster[3].Rsm->Restores, 1);
+        cluster.AssertCaughtUp(1, 3);
+    }
+}
+
 void test_compaction_during_a_transfer_keeps_its_image(void**) {
     TCluster cluster(3);
     cluster.Lag();
@@ -616,6 +658,7 @@ int main() {
         cmocka_unit_test(test_delayed_reply_after_retries_advances_the_transfer),
         cmocka_unit_test(test_leader_change_in_the_middle_of_a_transfer),
         cmocka_unit_test(test_refused_image_is_not_sent_again),
+        cmocka_unit_test(test_storage_failure_reaches_the_embedder_and_is_retried),
         cmocka_unit_test(test_compaction_during_a_transfer_keeps_its_image),
         cmocka_unit_test(test_covered_and_contradicting_images),
     };

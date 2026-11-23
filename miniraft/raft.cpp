@@ -389,15 +389,26 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         snapshot.InitPayload(records.size());
         std::copy(records.begin(), records.end(), snapshot.Payload.get());
     }
-    incoming = {};
-    records.clear();
     try {
         State->InstallSnapshot(snapshot);
-    } catch (const std::exception&) {
-        // A storage that cannot take the image refuses it: the leader stops sending it.
+    } catch (const std::logic_error&) {
+        // The storage refuses the image: the leader stops sending it.
+        incoming = {};
+        records.clear();
         reply(false, 0, 0);
         return;
+    } catch (...) {
+        // A storage failure goes to the embedder. The leader resends the last chunk:
+        // then the kept image is installed again, or acknowledged if the storage has it.
+        if (State->SnapshotIndex >= index) {
+            incoming = {};
+            records.clear();
+            VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, State->SnapshotIndex);
+        }
+        throw;
     }
+    incoming = {};
+    records.clear();
     VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
     reply(true, index, 0);
 }
