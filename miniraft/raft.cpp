@@ -328,13 +328,13 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
 }
 
 void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotRequest> message) {
-    auto reply = [&](bool success, uint64_t matchIndex, uint64_t offset) {
+    auto reply = [&](uint64_t matchIndex, uint64_t offset) {
         Nodes[message->Src]->Send(NewHoldedMessage(
             TMessageEx {.Src = Id, .Dst = message->Src, .Term = State->CurrentTerm, .Seqno = message->Seqno},
-            TInstallSnapshotResponse {.MatchIndex = matchIndex, .Offset = offset, .Success = success}));
+            TInstallSnapshotResponse {.MatchIndex = matchIndex, .Offset = offset}));
     };
     if (message->Term < State->CurrentTerm) {
-        reply(false, 0, 0);
+        reply(0, 0);
         return;
     }
 
@@ -352,7 +352,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         incoming = {};
         records.clear();
         VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
-        reply(true, index, 0);
+        reply(index, 0);
         return;
     }
 
@@ -361,7 +361,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
     if (!same) {
         // Another image starts with its first chunk; the leader restarts from it.
         if (message->Offset) {
-            reply(true, 0, 0);
+            reply(0, 0);
             return;
         }
         incoming = message;
@@ -374,7 +374,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         }
     }
     if (!message->Done || records.size() != message->Offset + message.PayloadSize) {
-        reply(true, 0, records.size());
+        reply(0, records.size());
         return;
     }
 
@@ -391,14 +391,8 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
     }
     try {
         State->InstallSnapshot(snapshot);
-    } catch (const std::logic_error&) {
-        // The storage refuses the image: the leader stops sending it.
-        incoming = {};
-        records.clear();
-        reply(false, 0, 0);
-        return;
     } catch (...) {
-        // A storage failure goes to the embedder. The leader resends the last chunk:
+        // The failure goes to the embedder. The leader resends the last chunk:
         // then the kept image is installed again, or acknowledged if the storage has it.
         if (State->SnapshotIndex >= index) {
             incoming = {};
@@ -410,7 +404,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
     incoming = {};
     records.clear();
     VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
-    reply(true, index, 0);
+    reply(index, 0);
 }
 
 void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message) {
@@ -430,10 +424,7 @@ void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message) 
     }
     transfer->second.Seqno = 0;
     VolatileState->RpcDue[nodeId] = ITimeSource::Time{};
-    if (!message->Success) {
-        VolatileState->RejectedSnapshot[nodeId] = index;
-        VolatileState->SnapshotTransfers.erase(transfer);
-    } else if (message->MatchIndex) {
+    if (message->MatchIndex) {
         VolatileState->SnapshotTransfers.erase(transfer);
         // Not a read acknowledgement: AppendEntries confirms reads.
         auto matchIndex = std::max(VolatileState->MatchIndex[nodeId], index);
@@ -640,7 +631,7 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
     }
     case EMessageType::INSTALL_SNAPSHOT_RESPONSE: {
         auto reply = message.Cast<TInstallSnapshotResponse>();
-        return reply->Success <= 1 && reply->MatchIndex <= State->LastLogIndex;
+        return reply->MatchIndex <= State->LastLogIndex;
     }
     case EMessageType::INSTALL_SNAPSHOT_REQUEST: {
         auto snapshot = message.Cast<TInstallSnapshotRequest>();
@@ -696,10 +687,7 @@ void TRaft::CandidateTimeout(ITimeSource::Time now) {
 void TRaft::LeaderTimeout(ITimeSource::Time now) {
     for (auto& [id, node] : Nodes) {
         const auto nextIndex = VolatileState->NextIndex[id];
-        // A peer behind the snapshot gets it, unless it has refused this image;
-        // then it only gets heartbeats.
-        const bool install = nextIndex <= State->SnapshotIndex &&
-            VolatileState->RejectedSnapshot[id] != State->SnapshotIndex;
+        const bool install = nextIndex <= State->SnapshotIndex;
         const bool behind = nextIndex <= State->LastLogIndex && (install || nextIndex > State->SnapshotIndex);
         if (VolatileState->HeartbeatDue[id] <= now
             || (behind && VolatileState->RpcDue[id] <= now))
