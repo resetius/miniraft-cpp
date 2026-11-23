@@ -23,6 +23,14 @@ static uint32_t rand_(uint32_t* seed) {
     return *seed;
 }
 
+TConfiguration AllVoters(int node, const TNodeDict& nodes) {
+    TConfiguration configuration{.Voters = {uint32_t(node)}};
+    for (const auto& [id, _] : nodes) {
+        configuration.Voters.insert(id);
+    }
+    return configuration;
+}
+
 } // namespace
 
 void TDummyRsm::Validate(TMessageHolder<TCommandRequest> message) const {
@@ -88,21 +96,21 @@ TVolatileState& TVolatileState::Vote(uint32_t nodeId)
     return *this;
 }
 
-TVolatileState& TVolatileState::CommitAdvance(int nservers, const IState& state)
+TVolatileState& TVolatileState::CommitAdvance(const std::set<uint32_t>& voters, uint32_t leaderId, const IState& state)
 {
-    auto lastIndex = state.LastLogIndex;
-    Indices.clear(); Indices.reserve(nservers);
-    for (auto [_, index] : MatchIndex) {
-        Indices.push_back(index);
-    }
-    Indices.push_back(lastIndex);
-    while (Indices.size() < nservers) {
-        Indices.push_back(0);
+    Indices.clear(); Indices.reserve(voters.size());
+    for (auto id : voters) {
+        if (id == leaderId) {
+            Indices.push_back(state.LastLogIndex);
+        } else {
+            auto match = MatchIndex.find(id);
+            Indices.push_back(match == MatchIndex.end() ? 0 : match->second);
+        }
     }
     std::sort(Indices.begin(), Indices.end());
     // Ascending order: a strict majority must have replicated this index.
     // For even cluster sizes, the upper median would accept only half.
-    auto commitIndex = std::max(CommitIndex, Indices[(nservers - 1) / 2]);
+    auto commitIndex = std::max(CommitIndex, Indices[(Indices.size() - 1) / 2]);
     if (state.LogTerm(commitIndex) == state.CurrentTerm) {
         CommitIndex = commitIndex;
     }
@@ -156,11 +164,13 @@ TVolatileState& TVolatileState::SetCommitIndex(uint64_t index)
 }
 
 TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
+    : TRaft(std::move(state), node, nodes, AllVoters(node, nodes))
+{ }
+
+TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, TConfiguration configuration)
     : Id(node)
     , Nodes(nodes)
-    , MinVotes((nodes.size()+2+nodes.size()%2)/2)
-    , Npeers(nodes.size())
-    , Nservers(nodes.size()+1)
+    , Configuration(std::move(configuration))
     , State(std::move(state))
     , VolatileState(std::make_unique<TVolatileState>())
     , StateName(EState::FOLLOWER)
@@ -170,6 +180,21 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
         if (id == 0 || id == Id || !peer)
             throw std::invalid_argument("Invalid Raft peer configuration");
         VolatileState->NextIndex[id] = 1;
+    }
+    if (Configuration.Voters.empty()) {
+        throw std::invalid_argument("Raft configuration requires a voter");
+    }
+    for (auto id : Configuration.Learners) {
+        if (Configuration.Voters.contains(id)) {
+            throw std::invalid_argument("A Raft learner cannot be a voter");
+        }
+    }
+    for (const auto* ids : {&Configuration.Voters, &Configuration.Learners}) {
+        for (auto id : *ids) {
+            if (id != Id && !Nodes.contains(id)) {
+                throw std::invalid_argument("Invalid Raft peer configuration");
+            }
+        }
     }
     // A snapshot holds only committed entries.
     VolatileState->CommitIndex = State->SnapshotIndex;
@@ -277,7 +302,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
     Nodes[reply->Dst]->Send(std::move(reply));
 }
 
-void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
+void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesResponse> message) {
     if (message->Term != State->CurrentTerm) {
         return;
     }
@@ -309,7 +334,8 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
-            .CommitAdvance(Nservers, *State);
+            .CommitAdvance(Configuration.Voters, Id, *State);
+        CatchUp(now, nodeId);
     } else {
         if (rpc.PrevIndex <= VolatileState->MatchIndex[nodeId]) {
             // The follower lost an entry it acknowledged in this term, so it
@@ -410,7 +436,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
     reply(index, 0);
 }
 
-void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message) {
+void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotResponse> message) {
     if (message->Term != State->CurrentTerm) {
         return;
     }
@@ -437,11 +463,24 @@ void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message) 
             .SetNextIndex(nodeId, matchIndex+1)
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
-            .CommitAdvance(Nservers, *State);
+            .CommitAdvance(Configuration.Voters, Id, *State);
+        CatchUp(now, nodeId);
     } else {
         // The follower cannot hold records it was not sent.
         transfer->second.Offset = std::min(message->Offset, transfer->second.End);
     }
+}
+
+void TRaft::CatchUp(ITimeSource::Time now, uint32_t nodeId) {
+    auto round = VolatileState->CatchUp.find(nodeId);
+    if (round == VolatileState->CatchUp.end() || VolatileState->MatchIndex[nodeId] < round->second.Target) {
+        return;
+    }
+    round->second = {
+        .Target = State->LastLogIndex,
+        .Start = now,
+        .CaughtUp = now - round->second.Start < TTimeout::Election,
+    };
 }
 
 TMessageHolder<TRequestVoteRequest> TRaft::CreateVote(uint32_t nodeId) {
@@ -561,9 +600,9 @@ void TRaft::Candidate(ITimeSource::Time now, TMessageHolder<TMessage> message) {
 
 void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     if (auto maybeAppendEntries = message.Maybe<TAppendEntriesResponse>()) {
-        OnAppendEntries(std::move(maybeAppendEntries.Cast()));
+        OnAppendEntries(now, std::move(maybeAppendEntries.Cast()));
     } else if (auto maybeInstallSnapshot = message.Maybe<TInstallSnapshotResponse>()) {
-        OnInstallSnapshot(std::move(maybeInstallSnapshot.Cast()));
+        OnInstallSnapshot(now, std::move(maybeInstallSnapshot.Cast()));
     } else if (auto maybeVoteRequest = message.Maybe<TRequestVoteRequest>()) {
         OnRequestVote(now, std::move(maybeVoteRequest.Cast()));
     } else if (auto maybeAppendEntries = message.Maybe<TAppendEntriesRequest>()) {
@@ -686,10 +725,10 @@ void TRaft::FollowerTimeout(ITimeSource::Time now) {
 }
 
 void TRaft::CandidateTimeout(ITimeSource::Time now) {
-    for (auto& [id, node] : Nodes) {
+    for (auto id : Peers(false)) {
         if (VolatileState->RpcDue[id] <= now) {
             VolatileState->RpcDue[id] = now + TTimeout::Rpc;
-            node->Send(CreateVote(id));
+            Nodes[id]->Send(CreateVote(id));
         }
     }
 }
@@ -709,14 +748,29 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
     if (!due) {
         due = now + TTimeout::Election;
     } else if (*due <= now) {
-        if (int(VolatileState->Replied.size()) + 1 < MinVotes) {
+        // Learners do not count.
+        size_t heard = Configuration.Voters.contains(Id);
+        for (auto id : VolatileState->Replied) {
+            heard += Configuration.Voters.contains(id);
+        }
+        if (heard <= Configuration.Voters.size() / 2) {
             StepDown(now);
             return;
         }
         VolatileState->Replied.clear();
         due = now + TTimeout::Election;
     }
-    for (auto& [id, node] : Nodes) {
+    for (auto id : Configuration.Learners) {
+        auto [round, _] = VolatileState->CatchUp.try_emplace(id, TVolatileState::TCatchUp {
+            .Target = State->LastLogIndex,
+            .Start = now,
+        });
+        if (now - round->second.Start >= TTimeout::Election) {
+            round->second.CaughtUp = false;
+        }
+    }
+    for (auto id : Peers(true)) {
+        auto& node = Nodes[id];
         const auto nextIndex = VolatileState->NextIndex[id];
         const bool install = nextIndex <= State->SnapshotIndex;
         const bool behind = nextIndex <= State->LastLogIndex && (install || nextIndex > State->SnapshotIndex);
@@ -733,8 +787,8 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
         }
     }
 
-    if (Nservers == 1) {
-        VolatileState->CommitAdvance(Nservers, *State);
+    if (Configuration.Voters.size() == 1) {
+        VolatileState->CommitAdvance(Configuration.Voters, Id, *State);
     }
 }
 
@@ -743,10 +797,10 @@ uint64_t TRaft::ApproveRead() {
     // Reserve a unique barrier even for a single-node cluster. Every request
     // emitted below is newer than this barrier; old replies cannot satisfy it.
     const uint64_t seqno = NextSeqno();
-    for (auto& [id, node] : Nodes) {
+    for (auto id : Peers(false)) {
         // A peer behind the snapshot cannot confirm a read.
         if (VolatileState->NextIndex[id] > State->SnapshotIndex) {
-            node->Send(CreateAppendEntries(id));
+            Nodes[id]->Send(CreateAppendEntries(id));
         }
     }
     return seqno;
@@ -755,14 +809,18 @@ uint64_t TRaft::ApproveRead() {
 uint64_t TRaft::CommitSeqno() const {
     if (StateName != EState::LEADER || VolatileState->CommitIndex == 0 ||
         State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm) return 0;
-    std::vector<uint64_t> acknowledgements{Seqno - 1}; // leader's own confirmation
-    acknowledgements.reserve(Nservers);
-    for (const auto& [id, _] : Nodes) {
-        auto it = VolatileState->ReadAckSeqno.find(id);
-        acknowledgements.push_back(it == VolatileState->ReadAckSeqno.end() ? 0 : it->second);
+    std::vector<uint64_t> acknowledgements;
+    acknowledgements.reserve(Configuration.Voters.size());
+    for (auto id : Configuration.Voters) {
+        if (id == Id) {
+            acknowledgements.push_back(Seqno - 1); // leader's own confirmation
+        } else {
+            auto it = VolatileState->ReadAckSeqno.find(id);
+            acknowledgements.push_back(it == VolatileState->ReadAckSeqno.end() ? 0 : it->second);
+        }
     }
     std::sort(acknowledgements.begin(), acknowledgements.end());
-    return acknowledgements[(Nservers - 1) / 2];
+    return acknowledgements[(acknowledgements.size() - 1) / 2];
 }
 
 uint64_t TRaft::NextSeqno() {
@@ -772,6 +830,10 @@ uint64_t TRaft::NextSeqno() {
 
 void TRaft::ProcessTimeout(ITimeSource::Time now) {
     if (StateName == EState::CANDIDATE || StateName == EState::FOLLOWER) {
+        if (VolatileState->ElectionDue <= now && !Configuration.Voters.contains(Id)) {
+            // A learner never campaigns.
+            VolatileState->ElectionDue = MakeElection(now);
+        }
         if (VolatileState->ElectionDue <= now) {
             if (State->CurrentTerm == UINT64_MAX) throw std::overflow_error("Raft term exhausted");
             auto nextVolatileState = std::make_unique<TVolatileState>();
@@ -789,12 +851,15 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
     }
 
     if (StateName == EState::CANDIDATE) {
-        int nvotes = VolatileState->Votes.size()+1;
-        if (nvotes >= MinVotes) {
+        size_t votes = 1;
+        for (auto id : VolatileState->Votes) {
+            votes += Configuration.Voters.contains(id);
+        }
+        if (votes > Configuration.Voters.size() / 2) {
             auto value = State->LastLogIndex+1;
             decltype(VolatileState->NextIndex) nextIndex;
             decltype(VolatileState->RpcDue) rpcDue;
-            for (auto [id, _] : Nodes) {
+            for (auto id : Peers(true)) {
                 nextIndex.emplace(id, value);
                 rpcDue.emplace(id, ITimeSource::Max);
             }
@@ -881,6 +946,26 @@ void TRaft::Compact(TMessageHolder<TInstallSnapshotRequest> snapshot) {
 
 uint32_t TRaft::GetLeaderId() const {
     return VolatileState->LeaderId;
+}
+
+const TConfiguration& TRaft::GetConfiguration() const {
+    return Configuration;
+}
+
+std::vector<uint32_t> TRaft::Peers(bool learners) const {
+    std::vector<uint32_t> peers;
+    auto add = [&](const std::set<uint32_t>& ids) {
+        for (auto id : ids) {
+            if (id != Id && Nodes.contains(id)) {
+                peers.push_back(id);
+            }
+        }
+    };
+    add(Configuration.Voters);
+    if (learners) {
+        add(Configuration.Learners);
+    }
+    return peers;
 }
 
 uint64_t TRaft::GetLastIndex() const {

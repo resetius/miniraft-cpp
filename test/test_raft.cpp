@@ -606,9 +606,9 @@ TEST(Raft, commit_advance) {
         .MatchIndex = {{1, 1}}
     };
 
-    auto s1 = TVolatileState(s).CommitAdvance(3, state);
+    auto s1 = TVolatileState(s).CommitAdvance({1, 2, 3}, 3, state);
     ASSERT_EQ(s1.CommitIndex, 1);
-    s1 = TVolatileState(s).CommitAdvance(5, state);
+    s1 = TVolatileState(s).CommitAdvance({1, 2, 3, 4, 5}, 5, state);
     ASSERT_EQ(s1.CommitIndex, 0);
 
     s = TVolatileState {
@@ -618,9 +618,9 @@ TEST(Raft, commit_advance) {
     for (auto& entry : add) {
         state.Append(entry);
     }
-    s1 = TVolatileState(s).CommitAdvance(3, state);
+    s1 = TVolatileState(s).CommitAdvance({1, 2, 3}, 3, state);
     ASSERT_EQ(s1.CommitIndex, 2);
-    s1 = TVolatileState(s).CommitAdvance(5, state);
+    s1 = TVolatileState(s).CommitAdvance({1, 2, 3, 4, 5}, 5, state);
     ASSERT_EQ(s1.CommitIndex, 1);
 }
 
@@ -633,7 +633,7 @@ TEST(Raft, commit_advance_wrong_term) {
     auto s = TVolatileState {
         .MatchIndex = {{1, 1}, {2, 2}}
     };
-    auto s1 = TVolatileState(s).CommitAdvance(3, state);
+    auto s1 = TVolatileState(s).CommitAdvance({1, 2, 3}, 3, state);
     ASSERT_EQ(s1.CommitIndex, 0);
 }
 

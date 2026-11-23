@@ -653,8 +653,10 @@ TEST(Correctness, majority_all_cluster_sizes) {
         state.Append(NewHoldedMessage<TLogEntry>());
         for (int copies = 1; copies <= count; ++copies) {
             TVolatileState v;
+            std::set<uint32_t> voters;
+            for (int id = 1; id <= count; ++id) voters.insert(id);
             for (int peer = 1; peer < copies; ++peer) v.MatchIndex[peer + 1] = 1;
-            v.CommitAdvance(count, state);
+            v.CommitAdvance(voters, 1, state);
             ASSERT_EQ(v.CommitIndex, copies >= count / 2 + 1 ? 1 : 0);
         }
     }
