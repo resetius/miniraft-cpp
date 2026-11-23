@@ -1,5 +1,8 @@
 #include "../examples/kv.h"
 #include "../examples/kv_messages.h"
+#include <algorithm>
+#include <string>
+#include <vector>
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
@@ -52,6 +55,86 @@ void test_valid_kv_payload_roundtrip(void**) {
     command->ValSize = 0;
     kv.Write(kv.Prepare(command), 2);
     assert_int_equal(kv.Read(read, 2)->Len, sizeof(TCommandResponse));
+}
+TMessageHolder<TWriteKv> SetKv(const std::string& key, const std::string& value) {
+    auto command = NewHoldedMessage<TWriteKv>(sizeof(TWriteKv) + key.size() + value.size());
+    command->Flags = TCommandRequest::EWrite;
+    command->KeySize = key.size();
+    command->ValSize = value.size();
+    memcpy(command->TKvEntry::Data, key.data(), key.size());
+    memcpy(command->TKvEntry::Data + key.size(), value.data(), value.size());
+    return command;
+}
+std::string ListKv(TKv& kv) {
+    auto reply = kv.Read(NewHoldedMessage<TReadKv>(), 0).Cast<TCommandResponse>();
+    std::string text(reply->Data, reply->Len - sizeof(TCommandResponse));
+    std::vector<std::string> lines;
+    for (size_t start = 0, end; start < text.size(); start = end + 1) {
+        end = text.find('\n', start);
+        lines.push_back(text.substr(start, end - start));
+    }
+    std::sort(lines.begin(), lines.end());
+    std::string sorted;
+    for (const auto& line : lines) sorted += line + "\n";
+    return sorted;
+}
+void test_kv_snapshot_roundtrip(void**) {
+    TKv kv;
+    uint64_t index = 0;
+    for (auto [key, value] : std::initializer_list<std::pair<std::string, std::string>>{
+             {"alpha", "1"}, {"long-key", std::string(1000, 'v')}, {"gone", "x"}, {"alpha", "2"}, {"gone", ""}}) {
+        kv.Write(kv.Prepare(SetKv(key, value)), ++index);
+    }
+    auto snapshot = kv.Snapshot();
+    assert_int_equal(snapshot->LastIncludedIndex, index);
+    assert_int_equal(snapshot.PayloadSize, 2);
+    TKv restored;
+    restored.Write(kv.Prepare(SetKv("stale", "y")), 1);
+    restored.Apply(snapshot);
+    assert_string_equal(ListKv(restored).c_str(), ListKv(kv).c_str());
+    assert_string_equal(ListKv(restored).c_str(), ("alpha = 2\nlong-key = " + std::string(1000, 'v') + "\n").c_str());
+}
+void test_kv_invalid_snapshot_leaves_state_unchanged(void**) {
+    TKv kv;
+    kv.Write(kv.Prepare(SetKv("keep", "me")), 1);
+    const auto before = ListKv(kv);
+    for (uint16_t keySize : {uint16_t(3), uint16_t(UINT16_MAX)}) {
+        auto snapshot = kv.Snapshot();
+        auto bad = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + sizeof(TKvEntry) + 2);
+        const TKvEntry header{.KeySize = keySize, .ValSize = 0};
+        memcpy(bad->Data, &header, sizeof(header));
+        snapshot.InitPayload(2);
+        snapshot.Payload[0] = kv.Snapshot().Payload[0];
+        snapshot.Payload[1] = bad;
+        Reject([&] { kv.Apply(snapshot); });
+        assert_string_equal(ListKv(kv).c_str(), before.c_str());
+    }
+    auto snapshot = kv.Snapshot();
+    snapshot.Payload[0] = NewHoldedMessage<TLogEntry>();
+    Reject([&] { kv.Apply(snapshot); });
+    assert_string_equal(ListKv(kv).c_str(), before.c_str());
+    // A key without a value: Write would delete it, so the image cannot hold it.
+    auto empty = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + sizeof(TKvEntry) + 3);
+    const TKvEntry header{.KeySize = 3, .ValSize = 0};
+    memcpy(empty->Data, &header, sizeof(header));
+    memcpy(empty->Data + sizeof(header), "key", 3);
+    snapshot.Payload[0] = empty;
+    Reject([&] { kv.Apply(snapshot); });
+    assert_string_equal(ListKv(kv).c_str(), before.c_str());
+}
+void test_kv_restores_from_a_stored_snapshot(void**) {
+    TKv source;
+    source.Write(source.Prepare(SetKv("key", "value")), 3);
+    auto image = source.Snapshot();
+    image->LastIncludedTerm = 1;
+    auto state = std::make_shared<TState>();
+    state->InstallSnapshot(image);
+    auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+    auto kv = std::make_shared<TKv>();
+    TRequestProcessor processor(raft, kv, {});
+    processor.ProcessCommitted();
+    assert_int_equal(kv->LastAppliedIndex, 3);
+    assert_string_equal(ListKv(*kv).c_str(), "key = value\n");
 }
 void test_dummy_read_rejects_missing_index(void**) {
     TDummyRsm rsm;
@@ -151,6 +234,9 @@ int main() {
         cmocka_unit_test(test_kv_read_rejects_short_key),
         cmocka_unit_test(test_kv_apply_rejects_before_state_mutation),
         cmocka_unit_test(test_valid_kv_payload_roundtrip),
+        cmocka_unit_test(test_kv_snapshot_roundtrip),
+        cmocka_unit_test(test_kv_invalid_snapshot_leaves_state_unchanged),
+        cmocka_unit_test(test_kv_restores_from_a_stored_snapshot),
         cmocka_unit_test(test_dummy_read_rejects_missing_index),
         cmocka_unit_test(test_dummy_read_copies_only_log_data),
         cmocka_unit_test(test_invalid_request_is_rejected_before_queue_or_forward),

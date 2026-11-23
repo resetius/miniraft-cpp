@@ -11,12 +11,9 @@ public:
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
-    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override {
-        throw std::runtime_error("Not implemented");
-    }
-    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override {
-        throw std::runtime_error("Not implemented");
-    }
+    // One record per key, laid out as a log entry that sets it.
+    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override;
+    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override;
 
 private:
     std::unordered_map<std::string, std::string> H;

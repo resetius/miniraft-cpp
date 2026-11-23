@@ -1,3 +1,4 @@
+#include <charconv>
 #include <string_view>
 
 #include <miniraft/net/server.h>
@@ -93,8 +94,25 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket, uint32_t flags) {
     co_return;
 }
 
+// The embedder decides when to compact: here after every `every` applied entries.
+template<typename TPoller>
+NNet::TVoidTask Compact(TPoller& poller, std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, uint64_t every) {
+    while (true) {
+        co_await poller.Sleep(std::chrono::milliseconds(1000));
+        if (rsm->LastAppliedIndex < raft->GetState()->SnapshotIndex + every) {
+            continue;
+        }
+        try {
+            raft->Compact(rsm->Snapshot());
+        } catch (const std::exception& ex) {
+            std::cerr << "Compaction failed: " << ex.what() << "\n";
+        }
+    }
+    co_return;
+}
+
 void usage(const char* prog) {
-    std::cerr << prog << "--client|--server --id myid --node ip:port:id [--node ip:port:id ...] [--persist] [--stale] [--consistent]" << "\n";
+    std::cerr << prog << "--client|--server --id myid --node ip:port:id [--node ip:port:id ...] [--persist] [--compact entries] [--stale] [--consistent]" << "\n";
     exit(0);
 }
 
@@ -106,6 +124,7 @@ int main(int argc, char** argv) {
     uint32_t id = 0;
     bool server = false;
     bool persist = false;
+    uint64_t compact = 0;
     uint32_t flags = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--server")) {
@@ -117,6 +136,12 @@ int main(int argc, char** argv) {
             id = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--persist")) {
             persist = true;
+        } else if (!strcmp(argv[i], "--compact") && i < argc - 1) {
+            const std::string_view value(argv[++i]);
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), compact);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+                usage(argv[0]);
+            }
         } else if (!strcmp(argv[i], "--stale")) {
             flags |= TCommandRequest::EStale;
         } else if (!strcmp(argv[i], "--consistent")) {
@@ -161,6 +186,9 @@ int main(int argc, char** argv) {
         socket.Listen();
         TRaftServer server(loop.Poller(), std::move(socket), raft, rsm, nodes, timeSource);
         server.Serve();
+        if (compact) {
+            Compact(loop.Poller(), raft, rsm, compact);
+        }
         loop.Loop();
     } else {
         NNet::TAddress addr{hosts[0].Address, hosts[0].Port};
