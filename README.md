@@ -130,6 +130,8 @@ To start the KV store servers, use:
 ./kv --server --id 2 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
 ./kv --server --id 3 --node 127.0.0.1:8001:1 --node 127.0.0.1:8002:2 --node 127.0.0.1:8003:3
 ```
+With `--compact N` a server compacts its log after every N applied entries; a server
+that falls behind the compacted log receives a snapshot of the store from the leader.
 
 #### Client Mode
 
