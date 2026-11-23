@@ -484,6 +484,59 @@ void test_sql_invalid_snapshot_leaves_database_unchanged(void**) {
     garbage.Payload[0] = record;
     check(garbage);
 }
+void test_sql_snapshot_after_an_election_stub_installs_and_restarts(void**) {
+    TDatabase file;
+    const auto logPath = file.Path + "-raft";
+    {
+        auto state = std::make_shared<TDiskState>(logPath, 1);
+        auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+        auto sql = std::make_shared<TSql>(file.Path, 1);
+        TRequestProcessor processor(raft, sql, {});
+        auto now = ITimeSource::Time{};
+        raft->ProcessTimeout(now);
+        for (const auto query : {"CREATE TABLE t (value TEXT)", "INSERT INTO t VALUES ('once')"}) {
+            auto command = Query(query);
+            command->Flags = TCommandRequest::EWrite;
+            processor.OnCommandRequest(command, {});
+            now += std::chrono::milliseconds(500);
+            raft->ProcessTimeout(now);
+            processor.ProcessCommitted();
+        }
+        assert_int_equal(sql->LastAppliedIndex, 3);
+    }
+    TMessageHolder<TInstallSnapshotRequest> image;
+    {
+        // After a restart and an election the stub at 4 is applied without a write.
+        auto state = std::make_shared<TDiskState>(logPath, 1);
+        auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+        auto sql = std::make_shared<TSql>(file.Path, 1);
+        TRequestProcessor processor(raft, sql, {});
+        raft->ProcessTimeout(ITimeSource::Time{});
+        processor.ProcessCommitted();
+        assert_int_equal(sql->LastAppliedIndex, 4);
+        raft->Compact(sql->Snapshot());
+        assert_int_equal(state->SnapshotIndex, 3);
+        image = state->GetSnapshot();
+    }
+    {
+        // A lagging follower installs the image.
+        auto state = std::make_shared<TState>();
+        state->InstallSnapshot(image);
+        auto follower = std::make_shared<TSql>(":memory:", 2);
+        TRequestProcessor processor(std::make_shared<TRaft>(state, 2, TNodeDict{}), follower, {});
+        processor.ProcessCommitted();
+        assert_int_equal(follower->LastAppliedIndex, 3);
+        assert_true(ReadText(*follower, "SELECT value FROM t") == "value\nonce\n");
+    }
+    // The compacted node restarts before its next write.
+    auto state = std::make_shared<TDiskState>(logPath, 1);
+    auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+    auto sql = std::make_shared<TSql>(file.Path, 1);
+    TRequestProcessor processor(raft, sql, {});
+    processor.ProcessCommitted();
+    assert_int_equal(sql->LastAppliedIndex, 3);
+    assert_true(ReadText(*sql, "SELECT value FROM t") == "value\nonce\n");
+}
 void test_sql_restores_from_a_stored_snapshot(void**) {
     TSql source(":memory:", 1);
     Seed(source);
@@ -536,6 +589,7 @@ int main() {
         cmocka_unit_test(test_sql_and_raft_restart_do_not_reapply_committed_insert),
         cmocka_unit_test(test_sql_snapshot_restores_database_and_progress),
         cmocka_unit_test(test_sql_invalid_snapshot_leaves_database_unchanged),
+        cmocka_unit_test(test_sql_snapshot_after_an_election_stub_installs_and_restarts),
         cmocka_unit_test(test_sql_restores_from_a_stored_snapshot),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);

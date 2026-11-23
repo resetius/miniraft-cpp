@@ -242,7 +242,9 @@ TMessageHolder<TInstallSnapshotRequest> TSql::Snapshot() const {
     std::unique_ptr<unsigned char, decltype(&sqlite3_free)> data(
         sqlite3_serialize(Db, "main", &size, 0), sqlite3_free);
     if (!data) throw std::runtime_error("Cannot serialize SQL database");
-    auto snapshot = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{.LastIncludedIndex = LastAppliedIndex});
+    // The progress of the file: LastAppliedIndex can be past it by election stubs, which
+    // TRequestProcessor skips without a Write.
+    auto snapshot = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{.LastIncludedIndex = ReadProgress(Db)});
     snapshot.InitPayload((size + SnapshotRecordBytes - 1) / SnapshotRecordBytes);
     for (uint32_t i = 0; i < snapshot.PayloadSize; ++i) {
         const auto offset = i * SnapshotRecordBytes;
