@@ -57,6 +57,8 @@ using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 // The members of the cluster. The leader replicates to all of them, but only
 // voters count for elections and commitment.
 struct TConfiguration {
+    // The log entry that set it; zero for the one TRaft was started with.
+    uint64_t Index = 0;
     std::set<uint32_t> Voters;
     std::set<uint32_t> Learners;
 
@@ -116,6 +118,8 @@ struct TVolatileState {
     std::vector<TMessageHolder<TMessage>> IncomingRecords;
 
     TVolatileState& Vote(uint32_t id);
+    // Drops the leader's state of a server.
+    TVolatileState& Forget(uint32_t id);
     // The leader's own log counts only if it is one of the voters.
     TVolatileState& CommitAdvance(const std::set<uint32_t>& voters, uint32_t leaderId, const IState& state);
     TVolatileState& SetCommitIndex(uint64_t index);
@@ -146,7 +150,8 @@ class TRaft {
 public:
     // All servers are voters.
     TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes);
-    // The nodes reach every member other than this server.
+    // The nodes reach every member other than this server. The configuration is in effect until
+    // the log has a configuration entry; a server that joins a running cluster starts with an empty one.
     TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, TConfiguration configuration);
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
@@ -157,7 +162,18 @@ public:
     uint64_t Append(TMessageHolder<TLogEntry> entry);
     // An image that does not advance the snapshot is ignored.
     void Compact(TMessageHolder<TInstallSnapshotRequest> snapshot);
+    // Configuration changes, one server at a time (Ongaro's thesis, 4.1), leader only. Each
+    // returns the index of its configuration entry, or zero while a change cannot start:
+    // until the leader commits an entry of its term, and until the last configuration commits.
+    // A new voter joins as a learner and is promoted once it has caught up (thesis, 4.2.1).
+    uint64_t AddLearner(uint32_t id);
+    // Also zero while the learner has not caught up.
+    uint64_t PromoteLearner(ITimeSource::Time now, uint32_t id);
+    // A leader that removes itself leads until the change commits, without counting itself
+    // in majorities, and then steps down.
+    uint64_t RemoveServer(uint32_t id);
     uint32_t GetLeaderId() const;
+    // The last configuration in the log, in effect even before it commits.
     const TConfiguration& GetConfiguration() const;
     uint64_t GetLastIndex() const;
     uint64_t ApproveRead();
@@ -185,15 +201,15 @@ public:
     }
 
     int GetMinVotes() const {
-        return Configuration.Voters.size() / 2 + 1;
+        return GetConfiguration().Voters.size() / 2 + 1;
     }
 
     int GetNpeers() const {
-        return Configuration.Voters.size() - Configuration.Voters.contains(Id);
+        return GetConfiguration().Voters.size() - GetConfiguration().Voters.contains(Id);
     }
 
     int GetNservers() const {
-        return Configuration.Voters.size();
+        return GetConfiguration().Voters.size();
     }
 
 private:
@@ -211,6 +227,12 @@ private:
     void OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotResponse> message);
     void StepDown(ITimeSource::Time now);
     void CatchUp(ITimeSource::Time now, uint32_t nodeId);
+    void AppendEntry(TMessageHolder<TLogEntry> entry);
+    void RemoveLast();
+    bool CanChangeConfiguration() const;
+    uint64_t AppendConfiguration(TConfiguration configuration);
+    void StepDownIfRemoved(ITimeSource::Time now);
+    bool CanCampaign() const;
 
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
@@ -227,7 +249,8 @@ private:
 
     uint32_t Id;
     TNodeDict Nodes;
-    TConfiguration Configuration;
+    // The configuration in effect at the start of the log, then one per configuration entry.
+    std::vector<TConfiguration> Configurations;
     std::shared_ptr<IState> State;
     std::unique_ptr<TVolatileState> VolatileState;
     uint64_t Seqno = 1; // zero is reserved for an unconfirmed read

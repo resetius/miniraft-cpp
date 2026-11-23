@@ -6,6 +6,7 @@
 #include <iostream>
 #include <algorithm>
 #include <iterator>
+#include <optional>
 
 #include <string.h>
 #include <assert.h>
@@ -27,6 +28,42 @@ TConfiguration AllVoters(int node, const TNodeDict& nodes) {
     TConfiguration configuration{.Voters = {uint32_t(node)}};
     for (const auto& [id, _] : nodes) {
         configuration.Voters.insert(id);
+    }
+    return configuration;
+}
+
+// Data: the numbers of voters and learners, then the ids of each, ascending.
+TMessageHolder<TLogEntry> ConfigurationEntry(const TConfiguration& configuration, uint64_t term) {
+    std::vector<uint32_t> data{uint32_t(configuration.Voters.size()), uint32_t(configuration.Learners.size())};
+    data.insert(data.end(), configuration.Voters.begin(), configuration.Voters.end());
+    data.insert(data.end(), configuration.Learners.begin(), configuration.Learners.end());
+    auto entry = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + data.size() * sizeof(uint32_t));
+    entry->Term = term;
+    entry->Flags = TLogEntry::EConfiguration;
+    memcpy(entry->Data, data.data(), data.size() * sizeof(uint32_t));
+    return entry;
+}
+
+TConfiguration ReadConfiguration(const TMessageHolder<TLogEntry>& entry) {
+    uint32_t counts[2];
+    const uint64_t size = entry->Len - sizeof(TLogEntry);
+    if (size < sizeof(counts)) {
+        throw TMessageError("Short configuration entry");
+    }
+    memcpy(counts, entry->Data, sizeof(counts));
+    const uint64_t members = uint64_t(counts[0]) + counts[1];
+    if (!counts[0] || size != sizeof(counts) + members * sizeof(uint32_t)) {
+        throw TMessageError("Invalid configuration entry size");
+    }
+    TConfiguration configuration;
+    for (uint64_t i = 0; i < members; ++i) {
+        uint32_t id;
+        memcpy(&id, entry->Data + sizeof(counts) + i * sizeof(id), sizeof(id));
+        auto& ids = i < counts[0] ? configuration.Voters : configuration.Learners;
+        if (!id || (!ids.empty() && *ids.rbegin() >= id) || configuration.Voters.contains(id)) {
+            throw TMessageError("Invalid configuration entry member");
+        }
+        ids.insert(id);
     }
     return configuration;
 }
@@ -93,6 +130,22 @@ TVolatileState& TVolatileState::SetElectionDue(ITimeSource::Time due) {
 TVolatileState& TVolatileState::Vote(uint32_t nodeId)
 {
     Votes.insert(nodeId);
+    return *this;
+}
+
+TVolatileState& TVolatileState::Forget(uint32_t id)
+{
+    ReadAckSeqno.erase(id);
+    LastSentSeqno.erase(id);
+    PendingAppendRpcs.erase(id);
+    NextIndex.erase(id);
+    MatchIndex.erase(id);
+    HeartbeatDue.erase(id);
+    RpcDue.erase(id);
+    BatchSize.erase(id);
+    BackOff.erase(id);
+    CatchUp.erase(id);
+    SnapshotTransfers.erase(id);
     return *this;
 }
 
@@ -170,7 +223,7 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
 TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, TConfiguration configuration)
     : Id(node)
     , Nodes(nodes)
-    , Configuration(std::move(configuration))
+    , Configurations{std::move(configuration)}
     , State(std::move(state))
     , VolatileState(std::make_unique<TVolatileState>())
     , StateName(EState::FOLLOWER)
@@ -181,19 +234,28 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, TC
             throw std::invalid_argument("Invalid Raft peer configuration");
         VolatileState->NextIndex[id] = 1;
     }
-    if (Configuration.Voters.empty()) {
+    auto& initial = Configurations.front();
+    initial.Index = 0;
+    if (initial.Voters.empty() && !initial.Learners.empty()) {
         throw std::invalid_argument("Raft configuration requires a voter");
     }
-    for (auto id : Configuration.Learners) {
-        if (Configuration.Voters.contains(id)) {
+    for (auto id : initial.Learners) {
+        if (initial.Voters.contains(id)) {
             throw std::invalid_argument("A Raft learner cannot be a voter");
         }
     }
-    for (const auto* ids : {&Configuration.Voters, &Configuration.Learners}) {
+    for (const auto* ids : {&initial.Voters, &initial.Learners}) {
         for (auto id : *ids) {
             if (id != Id && !Nodes.contains(id)) {
                 throw std::invalid_argument("Invalid Raft peer configuration");
             }
+        }
+    }
+    for (auto i = State->SnapshotIndex + 1; i <= State->LastLogIndex; ++i) {
+        auto entry = State->Get(i);
+        if (entry->Flags == TLogEntry::EConfiguration) {
+            Configurations.push_back(ReadConfiguration(entry));
+            Configurations.back().Index = i;
         }
     }
     // A snapshot holds only committed entries.
@@ -278,9 +340,9 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
             // replace or append log entries
             if (State->LogTerm(index) != entry->Term) {
                 while (State->LastLogIndex > index-1) {
-                    State->RemoveLast();
+                    RemoveLast();
                 }
-                State->Append(entry);
+                AppendEntry(entry);
             }
         }
 
@@ -334,7 +396,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
-            .CommitAdvance(Configuration.Voters, Id, *State);
+            .CommitAdvance(GetConfiguration().Voters, Id, *State);
         CatchUp(now, nodeId);
     } else {
         if (rpc.PrevIndex <= VolatileState->MatchIndex[nodeId]) {
@@ -463,12 +525,124 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
             .SetNextIndex(nodeId, matchIndex+1)
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
-            .CommitAdvance(Configuration.Voters, Id, *State);
+            .CommitAdvance(GetConfiguration().Voters, Id, *State);
         CatchUp(now, nodeId);
     } else {
         // The follower cannot hold records it was not sent.
         transfer->second.Offset = std::min(message->Offset, transfer->second.End);
     }
+}
+
+void TRaft::AppendEntry(TMessageHolder<TLogEntry> entry) {
+    std::optional<TConfiguration> configuration;
+    if (entry->Flags == TLogEntry::EConfiguration) {
+        configuration = ReadConfiguration(entry);
+    }
+    State->Append(std::move(entry));
+    if (configuration) {
+        configuration->Index = State->LastLogIndex;
+        Configurations.push_back(std::move(*configuration));
+    }
+}
+
+void TRaft::RemoveLast() {
+    State->RemoveLast();
+    // A server falls back to the last configuration left in its log.
+    while (Configurations.back().Index > State->LastLogIndex) {
+        Configurations.pop_back();
+    }
+}
+
+bool TRaft::CanChangeConfiguration() const {
+    // The fix to single-server changes (Ongaro, raft-dev, 2015-07-10): no configuration entry
+    // before an entry of the leader's term commits. And one change at a time (thesis, 4.1).
+    const auto commitIndex = VolatileState->CommitIndex;
+    return State->LogTerm(commitIndex) == State->CurrentTerm && GetConfiguration().Index <= commitIndex;
+}
+
+uint64_t TRaft::AppendConfiguration(TConfiguration configuration) {
+    const auto previous = GetConfiguration();
+    AppendEntry(ConfigurationEntry(configuration, State->CurrentTerm));
+    const auto index = State->LastLogIndex;
+    const auto& current = GetConfiguration();
+    for (auto id : Peers(true)) {
+        VolatileState->NextIndex.try_emplace(id, index);
+    }
+    // A server that leaves and comes back starts over.
+    for (const auto* ids : {&previous.Voters, &previous.Learners}) {
+        for (auto id : *ids) {
+            if (!current.Voters.contains(id) && !current.Learners.contains(id)) {
+                VolatileState->Forget(id);
+            }
+        }
+    }
+    std::erase_if(VolatileState->CatchUp, [&](const auto& round) {
+        return !current.Learners.contains(round.first);
+    });
+    return index;
+}
+
+uint64_t TRaft::AddLearner(uint32_t id) {
+    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change the configuration");
+    auto configuration = GetConfiguration();
+    if (id == Id || !Nodes.contains(id)) {
+        throw std::invalid_argument("Unknown Raft server");
+    }
+    if (configuration.Voters.contains(id) || configuration.Learners.contains(id)) {
+        throw std::invalid_argument("Raft server is already a member");
+    }
+    if (!CanChangeConfiguration()) {
+        return 0;
+    }
+    configuration.Learners.insert(id);
+    return AppendConfiguration(std::move(configuration));
+}
+
+uint64_t TRaft::PromoteLearner(ITimeSource::Time now, uint32_t id) {
+    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change the configuration");
+    auto configuration = GetConfiguration();
+    if (!configuration.Learners.erase(id)) {
+        throw std::invalid_argument("Raft server is not a learner");
+    }
+    auto round = VolatileState->CatchUp.find(id);
+    if (!CanChangeConfiguration() || round == VolatileState->CatchUp.end() || !round->second.CaughtUp(now)) {
+        return 0;
+    }
+    configuration.Voters.insert(id);
+    return AppendConfiguration(std::move(configuration));
+}
+
+uint64_t TRaft::RemoveServer(uint32_t id) {
+    if (StateName != EState::LEADER) throw std::logic_error("Only a leader can change the configuration");
+    auto configuration = GetConfiguration();
+    if (!configuration.Voters.erase(id) && !configuration.Learners.erase(id)) {
+        throw std::invalid_argument("Raft server is not a member");
+    }
+    if (configuration.Voters.empty()) {
+        throw std::invalid_argument("Cannot remove the last voter");
+    }
+    if (!CanChangeConfiguration()) {
+        return 0;
+    }
+    return AppendConfiguration(std::move(configuration));
+}
+
+void TRaft::StepDownIfRemoved(ITimeSource::Time now) {
+    // Thesis, 4.2.2: the removed leader steps down once the new configuration commits.
+    const auto& configuration = GetConfiguration();
+    if (StateName != EState::LEADER || configuration.Voters.contains(Id) ||
+        configuration.Index > VolatileState->CommitIndex) {
+        return;
+    }
+    StepDown(now);
+}
+
+bool TRaft::CanCampaign() const {
+    // A learner never campaigns. A server outside its configuration does while that
+    // configuration is not committed: it may be the one that can commit it (thesis, 4.2.2).
+    const auto& configuration = GetConfiguration();
+    return configuration.Voters.contains(Id) ||
+        (!configuration.Learners.contains(Id) && configuration.Index > VolatileState->CommitIndex);
 }
 
 void TRaft::CatchUp(ITimeSource::Time now, uint32_t nodeId) {
@@ -610,6 +784,7 @@ void TRaft::Leader(ITimeSource::Time now, TMessageHolder<TMessage> message) {
     } else if (auto maybeInstallSnapshot = message.Maybe<TInstallSnapshotRequest>()) {
         OnInstallSnapshot(now, std::move(maybeInstallSnapshot.Cast()));
     }
+    StepDownIfRemoved(now);
 }
 
 void TRaft::Become(EState newStateName) {
@@ -707,6 +882,9 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
         for (uint32_t i = 0; i < message.PayloadSize; ++i) {
             auto entry = message.Payload[i].Cast<TLogEntry>();
             if (!entry->Term || entry->Term < previousTerm || entry->Term > header->Term) return false;
+            if (entry->Flags == TLogEntry::EConfiguration) {
+                try { ReadConfiguration(entry); } catch (const TMessageError&) { return false; }
+            }
             previousTerm = entry->Term;
             const auto index = append->PrevLogIndex + i + 1;
             if (index <= VolatileState->CommitIndex && index >= State->SnapshotIndex &&
@@ -748,19 +926,20 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
     if (!due) {
         due = now + TTimeout::Election;
     } else if (*due <= now) {
-        // Learners do not count.
-        size_t heard = Configuration.Voters.contains(Id);
+        // Learners do not count, nor does a leader outside its configuration.
+        const auto& voters = GetConfiguration().Voters;
+        size_t heard = voters.contains(Id);
         for (auto id : VolatileState->Replied) {
-            heard += Configuration.Voters.contains(id);
+            heard += voters.contains(id);
         }
-        if (heard <= Configuration.Voters.size() / 2) {
+        if (heard <= voters.size() / 2) {
             StepDown(now);
             return;
         }
         VolatileState->Replied.clear();
         due = now + TTimeout::Election;
     }
-    for (auto id : Configuration.Learners) {
+    for (auto id : GetConfiguration().Learners) {
         VolatileState->CatchUp.try_emplace(id, TVolatileState::TCatchUp {
             .Target = State->LastLogIndex,
             .Start = now,
@@ -784,9 +963,10 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
         }
     }
 
-    if (Configuration.Voters.size() == 1) {
-        VolatileState->CommitAdvance(Configuration.Voters, Id, *State);
+    if (GetConfiguration().Voters.size() == 1) {
+        VolatileState->CommitAdvance(GetConfiguration().Voters, Id, *State);
     }
+    StepDownIfRemoved(now);
 }
 
 uint64_t TRaft::ApproveRead() {
@@ -806,9 +986,10 @@ uint64_t TRaft::ApproveRead() {
 uint64_t TRaft::CommitSeqno() const {
     if (StateName != EState::LEADER || VolatileState->CommitIndex == 0 ||
         State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm) return 0;
+    const auto& voters = GetConfiguration().Voters;
     std::vector<uint64_t> acknowledgements;
-    acknowledgements.reserve(Configuration.Voters.size());
-    for (auto id : Configuration.Voters) {
+    acknowledgements.reserve(voters.size());
+    for (auto id : voters) {
         if (id == Id) {
             acknowledgements.push_back(Seqno - 1); // leader's own confirmation
         } else {
@@ -827,8 +1008,7 @@ uint64_t TRaft::NextSeqno() {
 
 void TRaft::ProcessTimeout(ITimeSource::Time now) {
     if (StateName == EState::CANDIDATE || StateName == EState::FOLLOWER) {
-        if (VolatileState->ElectionDue <= now && !Configuration.Voters.contains(Id)) {
-            // A learner never campaigns.
+        if (VolatileState->ElectionDue <= now && !CanCampaign()) {
             VolatileState->ElectionDue = MakeElection(now);
         }
         if (VolatileState->ElectionDue <= now) {
@@ -848,11 +1028,13 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
     }
 
     if (StateName == EState::CANDIDATE) {
-        size_t votes = 1;
+        // A server outside its configuration does not count its own vote.
+        const auto& voters = GetConfiguration().Voters;
+        size_t votes = voters.contains(Id);
         for (auto id : VolatileState->Votes) {
-            votes += Configuration.Voters.contains(id);
+            votes += voters.contains(id);
         }
-        if (votes > Configuration.Voters.size() / 2) {
+        if (votes > voters.size() / 2) {
             auto value = State->LastLogIndex+1;
             decltype(VolatileState->NextIndex) nextIndex;
             decltype(VolatileState->RpcDue) rpcDue;
@@ -903,7 +1085,7 @@ ITimeSource::Time TRaft::MakeElection(ITimeSource::Time now) {
 uint64_t TRaft::Append(TMessageHolder<TLogEntry> entry) {
     if (StateName != EState::LEADER) throw std::logic_error("Only a leader can propose log entries");
     if (State->LastLogIndex >= uint64_t(INT64_MAX)) throw std::overflow_error("Raft log index exhausted");
-    if (!entry || entry->Type != uint32_t(EMessageType::LOG_ENTRY))
+    if (!entry || entry->Type != uint32_t(EMessageType::LOG_ENTRY) || entry->Flags == TLogEntry::EConfiguration)
         throw TMessageError("Invalid proposed log entry");
     ValidateMessageHeader(entry->Type, entry->Len);
     entry->Term = State->CurrentTerm;
@@ -946,7 +1128,7 @@ uint32_t TRaft::GetLeaderId() const {
 }
 
 const TConfiguration& TRaft::GetConfiguration() const {
-    return Configuration;
+    return Configurations.back();
 }
 
 std::vector<uint32_t> TRaft::Peers(bool learners) const {
@@ -958,9 +1140,9 @@ std::vector<uint32_t> TRaft::Peers(bool learners) const {
             }
         }
     };
-    add(Configuration.Voters);
+    add(GetConfiguration().Voters);
     if (learners) {
-        add(Configuration.Learners);
+        add(GetConfiguration().Learners);
     }
     return peers;
 }
@@ -1188,7 +1370,7 @@ void TRequestProcessor::ProcessCommitted() {
     if (commitIndex <= Rsm->LastAppliedIndex) return;
     for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
         auto entry = state->Get(i);
-        if (entry->Flags == TLogEntry::EStub) {
+        if (entry->Flags == TLogEntry::EStub || entry->Flags == TLogEntry::EConfiguration) {
             continue;
         }
         auto reply = Rsm->Write(entry, i);
