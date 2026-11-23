@@ -117,15 +117,13 @@ std::vector<std::pair<std::string, uint64_t>> TDiskState::Files() const
             }
             const std::string_view rest = std::string_view(filename).substr(prefix.size());
             uint64_t snapshotIndex = 0;
-            if (!rest.empty()) {
-                const auto end = rest.data() + rest.size();
-                if (rest[0] != '.') {
-                    continue;
-                }
-                const auto parsed = std::from_chars(rest.data() + 1, end, snapshotIndex);
-                if (parsed.ec != std::errc{} || parsed.ptr != end || !snapshotIndex) {
-                    continue;
-                }
+            if (!rest.empty() &&
+                std::from_chars(rest.data() + 1, rest.data() + rest.size(), snapshotIndex).ec != std::errc{}) {
+                continue;
+            }
+            // Only the names this store writes: not "raft.entries.1.07", for example.
+            if (fs::path(Path(kind, snapshotIndex)).filename() != filename) {
+                continue;
             }
             files.emplace_back(file.path().string(), snapshotIndex);
         }

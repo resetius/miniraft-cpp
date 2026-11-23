@@ -348,11 +348,18 @@ void test_interrupted_snapshot_publication_recovers_one_side(void**) {
     { TDiskState state(files.Name, 1); state.InstallSnapshot(Image(1, 2, {"a"})); }
     fs::rename(files.Path("entries") += ".old", files.Path("entries"));
     fs::rename(files.Path("index") += ".old", files.Path("index"));
+    // Names the store never writes are not its leftovers.
+    for (const std::string name : {".entries.1.07", ".index.1.0", ".snapshot.1.2x", ".entries.10"}) {
+        std::ofstream(files.Name + name) << "foreign";
+    }
     TDiskState state(files.Name, 1);
     assert_int_equal(state.SnapshotIndex, 1);
     assert_int_equal(state.Get(2)->Term, 5);
     assert_false(fs::exists(files.Path("entries")));
     assert_false(fs::exists(files.Path("index")));
+    for (const std::string name : {".entries.1.07", ".index.1.0", ".snapshot.1.2x", ".entries.10"}) {
+        assert_true(fs::exists(files.Name + name));
+    }
 }
 void test_incomplete_or_corrupt_compacted_store_is_rejected(void**) {
     const std::vector<std::function<void(TFiles&)>> damages = {
