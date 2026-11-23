@@ -77,10 +77,13 @@ struct TListRsm : IRsm {
 // An application that does not support snapshots.
 struct TPlainRsm : IRsm {
     std::vector<std::string> Values;
+    mutable int SnapshotCalls = 0;
     TMessageHolder<TInstallSnapshotRequest> Snapshot() const override {
+        ++SnapshotCalls;
         throw std::runtime_error("Not implemented");
     }
     void Apply(TMessageHolder<TInstallSnapshotRequest>) override {
+        ++SnapshotCalls;
         throw std::runtime_error("Not implemented");
     }
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest>, uint64_t index) override {
@@ -335,17 +338,30 @@ void test_applications_without_snapshots_work_as_before(void**) {
     cluster.Elect(1);
     for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
     cluster.Replicate();
-    bool unsupported = false;
-    try { cluster[1].Raft->Compact(applications[0]->Snapshot()); }
-    catch (const std::runtime_error&) { unsupported = true; }
-    assert_true(unsupported);
-    unsupported = false;
-    try { applications[0]->Apply(NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{})); }
-    catch (const std::runtime_error&) { unsupported = true; }
-    assert_true(unsupported);
-    for (uint32_t id = 1; id <= 3; ++id) {
-        assert_true(applications[id - 1]->Values == Values({1, 2, 3}));
-        assert_int_equal(cluster[id].State->SnapshotIndex, 0);
+    // Without compaction the library never asks for an image: a restart replays the log.
+    auto restarted = std::make_shared<TPlainRsm>();
+    TRequestProcessor processor(cluster[2].Raft, restarted, {});
+    processor.ProcessCommitted();
+    applications.push_back(restarted);
+    for (const auto& rsm : applications) {
+        assert_true(rsm->Values == Values({1, 2, 3}));
+        assert_int_equal(rsm->SnapshotCalls, 0);
+    }
+    for (uint32_t id = 1; id <= 3; ++id) assert_int_equal(cluster[id].State->SnapshotIndex, 0);
+
+    // With an image in storage, the application's refusal reaches the embedder and
+    // the image does not count as applied.
+    auto state = std::make_shared<TState>();
+    state->InstallSnapshot(NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
+        .LastIncludedIndex = 3, .LastIncludedTerm = 1, .Done = 1}));
+    auto unsupported = std::make_shared<TPlainRsm>();
+    TRequestProcessor restore(std::make_shared<TRaft>(state, 1, TNodeDict{}), unsupported, {});
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        bool reported = false;
+        try { restore.ProcessCommitted(); } catch (const std::runtime_error&) { reported = true; }
+        assert_true(reported);
+        assert_int_equal(unsupported->SnapshotCalls, attempt);
+        assert_int_equal(unsupported->LastAppliedIndex, 0);
     }
 }
 
