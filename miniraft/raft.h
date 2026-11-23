@@ -80,8 +80,6 @@ struct TVolatileState {
         uint64_t Seqno = 0; // of that chunk, its retries keep it
     };
     std::unordered_map<uint32_t, TSnapshotTransfer> SnapshotTransfers;
-    // Leader: the image index a peer refused; that image is not sent again.
-    std::unordered_map<uint32_t, uint64_t> RejectedSnapshot;
     // Follower: the image received so far from the leader of IncomingTerm.
     uint64_t IncomingTerm = 0;
     TMessageHolder<TInstallSnapshotRequest> Incoming;

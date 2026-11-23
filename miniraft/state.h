@@ -26,7 +26,7 @@ struct IState: TStateFields {
     virtual TMessageHolder<TInstallSnapshotRequest> GetSnapshot() const = 0;
     // Publishes an image with LastIncludedIndex > SnapshotIndex atomically: the entries
     // it covers are dropped, the later ones stay only if the entry at it has its term.
-    // std::logic_error refuses the image; any other exception is a storage failure.
+    // Any exception is a storage failure: it reaches the embedder and the leader resends the last chunk.
     virtual void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest> snapshot) = 0;
     virtual ~IState() = default;
 

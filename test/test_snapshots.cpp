@@ -105,25 +105,25 @@ struct TPlainRsm : IRsm {
     }
 };
 
-struct TRefusingState : TCheckedState {
-    void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest>) override {
-        throw std::logic_error("Snapshot refused");
-    }
-};
-
 // Fails once, before taking the image or after it, like a failed metadata write.
 struct TFailingState : TCheckedState {
     bool AfterInstall = false;
+    bool LogicError = false;
     bool Failed = false;
+    void Fail(const char* what) {
+        Failed = true;
+        if (LogicError) {
+            throw std::invalid_argument(what);
+        }
+        throw std::runtime_error(what);
+    }
     void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest> snapshot) override {
         if (!AfterInstall && !Failed) {
-            Failed = true;
-            throw std::runtime_error("No space left");
+            Fail("No space left");
         }
         TState::InstallSnapshot(snapshot);
         if (!Failed) {
-            Failed = true;
-            throw std::runtime_error("Cannot write Raft metadata");
+            Fail("Cannot write Raft metadata");
         }
     }
 };
@@ -195,7 +195,9 @@ struct TCluster {
     void Step(std::chrono::milliseconds dt = std::chrono::milliseconds(500), bool all = false) {
         Now += dt;
         for (auto& node : Nodes) {
-            if (all || node.Raft->CurrentStateName() == EState::LEADER) node.Raft->ProcessTimeout(Now);
+            if (all || node.Raft->CurrentStateName() == EState::LEADER) {
+                node.Raft->ProcessTimeout(Now);
+            }
         }
         Drain();
         for (auto& node : Nodes) node.Processor->ProcessCommitted();
@@ -407,7 +409,9 @@ void test_applications_without_snapshots_work_as_before(void**) {
         assert_true(rsm->Values == Values({1, 2, 3}));
         assert_int_equal(rsm->SnapshotCalls, 0);
     }
-    for (uint32_t id = 1; id <= 3; ++id) assert_int_equal(cluster[id].State->SnapshotIndex, 0);
+    for (uint32_t id = 1; id <= 3; ++id) {
+        assert_int_equal(cluster[id].State->SnapshotIndex, 0);
+    }
 
     // With an image in storage, the application's refusal reaches the embedder and
     // the image does not count as applied.
@@ -492,6 +496,14 @@ void test_delayed_reply_after_retries_advances_the_transfer(void**) {
     const auto& transfer = cluster[1].Raft->GetVolatileState()->SnapshotTransfers.at(3);
     assert_int_equal(transfer.Offset, 0);
     cluster.Drop = {};
+    // A stale-term reply with the chunk's seqno is dropped: the transfer does not move.
+    auto& leader = cluster[1];
+    leader.Raft->Process(cluster.Now, NewHoldedMessage(
+        TMessageEx{.Src = 3, .Dst = 1, .Term = leader.State->CurrentTerm - 1,
+            .Seqno = held.front().Cast<TMessageEx>()->Seqno},
+        TInstallSnapshotResponse{}));
+    assert_int_equal(transfer.Offset, 0);
+    assert_int_equal(leader.State->CurrentTerm, held.front().Cast<TMessageEx>()->Term);
     cluster.Packets.push_back(held[0]);
     cluster.Drain();
     assert_int_equal(transfer.Offset, TMessageLimits{}.MaxEntries);
@@ -535,42 +547,13 @@ void test_leader_change_in_the_middle_of_a_transfer(void**) {
     cluster.AssertCaughtUp(2, 1);
 }
 
-void test_refused_image_is_not_sent_again(void**) {
-    TCluster cluster(3);
-    cluster.Start(3, std::make_shared<TRefusingState>());
-    cluster.Lag();
-    int chunks = 0;
-    cluster.Drop = [&](const auto& m) {
-        chunks += IsType(m, EMessageType::INSTALL_SNAPSHOT_REQUEST);
-        return false;
-    };
-    cluster.Replicate(40);
-    const auto sent = chunks;
-    const auto term = cluster[1].State->CurrentTerm;
-    assert_int_equal(sent, 3);
-    // The follower only gets heartbeats: no new attempts, and with every timer running
-    // nobody starts an election.
-    cluster.Write(1, "4");
-    for (int i = 0; i < 100; ++i) cluster.Step(std::chrono::milliseconds(500), true);
-    assert_int_equal(chunks, sent);
-    assert_true(cluster[3].Raft->GetVolatileState()->ElectionDue > cluster.Now);
-    assert_int_equal(cluster[1].Raft->CurrentStateName(), EState::LEADER);
-    for (uint32_t id = 1; id <= 3; ++id) assert_int_equal(cluster[id].State->CurrentTerm, term);
-    assert_int_equal(cluster[3].Raft->GetLeaderId(), 1);
-    assert_int_equal(cluster[3].State->SnapshotIndex, 0);
-    assert_true(cluster[3].Rsm->Values.empty());
-    cluster.AssertCaughtUp(1, 2);
-    // A newer image gets one more attempt.
-    cluster.Compact(1);
-    cluster.Replicate(40);
-    assert_int_equal(chunks, 2 * sent);
-}
-
+// Any exception type is a failure, never a final refusal of the image.
 void test_storage_failure_reaches_the_embedder_and_is_retried(void**) {
-    for (bool afterInstall : {false, true}) {
+    for (auto [afterInstall, logicError] : {std::pair{false, false}, {true, false}, {false, true}, {true, true}}) {
         TCluster cluster(3);
         auto state = std::make_shared<TFailingState>();
         state->AfterInstall = afterInstall;
+        state->LogicError = logicError;
         cluster.Start(3, state);
         cluster.Lag();
         int chunks = 0;
@@ -580,7 +563,7 @@ void test_storage_failure_reaches_the_embedder_and_is_retried(void**) {
         };
         int reported = 0;
         for (int i = 0; i < 40; ++i) {
-            try { cluster.Step(); } catch (const std::runtime_error&) { ++reported; }
+            try { cluster.Step(); } catch (const std::exception&) { ++reported; }
         }
         // Only the last chunk comes again: it installs the kept image or finds it installed.
         assert_int_equal(reported, 1);
@@ -634,11 +617,11 @@ void test_covered_and_contradicting_images(void**) {
     assert_false(send(last + 5, term - 1, 0));
     // The log has the boundary entry: acknowledged at once, from any chunk.
     auto reply = send(3, term, 4096);
-    assert_true(reply && reply->Success);
+    assert_true(reply);
     assert_int_equal(reply->MatchIndex, 3);
     cluster.Compact(2);
     reply = send(2, term, 0);
-    assert_true(reply && reply->Success);
+    assert_true(reply);
     assert_int_equal(reply->MatchIndex, 2);
     assert_int_equal(follower.State->LastLogIndex, last);
     assert_int_equal(follower.State->SnapshotIndex, last);
@@ -658,7 +641,6 @@ int main() {
         cmocka_unit_test(test_lagging_follower_installs_a_chunked_snapshot_despite_losses),
         cmocka_unit_test(test_delayed_reply_after_retries_advances_the_transfer),
         cmocka_unit_test(test_leader_change_in_the_middle_of_a_transfer),
-        cmocka_unit_test(test_refused_image_is_not_sent_again),
         cmocka_unit_test(test_storage_failure_reaches_the_embedder_and_is_retried),
         cmocka_unit_test(test_compaction_during_a_transfer_keeps_its_image),
         cmocka_unit_test(test_covered_and_contradicting_images),

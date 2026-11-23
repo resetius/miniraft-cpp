@@ -121,12 +121,9 @@ struct TInstallSnapshotResponse: public TMessageEx {
     uint64_t MatchIndex = 0;
     // Records of the image the follower holds so far.
     uint64_t Offset = 0;
-    // Zero when the follower refuses the image.
-    uint32_t Success = 0;
-    uint32_t Padding = 0;
 };
 
-static_assert(sizeof(TInstallSnapshotResponse) == sizeof(TMessageEx) + 24);
+static_assert(sizeof(TInstallSnapshotResponse) == sizeof(TMessageEx) + 16);
 
 struct TCommandRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
