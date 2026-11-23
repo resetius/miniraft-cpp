@@ -271,7 +271,8 @@ TEST(Snapshots, compaction_drops_the_applied_prefix) {
     ASSERT_EQ(leader.State->LastLogIndex, last);
     ASSERT_EQ(std::static_pointer_cast<TState>(leader.State)->Log.size(), last - applied);
     ASSERT_EQ(leader.State->GetSnapshot()->LastIncludedIndex, applied);
-    ASSERT_EQ(leader.State->GetSnapshot().PayloadSize, 4);
+    // The configuration and the four values.
+    ASSERT_EQ(leader.State->GetSnapshot().PayloadSize, 5);
     // An image that does not advance the snapshot changes nothing.
     cluster.Compact(1);
     ASSERT_EQ(leader.State->SnapshotIndex, applied);
