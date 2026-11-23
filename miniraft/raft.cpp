@@ -67,6 +67,16 @@ TMessageHolder<TLogEntry> TDummyRsm::Prepare(TMessageHolder<TCommandRequest> com
     return entry;
 }
 
+TMessageHolder<TInstallSnapshotRequest> TDummyRsm::Snapshot() const
+{
+    throw std::runtime_error("Not implemented");
+}
+
+void TDummyRsm::Apply(TMessageHolder<TInstallSnapshotRequest> snapshot)
+{
+    throw std::runtime_error("Not implemented");
+}
+
 TVolatileState& TVolatileState::SetElectionDue(ITimeSource::Time due) {
     ElectionDue = due;
     return *this;

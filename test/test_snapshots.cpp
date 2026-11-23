@@ -74,9 +74,15 @@ struct TListRsm : IRsm {
     }
 };
 
-// No snapshot methods: the defaults.
+// An application that does not support snapshots.
 struct TPlainRsm : IRsm {
     std::vector<std::string> Values;
+    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override {
+        throw std::runtime_error("Not implemented");
+    }
+    void Apply(TMessageHolder<TInstallSnapshotRequest>) override {
+        throw std::runtime_error("Not implemented");
+    }
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest>, uint64_t index) override {
         return NewHoldedMessage(TCommandResponse{.Index = index});
     }
@@ -331,11 +337,11 @@ void test_applications_without_snapshots_work_as_before(void**) {
     cluster.Replicate();
     bool unsupported = false;
     try { cluster[1].Raft->Compact(applications[0]->Snapshot()); }
-    catch (const std::logic_error&) { unsupported = true; }
+    catch (const std::runtime_error&) { unsupported = true; }
     assert_true(unsupported);
     unsupported = false;
     try { applications[0]->Apply(NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{})); }
-    catch (const std::logic_error&) { unsupported = true; }
+    catch (const std::runtime_error&) { unsupported = true; }
     assert_true(unsupported);
     for (uint32_t id = 1; id <= 3; ++id) {
         assert_true(applications[id - 1]->Values == Values({1, 2, 3}));
@@ -354,6 +360,10 @@ void test_storage_without_snapshots_rejects_compaction(void**) {
         }
         TMessageHolder<TLogEntry> Get(int64_t index) const override { return Log[index - 1]; }
         void Commit() override {}
+        TMessageHolder<TInstallSnapshotRequest> GetSnapshot() const override { return {}; }
+        void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest>) override {
+            throw std::runtime_error("Not implemented");
+        }
     };
     TCluster cluster(1);
     cluster.Start(1, std::make_shared<TOldState>());
@@ -361,7 +371,7 @@ void test_storage_without_snapshots_rejects_compaction(void**) {
     cluster.Write(1, "1");
     cluster.Replicate(2);
     bool unsupported = false;
-    try { cluster.Compact(1); } catch (const std::logic_error&) { unsupported = true; }
+    try { cluster.Compact(1); } catch (const std::runtime_error&) { unsupported = true; }
     assert_true(unsupported);
     assert_int_equal(cluster[1].State->SnapshotIndex, 0);
     assert_int_equal(cluster[1].State->LastLogIndex, 2);

@@ -23,14 +23,10 @@ struct IState: TStateFields {
     virtual TMessageHolder<TLogEntry> Get(int64_t index) const = 0;
     virtual void Commit() = 0;
     // The image covering (0, SnapshotIndex], empty without a snapshot.
-    virtual TMessageHolder<TInstallSnapshotRequest> GetSnapshot() const {
-        return {};
-    }
+    virtual TMessageHolder<TInstallSnapshotRequest> GetSnapshot() const = 0;
     // Publishes an image with LastIncludedIndex > SnapshotIndex atomically: the entries
     // it covers are dropped, the later ones stay only if the entry at it has its term.
-    virtual void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest>) {
-        throw std::logic_error("Snapshots are not supported");
-    }
+    virtual void InstallSnapshot(TMessageHolder<TInstallSnapshotRequest> snapshot) = 0;
     virtual ~IState() = default;
 
     // Zero for an index that is not in the log, including one before the snapshot.

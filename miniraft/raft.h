@@ -28,14 +28,10 @@ struct IRsm {
     virtual TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) = 0;
     virtual TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) = 0;
     // Image of the applied state: LastIncludedIndex and records in the application format.
-    virtual TMessageHolder<TInstallSnapshotRequest> Snapshot() const {
-        throw std::logic_error("Snapshots are not supported");
-    }
+    virtual TMessageHolder<TInstallSnapshotRequest> Snapshot() const = 0;
     // Replaces the whole state with an image, atomically; durable RSMs also store
     // LastAppliedIndex = LastIncludedIndex with it.
-    virtual void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) {
-        throw std::logic_error("Snapshots are not supported");
-    }
+    virtual void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) = 0;
 
     // Durable RSMs restore this atomically with application data before constructing
     // TRequestProcessor. It must identify committed progress in the same Raft log.
@@ -47,6 +43,8 @@ struct TDummyRsm: public IRsm {
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest> message, uint64_t index) override;
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
+    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override;
+    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override;
 
 private:
     std::vector<TMessageHolder<TLogEntry>> Log;

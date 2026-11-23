@@ -129,6 +129,12 @@ struct TReadClient {
 struct TEchoRsm : IRsm {
     std::vector<std::string> Applied;
     std::weak_ptr<char[]> LastReply;
+    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override {
+        throw std::runtime_error("Not implemented");
+    }
+    void Apply(TMessageHolder<TInstallSnapshotRequest>) override {
+        throw std::runtime_error("Not implemented");
+    }
     TMessageHolder<TMessage> Read(TMessageHolder<TCommandRequest>, uint64_t index) override {
         return NewHoldedMessage(TCommandResponse{.Index = index});
     }
