@@ -479,7 +479,7 @@ void TRaft::CatchUp(ITimeSource::Time now, uint32_t nodeId) {
     round->second = {
         .Target = State->LastLogIndex,
         .Start = now,
-        .CaughtUp = now - round->second.Start < TTimeout::Election,
+        .LastShort = now - round->second.Start < TTimeout::Election,
     };
 }
 
@@ -761,13 +761,10 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
         due = now + TTimeout::Election;
     }
     for (auto id : Configuration.Learners) {
-        auto [round, _] = VolatileState->CatchUp.try_emplace(id, TVolatileState::TCatchUp {
+        VolatileState->CatchUp.try_emplace(id, TVolatileState::TCatchUp {
             .Target = State->LastLogIndex,
             .Start = now,
         });
-        if (now - round->second.Start >= TTimeout::Election) {
-            round->second.CaughtUp = false;
-        }
     }
     for (auto id : Peers(true)) {
         auto& node = Nodes[id];

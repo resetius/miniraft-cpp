@@ -90,8 +90,13 @@ struct TVolatileState {
     struct TCatchUp {
         uint64_t Target = 0;
         ITimeSource::Time Start;
-        // The last round ended within an election timeout, and the current one has not run longer.
-        bool CaughtUp = false;
+        // The last round ended within an election timeout.
+        bool LastShort = false;
+
+        // And the current one has not run longer.
+        bool CaughtUp(ITimeSource::Time now) const {
+            return LastShort && now - Start < TTimeout::Election;
+        }
     };
     std::unordered_map<uint32_t, TCatchUp> CatchUp;
 

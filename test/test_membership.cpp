@@ -222,9 +222,11 @@ TEST(Membership, learner_catches_up_in_rounds_shorter_than_an_election_timeout) 
     TCluster cluster(4, TConfiguration{.Voters = {1, 2, 3}, .Learners = {4}});
     ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     const auto& rounds = cluster[1].GetVolatileState()->CatchUp;
-    auto caughtUp = [&] { return rounds.at(4).CaughtUp; };
+    auto caughtUp = [&] { return rounds.at(4).CaughtUp(cluster.Now); };
     ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
     ASSERT_TRUE(caughtUp());
+    // Current at any time, not only at the leader's timeouts.
+    ASSERT_FALSE(rounds.at(4).CaughtUp(cluster.Now + TTimeout::Election));
 
     // A round that runs longer than an election timeout stops counting.
     cluster.Drop = [](const auto& m) { return m->Dst == 4; };
