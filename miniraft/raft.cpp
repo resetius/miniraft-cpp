@@ -67,6 +67,16 @@ TMessageHolder<TLogEntry> TDummyRsm::Prepare(TMessageHolder<TCommandRequest> com
     return entry;
 }
 
+TMessageHolder<TInstallSnapshotRequest> TDummyRsm::Snapshot() const
+{
+    throw std::runtime_error("Not implemented");
+}
+
+void TDummyRsm::Apply(TMessageHolder<TInstallSnapshotRequest> snapshot)
+{
+    throw std::runtime_error("Not implemented");
+}
+
 TVolatileState& TVolatileState::SetElectionDue(ITimeSource::Time due) {
     ElectionDue = due;
     return *this;
@@ -161,6 +171,8 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes)
             throw std::invalid_argument("Invalid Raft peer configuration");
         VolatileState->NextIndex[id] = 1;
     }
+    // A snapshot holds only committed entries.
+    VolatileState->CommitIndex = State->SnapshotIndex;
 }
 
 void TRaft::OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message) {
@@ -223,7 +235,9 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
     uint64_t matchIndex = 0;
     uint64_t commitIndex = VolatileState->CommitIndex;
     bool success = false;
-    if (message->PrevLogIndex == 0 ||
+    // The snapshot is committed, so the leader has the same entries up to its index.
+    const auto snapshotIndex = State->SnapshotIndex;
+    if (message->PrevLogIndex < snapshotIndex ||
         (message->PrevLogIndex <= State->LastLogIndex
             && State->LogTerm(message->PrevLogIndex) == message->PrevLogTerm))
     {
@@ -233,6 +247,9 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
             auto& data = message.Payload[i];
             auto entry = data.Cast<TLogEntry>();
             index++;
+            if (index <= snapshotIndex) {
+                continue;
+            }
             // replace or append log entries
             if (State->LogTerm(index) != entry->Term) {
                 while (State->LastLogIndex > index-1) {
@@ -327,6 +344,10 @@ TMessageHolder<TAppendEntriesRequest> TRaft::CreateAppendEntries(uint32_t nodeId
     auto lastIndex = std::min<uint64_t>(prevIndex+batchSize, State->LastLogIndex);
     if (VolatileState->MatchIndex[nodeId]+1 < VolatileState->NextIndex[nodeId]) {
         lastIndex = prevIndex;
+    }
+    if (prevIndex < State->SnapshotIndex) {
+        // The entries before the snapshot are gone: probe at its boundary.
+        prevIndex = lastIndex = State->SnapshotIndex;
     }
 
     const TMessageLimits limits;
@@ -459,7 +480,8 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
             if (!entry->Term || entry->Term < previousTerm || entry->Term > header->Term) return false;
             previousTerm = entry->Term;
             const auto index = append->PrevLogIndex + i + 1;
-            if (index <= VolatileState->CommitIndex && State->LogTerm(index) != entry->Term) return false;
+            if (index <= VolatileState->CommitIndex && index >= State->SnapshotIndex &&
+                State->LogTerm(index) != entry->Term) return false;
         }
         return true;
     }
@@ -605,6 +627,36 @@ uint64_t TRaft::Append(TMessageHolder<TLogEntry> entry) {
     entry->Term = State->CurrentTerm;
     State->Append(std::move(entry));
     return State->LastLogIndex;
+}
+
+void TRaft::Compact(TMessageHolder<TInstallSnapshotRequest> snapshot) {
+    if (!snapshot || (snapshot.PayloadSize && !snapshot.Payload)) {
+        throw std::invalid_argument("Invalid snapshot image");
+    }
+    const auto index = snapshot->LastIncludedIndex;
+    if (index <= State->SnapshotIndex) {
+        return;
+    }
+    if (index > VolatileState->CommitIndex) {
+        throw std::invalid_argument("Snapshot includes uncommitted entries");
+    }
+    for (uint32_t i = 0; i < snapshot.PayloadSize; ++i) {
+        // Every record must fit in an InstallSnapshot message.
+        const auto& record = snapshot.Payload[i];
+        if (!record || record->Type != uint32_t(EMessageType::LOG_ENTRY)) {
+            throw TMessageError("Snapshot records must be log entries");
+        }
+        ValidateMessageHeader(record->Type, record->Len);
+    }
+    auto image = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
+        .LastIncludedIndex = index,
+        .LastIncludedTerm = State->LogTerm(index),
+        .Nentries = snapshot.PayloadSize,
+        .Done = 1,
+    });
+    image.PayloadSize = snapshot.PayloadSize;
+    image.Payload = snapshot.Payload;
+    State->InstallSnapshot(std::move(image));
 }
 
 uint32_t TRaft::GetLeaderId() const {
@@ -822,10 +874,16 @@ void TRequestProcessor::CleanUp(const std::shared_ptr<INode>& replyTo) {
 
 void TRequestProcessor::ProcessCommitted() {
     PruneRequests();
+    auto& state = Raft->GetState();
+    if (Rsm->LastAppliedIndex < state->SnapshotIndex) {
+        // The log before the snapshot is gone: the application starts from the image.
+        auto snapshot = state->GetSnapshot();
+        Rsm->Apply(snapshot);
+        Rsm->LastAppliedIndex = snapshot->LastIncludedIndex;
+    }
     auto commitIndex = Raft->GetVolatileState()->CommitIndex;
     // Never rewind application progress, or overflow LastAppliedIndex + 1.
     if (commitIndex <= Rsm->LastAppliedIndex) return;
-    auto& state = Raft->GetState();
     for (auto i = Rsm->LastAppliedIndex+1; i <= commitIndex; i++) {
         auto entry = state->Get(i);
         if (entry->Flags == TLogEntry::EStub) {

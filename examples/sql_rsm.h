@@ -37,6 +37,12 @@ public:
     TMessageHolder<TMessage> Write(TMessageHolder<TLogEntry> message, uint64_t index) override;
     // convert request to log message
     TMessageHolder<TLogEntry> Prepare(TMessageHolder<TCommandRequest> message) override;
+    TMessageHolder<TInstallSnapshotRequest> Snapshot() const override {
+        throw std::runtime_error("Not implemented");
+    }
+    void Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) override {
+        throw std::runtime_error("Not implemented");
+    }
 
 private:
     int Execute(const std::string& q);

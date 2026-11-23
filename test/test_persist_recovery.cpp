@@ -1,6 +1,7 @@
 #include <miniraft/persist.h>
 #include <filesystem>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <iterator>
 #include <stdarg.h>
@@ -25,6 +26,9 @@ struct TFiles {
     }
     ~TFiles() { std::error_code ignored; fs::remove_all(Directory, ignored); }
     fs::path Path(const std::string& kind) const { return Name + "." + kind + ".1"; }
+    fs::path Path(const std::string& kind, uint64_t snapshot) const {
+        return Name + "." + kind + ".1." + std::to_string(snapshot);
+    }
     void Seed() {
         TDiskState state(Name, 1);
         state.CurrentTerm = 7;
@@ -36,7 +40,10 @@ struct TFiles {
         }
     }
     template<class T> void Overwrite(const std::string& kind, uint64_t offset, T value) {
-        std::fstream file(Path(kind), std::ios::in | std::ios::out | std::ios::binary);
+        OverwriteAt(Path(kind), offset, value);
+    }
+    template<class T> void OverwriteAt(const fs::path& path, uint64_t offset, T value) {
+        std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
         file.seekp(offset);
         file.write(reinterpret_cast<const char*>(&value), sizeof(value));
         file.flush();
@@ -240,6 +247,142 @@ void test_invalid_terms_in_logically_removed_suffix_are_ignored(void**) {
     assert_int_equal(recovered.Get(2)->Term, 7);
 }
 
+TMessageHolder<TInstallSnapshotRequest> Image(uint64_t index, uint64_t term, std::initializer_list<std::string> values) {
+    auto image = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
+        .LastIncludedIndex = index, .LastIncludedTerm = term, .Nentries = uint32_t(values.size()), .Done = 1});
+    image.InitPayload(values.size());
+    uint32_t i = 0;
+    for (const auto& value : values) {
+        auto record = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + value.size());
+        memcpy(record->Data, value.data(), value.size());
+        image.Payload[i++] = record;
+    }
+    return image;
+}
+std::vector<std::string> Records(const TMessageHolder<TInstallSnapshotRequest>& image) {
+    std::vector<std::string> values;
+    for (uint32_t i = 0; i < image.PayloadSize; ++i) {
+        auto record = image.Payload[i].Mes;
+        values.emplace_back(reinterpret_cast<const TLogEntry*>(record)->Data, record->Len - sizeof(TLogEntry));
+    }
+    return values;
+}
+void AppendTerm(TDiskState& state, uint64_t term) {
+    auto entry = NewHoldedMessage<TLogEntry>();
+    entry->Term = term;
+    state.Append(entry);
+}
+void test_compacted_log_and_image_survive_restart(void**) {
+    TFiles files;
+    files.Seed();
+    assert_int_equal(fs::file_size(files.Path("state")), 20);
+    {
+        TDiskState state(files.Name, 1);
+        AppendTerm(state, 7);
+        state.InstallSnapshot(Image(2, 5, {"a", "b"}));
+        assert_int_equal(state.SnapshotIndex, 2);
+        assert_int_equal(state.LastLogIndex, 3);
+        assert_int_equal(state.LastLogTerm, 7);
+        assert_false(state.Get(2));
+        assert_int_equal(state.Get(3)->Term, 7);
+    }
+    assert_int_equal(fs::file_size(files.Path("state")), 36);
+    assert_false(fs::exists(files.Path("entries")));
+    assert_false(fs::exists(files.Path("index")));
+    {
+        TDiskState state(files.Name, 1);
+        assert_int_equal(state.SnapshotIndex, 2);
+        assert_int_equal(state.SnapshotTerm, 5);
+        assert_int_equal(state.LastLogIndex, 3);
+        assert_int_equal(state.LogTerm(2), 5);
+        assert_int_equal(state.Get(3)->Term, 7);
+        assert_true(Records(state.GetSnapshot()) == (std::vector<std::string>{"a", "b"}));
+        AppendTerm(state, 7);
+        state.RemoveLast();
+        state.RemoveLast();
+        assert_int_equal(state.LastLogIndex, 2);
+        assert_int_equal(state.LastLogTerm, 5);
+        // Removal never reaches into the snapshot.
+        state.RemoveLast();
+        assert_int_equal(state.LastLogIndex, 2);
+        AppendTerm(state, 7);
+        // An image from a leader that the local log does not match replaces the whole log.
+        state.InstallSnapshot(Image(5, 7, {"c"}));
+        assert_int_equal(state.LastLogIndex, 5);
+        assert_int_equal(state.LastLogTerm, 7);
+    }
+    assert_false(fs::exists(files.Path("snapshot", 2)));
+    TDiskState state(files.Name, 1);
+    assert_int_equal(state.SnapshotIndex, 5);
+    assert_int_equal(state.LastLogIndex, 5);
+    assert_true(Records(state.GetSnapshot()) == std::vector<std::string>{"c"});
+    AppendTerm(state, 7);
+    assert_int_equal(state.Get(6)->Term, 7);
+    bool rejected = false;
+    try { state.InstallSnapshot(Image(5, 7, {})); } catch (const std::invalid_argument&) { rejected = true; }
+    assert_true(rejected);
+}
+void test_interrupted_snapshot_publication_recovers_one_side(void**) {
+    // Before the metadata commit: the files of the new index are left over.
+    {
+        TFiles files;
+        files.Seed();
+        { TDiskState state(files.Name, 1); state.InstallSnapshot(Image(1, 2, {"a"})); }
+        for (const std::string kind : {"entries", "index", "snapshot"}) {
+            fs::copy_file(files.Path(kind, 1), files.Path(kind, 2));
+        }
+        fs::resize_file(files.Path("snapshot", 2), 3);
+        TDiskState state(files.Name, 1);
+        assert_int_equal(state.SnapshotIndex, 1);
+        assert_int_equal(state.LastLogIndex, 2);
+        assert_int_equal(state.Get(2)->Term, 5);
+        for (const std::string kind : {"entries", "index", "snapshot"}) {
+            assert_false(fs::exists(files.Path(kind, 2)));
+        }
+    }
+    // After it: the files of the previous index are left over.
+    TFiles files;
+    files.Seed();
+    fs::copy_file(files.Path("entries"), files.Path("entries") += ".old");
+    fs::copy_file(files.Path("index"), files.Path("index") += ".old");
+    { TDiskState state(files.Name, 1); state.InstallSnapshot(Image(1, 2, {"a"})); }
+    fs::rename(files.Path("entries") += ".old", files.Path("entries"));
+    fs::rename(files.Path("index") += ".old", files.Path("index"));
+    // Names the store never writes are not its leftovers.
+    for (const std::string name : {".entries.1.07", ".index.1.0", ".snapshot.1.2x", ".entries.10"}) {
+        std::ofstream(files.Name + name) << "foreign";
+    }
+    TDiskState state(files.Name, 1);
+    assert_int_equal(state.SnapshotIndex, 1);
+    assert_int_equal(state.Get(2)->Term, 5);
+    assert_false(fs::exists(files.Path("entries")));
+    assert_false(fs::exists(files.Path("index")));
+    for (const std::string name : {".entries.1.07", ".index.1.0", ".snapshot.1.2x", ".entries.10"}) {
+        assert_true(fs::exists(files.Name + name));
+    }
+}
+void test_incomplete_or_corrupt_compacted_store_is_rejected(void**) {
+    const std::vector<std::function<void(TFiles&)>> damages = {
+        [](TFiles& f) { fs::remove(f.Path("snapshot", 1)); },
+        [](TFiles& f) { fs::remove(f.Path("entries", 1)); },
+        [](TFiles& f) { fs::remove(f.Path("index", 1)); },
+        [](TFiles& f) { fs::remove(f.Path("state")); },
+        [](TFiles& f) { fs::resize_file(f.Path("snapshot", 1), fs::file_size(f.Path("snapshot", 1)) - 1); },
+        [](TFiles& f) { fs::resize_file(f.Path("snapshot", 1), fs::file_size(f.Path("snapshot", 1)) + 1); },
+        [](TFiles& f) { f.OverwriteAt(f.Path("snapshot", 1), sizeof(TMessageEx), uint64_t(2)); },
+        [](TFiles& f) { f.Overwrite("state", 20, uint64_t(3)); },
+        [](TFiles& f) { f.Overwrite("state", 28, uint64_t(8)); },
+        [](TFiles& f) { f.Overwrite("state", 28, uint64_t(0)); },
+    };
+    for (const auto& damage : damages) {
+        TFiles files;
+        files.Seed();
+        { TDiskState state(files.Name, 1); state.InstallSnapshot(Image(1, 2, {"a"})); }
+        damage(files);
+        files.RejectRecovery();
+    }
+}
+
 void test_live_storage_failure_is_reported(void**) {
     TFiles files;
     files.Seed();
@@ -281,6 +424,9 @@ int main() {
         cmocka_unit_test(test_equal_and_skipped_terms_and_full_width_current_term_recover),
         cmocka_unit_test(test_invalid_terms_in_logically_removed_suffix_are_ignored),
         cmocka_unit_test(test_live_invalid_log_term_is_reported),
+        cmocka_unit_test(test_compacted_log_and_image_survive_restart),
+        cmocka_unit_test(test_interrupted_snapshot_publication_recovers_one_side),
+        cmocka_unit_test(test_incomplete_or_corrupt_compacted_store_is_rejected),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
