@@ -280,6 +280,7 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, TC
         }
     }
     if (State->SnapshotIndex) {
+        // IState has no way to read one record, so this loads the whole image.
         if (auto snapshot = ImageConfiguration(State->GetSnapshot())) {
             initial = std::move(*snapshot);
             initial.Index = State->SnapshotIndex;
