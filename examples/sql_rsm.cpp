@@ -241,7 +241,9 @@ TMessageHolder<TInstallSnapshotRequest> TSql::Snapshot() const {
     sqlite3_int64 size = 0;
     std::unique_ptr<unsigned char, decltype(&sqlite3_free)> data(
         sqlite3_serialize(Db, "main", &size, 0), sqlite3_free);
-    if (!data) throw std::runtime_error("Cannot serialize SQL database");
+    if (!data) {
+        throw std::runtime_error("Cannot serialize SQL database");
+    }
     // The progress of the file: LastAppliedIndex can be past it by election stubs, which
     // TRequestProcessor skips without a Write.
     auto snapshot = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{.LastIncludedIndex = ReadProgress(Db)});
@@ -262,7 +264,9 @@ void TSql::Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) {
         size += snapshot.Payload[i].Cast<TLogEntry>()->Len - sizeof(TLogEntry);
     }
     auto* data = static_cast<unsigned char*>(sqlite3_malloc64(std::max<uint64_t>(size, 1)));
-    if (!data) throw std::runtime_error("Cannot allocate SQL snapshot");
+    if (!data) {
+        throw std::runtime_error("Cannot allocate SQL snapshot");
+    }
     uint64_t offset = 0;
     for (uint32_t i = 0; i < snapshot.PayloadSize; ++i) {
         auto record = snapshot.Payload[i].Cast<TLogEntry>();
@@ -279,18 +283,25 @@ void TSql::Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) {
         throw std::runtime_error("Cannot open SQL snapshot");
     }
     if (sqlite3_deserialize(image.get(), "main", data, size, size,
-                            SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_READONLY) != SQLITE_OK)
+                            SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_READONLY) != SQLITE_OK) {
         throw TMessageError("Invalid SQL snapshot");
+    }
     if (sqlite3_exec(image.get(), "PRAGMA quick_check", [](void*, int, char** values, char**) {
             return values[0] && std::string_view(values[0]) == "ok" ? 0 : 1;
-        }, nullptr, nullptr) != SQLITE_OK || ReadProgress(image.get()) != snapshot->LastIncludedIndex)
+        }, nullptr, nullptr) != SQLITE_OK || ReadProgress(image.get()) != snapshot->LastIncludedIndex) {
         throw TMessageError("Invalid SQL snapshot");
-    if (!sqlite3_get_autocommit(Db)) throw std::runtime_error("SQL application transaction already active");
+    }
+    if (!sqlite3_get_autocommit(Db)) {
+        throw std::runtime_error("SQL application transaction already active");
+    }
     auto* backup = sqlite3_backup_init(Db, "main", image.get(), "main");
-    if (!backup) throw std::runtime_error("Cannot apply SQL snapshot: " + std::string(sqlite3_errmsg(Db)));
-    const int stepped = sqlite3_backup_step(backup, -1);
-    if (sqlite3_backup_finish(backup) != SQLITE_OK || stepped != SQLITE_DONE)
+    if (!backup) {
         throw std::runtime_error("Cannot apply SQL snapshot: " + std::string(sqlite3_errmsg(Db)));
+    }
+    const int stepped = sqlite3_backup_step(backup, -1);
+    if (sqlite3_backup_finish(backup) != SQLITE_OK || stepped != SQLITE_DONE) {
+        throw std::runtime_error("Cannot apply SQL snapshot: " + std::string(sqlite3_errmsg(Db)));
+    }
     LastAppliedIndex = snapshot->LastIncludedIndex;
 }
 
