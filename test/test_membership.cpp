@@ -95,4 +95,36 @@ TEST(Membership, server_without_heartbeats_cannot_depose_the_leader) {
     ASSERT_GT(cluster.Term(2), term);
 }
 
+// With links 2->1 and 1->3 down, node 2 hears the leader, which hears nobody, and node 3
+// hears nobody. The leader must step down, or node 2 would hold its vote back forever.
+TEST(Membership, leader_that_hears_no_majority_steps_down) {
+    TCluster cluster(3);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
+    ASSERT_NO_FATAL_FAILURE(cluster.Step());
+    cluster.Drop = [](const auto& m) {
+        return (m->Src == 2 && m->Dst == 1) || (m->Src == 1 && m->Dst == 3);
+    };
+    auto leader = [&]() -> uint32_t {
+        for (uint32_t id : {2, 3}) {
+            if (cluster[id].CurrentStateName() == EState::LEADER) {
+                return id;
+            }
+        }
+        return 0;
+    };
+    for (int i = 0; i < 400 && !leader(); ++i) {
+        ASSERT_NO_FATAL_FAILURE(cluster.Step());
+    }
+    const auto next = leader();
+    ASSERT_NE(next, 0);
+    ASSERT_NE(cluster[1].CurrentStateName(), EState::LEADER);
+    // Nodes 2 and 3 hear each other: the new leader stays and commits.
+    cluster[next].Append(NewHoldedMessage<TLogEntry>());
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_NO_FATAL_FAILURE(cluster.Step());
+    }
+    ASSERT_EQ(cluster[next].CurrentStateName(), EState::LEADER);
+    ASSERT_EQ(cluster[next].GetVolatileState()->CommitIndex, cluster[next].GetLastIndex());
+}
+
 } // namespace

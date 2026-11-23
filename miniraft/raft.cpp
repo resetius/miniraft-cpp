@@ -296,6 +296,7 @@ void TRaft::OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message) {
     // A newer response supersedes older RPCs. Reordered/duplicate failures
     // must not undo progress or repeatedly increase backoff.
     requests.erase(requests.begin(), std::next(request));
+    VolatileState->Replied.insert(nodeId);
     if (message->Success) {
         if (message->Seqno > 0 && message->Seqno <= VolatileState->LastSentSeqno[nodeId]) {
             auto& acknowledged = VolatileState->ReadAckSeqno[nodeId];
@@ -425,6 +426,7 @@ void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message) 
         return;
     }
     transfer->second.Seqno = 0;
+    VolatileState->Replied.insert(nodeId);
     VolatileState->RpcDue[nodeId] = ITimeSource::Time{};
     if (message->MatchIndex) {
         VolatileState->SnapshotTransfers.erase(transfer);
@@ -692,7 +694,28 @@ void TRaft::CandidateTimeout(ITimeSource::Time now) {
     }
 }
 
+void TRaft::StepDown(ITimeSource::Time now) {
+    auto follower = std::make_unique<TVolatileState>();
+    follower->CommitIndex = VolatileState->CommitIndex;
+    follower->ElectionDue = MakeElection(now);
+    VolatileState = std::move(follower);
+    StateName = EState::FOLLOWER;
+}
+
 void TRaft::LeaderTimeout(ITimeSource::Time now) {
+    // Thesis, 6.2: a leader steps down when an election timeout passes without replies from a
+    // majority. Otherwise a leader that is heard but cannot commit would hold the votes back forever.
+    auto& due = VolatileState->QuorumCheckDue;
+    if (!due) {
+        due = now + TTimeout::Election;
+    } else if (*due <= now) {
+        if (int(VolatileState->Replied.size()) + 1 < MinVotes) {
+            StepDown(now);
+            return;
+        }
+        VolatileState->Replied.clear();
+        due = now + TTimeout::Election;
+    }
     for (auto& [id, node] : Nodes) {
         const auto nextIndex = VolatileState->NextIndex[id];
         const bool install = nextIndex <= State->SnapshotIndex;
