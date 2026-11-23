@@ -113,6 +113,14 @@ void test_kv_invalid_snapshot_leaves_state_unchanged(void**) {
     snapshot.Payload[0] = NewHoldedMessage<TLogEntry>();
     Reject([&] { kv.Apply(snapshot); });
     assert_string_equal(ListKv(kv).c_str(), before.c_str());
+    // A key without a value: Write would delete it, so the image cannot hold it.
+    auto empty = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + sizeof(TKvEntry) + 3);
+    const TKvEntry header{.KeySize = 3, .ValSize = 0};
+    memcpy(empty->Data, &header, sizeof(header));
+    memcpy(empty->Data + sizeof(header), "key", 3);
+    snapshot.Payload[0] = empty;
+    Reject([&] { kv.Apply(snapshot); });
+    assert_string_equal(ListKv(kv).c_str(), before.c_str());
 }
 void test_kv_restores_from_a_stored_snapshot(void**) {
     TKv source;

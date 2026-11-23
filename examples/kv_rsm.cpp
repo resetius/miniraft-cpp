@@ -85,6 +85,10 @@ void TKv::Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) {
             throw TMessageError("Short KV snapshot record");
         }
         memcpy(&header, record->Data, sizeof(header));
+        // An empty value deletes a key in Write, so an image never holds one.
+        if (!header.ValSize) {
+            throw TMessageError("Empty value in KV snapshot record");
+        }
         const auto data = record->Data + sizeof(header);
         ValidatePayloadRange(record, data, uint64_t(header.KeySize) + header.ValSize);
         h[std::string(data, header.KeySize)] = std::string(data + header.KeySize, header.ValSize);
