@@ -442,9 +442,9 @@ TEST(Raft, candidate_initiate_election) {
         .CandidateId = raft->GetId(),
     });
     messages[0]->Dst = 0;
-    assert_message_equal(messages[0], *r.Mes);
+    ASSERT_NO_FATAL_FAILURE(assert_message_equal(messages[0], *r.Mes));
     messages[1]->Dst = 0;
-    assert_message_equal(messages[1], *r.Mes);
+    ASSERT_NO_FATAL_FAILURE(assert_message_equal(messages[1], *r.Mes));
 }
 
 TEST(Raft, candidate_vote_request_small_term) {
@@ -473,7 +473,7 @@ TEST(Raft, candidate_vote_request_small_term) {
         .VoteGranted = false,
     });
     ASSERT_EQ(messages.size(), 1);
-    assert_message_equal(messages[0], *res.Mes);
+    ASSERT_NO_FATAL_FAILURE(assert_message_equal(messages[0], *res.Mes));
     ASSERT_EQ(raft->GetState()->CurrentTerm, 1);
 }
 
@@ -503,7 +503,7 @@ TEST(Raft, candidate_vote_request_ok_term) {
         .VoteGranted = true,
     });
     ASSERT_EQ(messages.size(), 1);
-    assert_message_equal(messages[0], *res.Mes);
+    ASSERT_NO_FATAL_FAILURE(assert_message_equal(messages[0], *res.Mes));
     ASSERT_EQ(raft->GetState()->CurrentTerm, 1);
 }
 

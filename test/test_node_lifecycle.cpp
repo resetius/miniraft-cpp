@@ -163,7 +163,7 @@ NNet::TVoidTask ReadUntilFailure(std::shared_ptr<TFakeNode> node,
 TEST(NodeLifecycle, write_failure_drops_queue_and_reconnects) {
     TFakeNet net;
     auto node = net.MakeNode();
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     auto first = net.Wires.back();
     auto one = Entry("one"), two = Entry("two");
     first->Room = 10;
@@ -180,7 +180,7 @@ TEST(NodeLifecycle, write_failure_drops_queue_and_reconnects) {
     node->Drain(); // the next attempt waits for the retry delay
     ASSERT_EQ(net.Wires.size(), 1);
     net.Time->Current += std::chrono::seconds(1);
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     ASSERT_EQ(net.Wires.size(), 2);
     ASSERT_TRUE(net.Wires.back()->Written.empty());
     auto three = Entry("three");
@@ -193,7 +193,7 @@ TEST(NodeLifecycle, write_failure_drops_queue_and_reconnects) {
 TEST(NodeLifecycle, unreachable_peer_does_not_keep_messages) {
     TFakeNet net;
     auto node = net.MakeNode();
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     net.Wires.back()->Break();
     for (int i = 0; i < 100; ++i) {
         node->Send(Entry("stale"));
@@ -217,14 +217,14 @@ TEST(NodeLifecycle, unreachable_peer_does_not_keep_messages) {
     auto fresh = Entry("fresh");
     node->Send(fresh);
     net.Time->Current += std::chrono::seconds(1);
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     ASSERT_TRUE(net.Wires.back()->Written == Bytes(fresh));
 }
 
 TEST(NodeLifecycle, read_failure_and_write_wakeup_in_one_batch) {
     TFakeNet net;
     auto node = net.MakeNode();
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     auto wire = net.Wires.back();
     std::weak_ptr<TFakeNode::TConnection> connection = node->GetConnection();
     bool failed = false;
@@ -242,7 +242,7 @@ TEST(NodeLifecycle, read_failure_and_write_wakeup_in_one_batch) {
     ASSERT_TRUE(connection.expired());
 
     net.Time->Current += std::chrono::seconds(1);
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     auto two = Entry("two");
     node->Send(two);
     node->Drain();
@@ -252,7 +252,7 @@ TEST(NodeLifecycle, read_failure_and_write_wakeup_in_one_batch) {
 TEST(NodeLifecycle, stale_reader_cannot_disconnect_new_connection) {
     TFakeNet net;
     auto node = net.MakeNode();
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     auto old = node->GetConnection();
     node->Disconnect(old);
     ASSERT_FALSE(node->IsConnected());
@@ -277,7 +277,7 @@ TEST(NodeLifecycle, stale_reader_cannot_disconnect_new_connection) {
 TEST(NodeLifecycle, destroy_node_with_suspended_drainer) {
     TFakeNet net;
     auto node = net.MakeNode();
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     auto wire = net.Wires.back();
     wire->Room = 10;
     node->Send(Entry("one"));
@@ -308,7 +308,7 @@ TEST(NodeLifecycle, destroy_node_with_pending_connect) {
 TEST(NodeLifecycle, unsendable_reply_is_rejected_alone) {
     TFakeNet net;
     auto node = net.MakeNode();
-    net.Connect(*node);
+    ASSERT_NO_FATAL_FAILURE(net.Connect(*node));
     auto big = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + 16 * 1024 * 1024);
     big->Cookie = 7;
     auto one = Entry("one"), two = Entry("two");

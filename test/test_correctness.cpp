@@ -56,16 +56,16 @@ struct TCluster {
         Now += std::chrono::seconds(10);
         auto& node = Nodes.at(id - 1);
         node->ProcessTimeout(Now);
-        Drain();
+        ASSERT_NO_FATAL_FAILURE(Drain());
         node->ProcessTimeout(Now);
-        Drain();
+        ASSERT_NO_FATAL_FAILURE(Drain());
         ASSERT_EQ(node->CurrentStateName(), EState::LEADER);
     }
     void Replicate(uint32_t id, bool reverse = false, bool duplicate = false) {
         for (int round = 0; round < 12; ++round) {
             Now += std::chrono::milliseconds(500);
             Nodes.at(id - 1)->ProcessTimeout(Now);
-            Drain(reverse, duplicate);
+            ASSERT_NO_FATAL_FAILURE(Drain(reverse, duplicate));
         }
     }
     void AssertCommittedPrefix() {
@@ -192,7 +192,7 @@ TEST(Correctness, nonleader_proposal_rejection_preserves_store_and_input) {
             raft->ProcessTimeout(cluster.Now);
             ASSERT_EQ(raft->CurrentStateName(), EState::CANDIDATE);
         } else if (phase == 2) {
-            cluster.Elect(1); cluster.Replicate(1);
+            ASSERT_NO_FATAL_FAILURE(cluster.Elect(1); cluster.Replicate(1));
             auto vote = NewHoldedMessage(
                 TMessageEx{.Src = 2, .Dst = 1, .Term = raft->GetState()->CurrentTerm + 1},
                 TRequestVoteRequest{.LastLogIndex = raft->GetLastIndex(),
@@ -211,7 +211,9 @@ TEST(Correctness, nonleader_proposal_rejection_preserves_store_and_input) {
 }
 
 TEST(Correctness, follower_proposal_cannot_diverge_same_term_committed_command) {
-    TCluster cluster(3); cluster.Elect(1); cluster.Replicate(1);
+    TCluster cluster(3);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
+    cluster.Replicate(1);
     TWriteClient leader(cluster.Nodes[0]), follower(cluster.Nodes[1]), other(cluster.Nodes[2]);
     bool rejected = false;
     try { cluster.Nodes[1]->Append(LogValue("rogue")); }
@@ -223,7 +225,7 @@ TEST(Correctness, follower_proposal_cannot_diverge_same_term_committed_command) 
         ASSERT_EQ(client->Rsm->Applied.size(), 1);
         ASSERT_STREQ(client->Rsm->Applied[0].c_str(), "valid");
     }
-    cluster.AssertCommittedPrefix();
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
     ASSERT_TRUE(rejected);
     ASSERT_EQ(leader.Replies.size(), 1);
     ASSERT_EQ(leader.Replies[0].Error, 0);
@@ -231,7 +233,7 @@ TEST(Correctness, follower_proposal_cannot_diverge_same_term_committed_command) 
 
 TEST(Correctness, forwarded_write_and_strong_read_complete_through_real_raft) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     std::deque<TMessageHolder<TCommandRequest>> requests;
     std::deque<TMessageHolder<TCommandResponse>> responses;
@@ -277,13 +279,13 @@ TEST(Correctness, forwarded_write_and_strong_read_complete_through_real_raft) {
 
 TEST(Correctness, replaced_write_never_receives_another_commands_reply) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     cluster.Nodes[0]->Append(LogValue("uncommitted-padding"));
     TWriteClient client(cluster.Nodes[0]);
     client.Write(11, "lost-command"); // index 3, old term
     cluster.Isolated = {1};
-    cluster.Elect(2); // new-term no-op at index 2
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2)); // new-term no-op at index 2
     cluster.Nodes[1]->Append(LogValue("replacement-command")); // index 3, new term
     cluster.Replicate(2);
     cluster.Isolated.clear();
@@ -301,11 +303,11 @@ TEST(Correctness, replaced_write_never_receives_another_commands_reply) {
 
 TEST(Correctness, stepdown_rejects_write_without_waiting_for_application) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TWriteClient client(cluster.Nodes[0]);
     client.Write(11, "pending");
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     client.Processor.CheckStateChange();
     ASSERT_EQ(client.Replies.size(), 1);
     ASSERT_EQ(client.Replies[0].Error, 1);
@@ -313,14 +315,14 @@ TEST(Correctness, stepdown_rejects_write_without_waiting_for_application) {
 
 TEST(Correctness, committed_but_unanswered_write_has_unknown_outcome_on_stepdown) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TWriteClient client(cluster.Nodes[0]);
     client.Write(11, "committed");
     cluster.Replicate(1);
     client.Processor.ProcessCommitted(); // application reply cached, not sent
     ASSERT_FALSE(client.Rsm->LastReply.expired());
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     client.Poll();
     ASSERT_EQ(client.Replies.size(), 1);
     ASSERT_EQ(client.Replies[0].Error, 1);
@@ -334,12 +336,12 @@ TEST(Correctness, committed_but_unanswered_write_has_unknown_outcome_on_stepdown
 
 TEST(Correctness, old_write_is_rejected_after_unobserved_reelection) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TWriteClient client(cluster.Nodes[0]);
     client.Write(11, "lost");
-    cluster.Elect(2);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     client.Write(22, "new");
     ASSERT_EQ(client.Replies.size(), 1);
@@ -355,13 +357,13 @@ TEST(Correctness, old_write_is_rejected_after_unobserved_reelection) {
 
 TEST(Correctness, default_read_of_lost_tail_is_rejected_on_stepdown) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     cluster.Nodes[0]->Append(LogValue("lost-1"));
     cluster.Nodes[0]->Append(LogValue("lost-2"));
     TWriteClient client(cluster.Nodes[0]);
     client.Read(11);
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     client.Processor.CheckStateChange();
     ASSERT_EQ(client.Replies.size(), 1);
     ASSERT_EQ(client.Replies[0].Error, 1);
@@ -372,7 +374,7 @@ TEST(Correctness, request_waiting_for_leader_runs_when_local_node_is_elected) {
         TCluster cluster(count);
         TWriteClient client(cluster.Nodes[0]);
         client.Write(0, "waiting-for-election");
-        cluster.Elect(1);
+        ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
         client.Processor.CheckStateChange();
         ASSERT_EQ(cluster.Nodes[0]->GetLastIndex(), 2);
         cluster.Replicate(1);
@@ -385,11 +387,11 @@ TEST(Correctness, request_waiting_for_leader_runs_when_local_node_is_elected) {
 
 TEST(Correctness, write_replaced_by_noop_is_rejected_without_application_reply) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TWriteClient client(cluster.Nodes[0]);
     client.Write(11, "lost");
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     cluster.Replicate(2);
     client.Poll();
     ASSERT_EQ(client.Replies.size(), 1);
@@ -400,7 +402,7 @@ TEST(Correctness, write_replaced_by_noop_is_rejected_without_application_reply) 
 
 TEST(Correctness, stale_read_does_not_wait_for_uncommitted_tail) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     cluster.Nodes[0]->Append(LogValue("uncommitted"));
     TWriteClient client(cluster.Nodes[0]);
@@ -413,7 +415,7 @@ TEST(Correctness, stale_read_does_not_wait_for_uncommitted_tail) {
 
 TEST(Correctness, disconnect_removes_local_write_and_read_waiters) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TWriteClient client(cluster.Nodes[0]);
     client.Write(11, "still-may-commit");
@@ -451,14 +453,14 @@ TEST(Correctness, disconnect_removes_requests_waiting_for_leader) {
     client.Processor.CleanUp(client.Endpoint);
     client.Endpoint.reset();
     ASSERT_TRUE(endpoint.expired());
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     client.Processor.CheckStateChange();
     ASSERT_EQ(cluster.Nodes[0]->GetLastIndex(), 1);
 }
 
 TEST(Correctness, disconnect_releases_cached_write_reply) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TWriteClient client(cluster.Nodes[0]);
     client.Write(11, "committed");
@@ -473,7 +475,7 @@ TEST(Correctness, disconnect_releases_cached_write_reply) {
 
 TEST(Correctness, follower_application_does_not_retain_unused_replies) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TWriteClient follower(cluster.Nodes[1]);
     cluster.Nodes[0]->Append(LogValue("background-command"));
@@ -486,7 +488,7 @@ TEST(Correctness, follower_application_does_not_retain_unused_replies) {
 TEST(Correctness, strong_reads_require_fresh_majority_in_all_cluster_sizes) {
     for (uint32_t count = 1; count <= 8; ++count) {
         TCluster cluster(count);
-        cluster.Elect(1);
+        ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
         cluster.Replicate(1);
         TReadClient client(cluster.Nodes[0]);
         client.Read(11);
@@ -504,12 +506,12 @@ TEST(Correctness, strong_reads_require_fresh_majority_in_all_cluster_sizes) {
 
 TEST(Correctness, stale_leader_with_one_follower_cannot_serve_strong_read) {
     TCluster cluster(5);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     // The majority elects a new leader and commits a later entry while the
     // old leader remains connected to one old-term follower.
     cluster.Isolated = {1, 2};
-    cluster.Elect(3);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(3));
     auto latest = cluster.Nodes[2]->Append(NewHoldedMessage<TLogEntry>());
     cluster.Replicate(3);
     ASSERT_TRUE(cluster.Nodes[2]->GetVolatileState()->CommitIndex >= latest);
@@ -529,7 +531,7 @@ TEST(Correctness, stale_leader_with_one_follower_cannot_serve_strong_read) {
 
 TEST(Correctness, new_read_cannot_reuse_previous_read_quorum) {
     TCluster cluster(5);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TReadClient client(cluster.Nodes[0]);
     client.Read(11);
@@ -549,12 +551,12 @@ TEST(Correctness, new_read_cannot_reuse_previous_read_quorum) {
 
 TEST(Correctness, ready_read_is_cancelled_on_leadership_change) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TReadClient client(cluster.Nodes[0]);
     client.Read(11);
     cluster.RoundTrip(1, 2);
-    cluster.Elect(2); // Lose leadership before the application processes reads.
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2)); // Lose leadership before the application processes reads.
     client.Poll();
     ASSERT_EQ(client.Replies.size(), 1);
     ASSERT_EQ(client.Replies[0].Error, 1);
@@ -562,7 +564,7 @@ TEST(Correctness, ready_read_is_cancelled_on_leadership_change) {
 
 TEST(Correctness, consistent_flag_takes_precedence_over_stale) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TReadClient client(cluster.Nodes[0]);
     client.Read(11, TCommandRequest::EConsistent | TCommandRequest::EStale);
@@ -576,7 +578,7 @@ TEST(Correctness, consistent_flag_takes_precedence_over_stale) {
 
 TEST(Correctness, delayed_pre_read_replies_cannot_confirm_new_read) {
     TCluster cluster(5);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     cluster.Nodes[0]->ProcessTimeout(cluster.Now += TTimeout::Election);
     for (uint32_t peer = 2; peer <= 5; ++peer) cluster.DeliverOne(1, peer);
@@ -599,7 +601,7 @@ TEST(Correctness, new_leader_waits_for_current_term_commit_and_application) {
         node->GetState()->Append(NewHoldedMessage<TLogEntry>());
         const_cast<TVolatileState*>(node->GetVolatileState())->CommitIndex = 1;
     }
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     // First RPCs probe the old prefix; the new-term no-op is not committed yet.
     ASSERT_EQ(cluster.Nodes[0]->GetVolatileState()->CommitIndex, 1);
     ASSERT_EQ(cluster.Nodes[0]->CommitSeqno(), 0);
@@ -620,12 +622,12 @@ TEST(Correctness, new_leader_waits_for_current_term_commit_and_application) {
 
 TEST(Correctness, old_term_read_is_rejected_after_reelection) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     TReadClient client(cluster.Nodes[0]);
     client.Read(11);
-    cluster.Elect(2);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     // No application poll observed the intermediate follower state. The term
     // tag must still reject the old operation before accepting another read.
@@ -689,26 +691,26 @@ void CheckRequests(uint32_t flags, bool partial) {
     processor.ProcessWaiting();
     ASSERT_EQ(replies.size(), 2);
 }
-TEST(Correctness, read_fifo) { CheckRequests(0, false); }
-TEST(Correctness, strong_read_fifo) { CheckRequests(TCommandRequest::EConsistent, false); }
-TEST(Correctness, write_fifo) { CheckRequests(TCommandRequest::EWrite, false); }
-TEST(Correctness, partial_write_completion) { CheckRequests(TCommandRequest::EWrite, true); }
+TEST(Correctness, read_fifo) { ASSERT_NO_FATAL_FAILURE(CheckRequests(0, false)); }
+TEST(Correctness, strong_read_fifo) { ASSERT_NO_FATAL_FAILURE(CheckRequests(TCommandRequest::EConsistent, false)); }
+TEST(Correctness, write_fifo) { ASSERT_NO_FATAL_FAILURE(CheckRequests(TCommandRequest::EWrite, false)); }
+TEST(Correctness, partial_write_completion) { ASSERT_NO_FATAL_FAILURE(CheckRequests(TCommandRequest::EWrite, true)); }
 
 TEST(Correctness, loss_reorder_duplicate_and_recovery) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     auto index = cluster.Nodes[0]->Append(NewHoldedMessage<TLogEntry>());
     cluster.Nodes[0]->ProcessTimeout(cluster.Now += std::chrono::seconds(1));
     cluster.Packets.clear(); // Drop a complete replication round.
     ASSERT_TRUE(cluster.Nodes[0]->GetVolatileState()->CommitIndex < index);
     cluster.Replicate(1, true, true);
     for (auto& node : cluster.Nodes) ASSERT_EQ(node->GetVolatileState()->CommitIndex, index);
-    cluster.AssertCommittedPrefix();
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
 }
 
 TEST(Correctness, partition_leader_replacement_and_heal) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     auto committed = cluster.Nodes[0]->Append(NewHoldedMessage<TLogEntry>());
     cluster.Replicate(1);
     cluster.Nodes[0]->ProcessTimeout(cluster.Now += std::chrono::seconds(1));
@@ -720,27 +722,27 @@ TEST(Correctness, partition_leader_replacement_and_heal) {
     auto minority = cluster.Nodes[0]->Append(lost);
     cluster.Replicate(1);
     ASSERT_EQ(cluster.Nodes[0]->GetVolatileState()->CommitIndex, committed);
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     auto replacement = cluster.Nodes[1]->Append(NewHoldedMessage<TLogEntry>());
     cluster.Replicate(2);
     ASSERT_TRUE(cluster.Nodes[1]->GetVolatileState()->CommitIndex >= replacement);
-    cluster.AssertCommittedPrefix();
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
     cluster.Isolated.clear();
     // Old-term traffic arrives after the new leader has committed its entry.
     cluster.Packets = std::move(delayed);
-    cluster.Drain(true, true);
+    ASSERT_NO_FATAL_FAILURE(cluster.Drain(true, true));
     cluster.Replicate(2, true, true);
     ASSERT_EQ(cluster.Nodes[0]->CurrentStateName(), EState::FOLLOWER);
     for (auto& node : cluster.Nodes) {
         ASSERT_EQ(node->GetVolatileState()->CommitIndex, replacement);
         ASSERT_EQ(node->GetState()->Get(minority)->Flags, TLogEntry::EStub);
     }
-    cluster.AssertCommittedPrefix();
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
 }
 
 TEST(Correctness, even_cluster_partition_requires_majority) {
     TCluster cluster(4);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Replicate(1);
     auto previous = cluster.Nodes[0]->GetVolatileState()->CommitIndex;
     cluster.Isolated = {3, 4};
@@ -751,12 +753,12 @@ TEST(Correctness, even_cluster_partition_requires_majority) {
     cluster.Isolated.clear();
     cluster.Replicate(1, true, true);
     for (auto& node : cluster.Nodes) ASSERT_EQ(node->GetVolatileState()->CommitIndex, index);
-    cluster.AssertCommittedPrefix();
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
 }
 
 TEST(Correctness, follower_restarted_without_storage_catches_up) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     for (int i = 0; i < 3; ++i) cluster.Nodes[0]->Append(NewHoldedMessage<TLogEntry>());
     cluster.Replicate(1);
     const auto last = cluster.Nodes[0]->GetState()->LastLogIndex;
@@ -773,7 +775,7 @@ TEST(Correctness, follower_restarted_without_storage_catches_up) {
     ASSERT_EQ(cluster.Nodes[2]->GetState()->LastLogIndex, last);
     ASSERT_EQ(cluster.Nodes[0]->GetVolatileState()->MatchIndex.at(3), last);
     ASSERT_TRUE(cluster.Nodes[0]->GetVolatileState()->CommitIndex >= committed);
-    cluster.AssertCommittedPrefix();
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
 }
 
 std::shared_ptr<TEchoRsm> RecoverApplication(const TEchoRsm& old) {
@@ -784,7 +786,7 @@ std::shared_ptr<TEchoRsm> RecoverApplication(const TEchoRsm& old) {
 }
 TEST(Correctness, recovered_application_progress_is_not_rewound) {
     TCluster cluster(1);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Nodes[0]->Append(LogValue("once"));
     cluster.Replicate(1);
     auto original = std::make_shared<TEchoRsm>();
@@ -794,14 +796,14 @@ TEST(Correctness, recovered_application_progress_is_not_rewound) {
     TRequestProcessor processor(cluster.Nodes[0], recovered, {});
     processor.ProcessCommitted(); // timer before the first post-restart election
     ASSERT_EQ(recovered->LastAppliedIndex, original->LastAppliedIndex);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     processor.ProcessCommitted();
     processor.ProcessCommitted();
     ASSERT_TRUE(recovered->Applied == std::vector<std::string>{"once"});
 }
 TEST(Correctness, application_progress_never_decreases_on_lower_commit_input) {
     TCluster cluster(1);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     auto recovered = std::make_shared<TEchoRsm>();
     recovered->LastAppliedIndex = 1;
     TRequestProcessor processor(cluster.Nodes[0], recovered, {});
@@ -857,7 +859,7 @@ TEST(Correctness, application_ahead_of_recovered_log_is_rejected) {
 }
 TEST(Correctness, cluster_restart_preserves_applied_history_and_rebuilds_volatile_application) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Nodes[0]->Append(LogValue("first"));
     cluster.Replicate(1);
     std::vector<std::shared_ptr<TEchoRsm>> recovered;
@@ -880,20 +882,20 @@ TEST(Correctness, cluster_restart_preserves_applied_history_and_rebuilds_volatil
         processors.push_back(std::make_unique<TRequestProcessor>(cluster.Nodes[i], recovered[i], TNodeDict{}));
         processors.back()->ProcessCommitted();
     }
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     // Recovered old-term commitment cannot replace a fresh current-term read quorum.
     ASSERT_EQ(cluster.Nodes[1]->CommitSeqno(), 0);
     cluster.Nodes[1]->Append(LogValue("second"));
     cluster.Replicate(2, true, true);
     cluster.Packets = std::move(delayed);
-    cluster.Drain(true, true);
+    ASSERT_NO_FATAL_FAILURE(cluster.Drain(true, true));
     cluster.Replicate(2, true, true);
     for (auto& processor : processors) { processor->ProcessCommitted(); processor->ProcessCommitted(); }
     for (const auto& rsm : recovered) {
         ASSERT_TRUE(rsm->Applied == (std::vector<std::string>{"first", "second"}));
         ASSERT_EQ(rsm->LastAppliedIndex, cluster.Nodes[1]->GetVolatileState()->CommitIndex);
     }
-    cluster.AssertCommittedPrefix();
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCommittedPrefix());
 }
 
 }

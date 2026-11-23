@@ -201,16 +201,16 @@ struct TCluster {
                 node.Raft->ProcessTimeout(Now);
             }
         }
-        Drain();
+        ASSERT_NO_FATAL_FAILURE(Drain());
         for (auto& node : Nodes) node.Processor->ProcessCommitted();
     }
     void Elect(uint32_t id) {
         Now += std::chrono::seconds(10);
         auto& raft = (*this)[id].Raft;
         raft->ProcessTimeout(Now);
-        Drain();
+        ASSERT_NO_FATAL_FAILURE(Drain());
         raft->ProcessTimeout(Now);
-        Drain();
+        ASSERT_NO_FATAL_FAILURE(Drain());
         ASSERT_EQ(raft->CurrentStateName(), EState::LEADER);
     }
     void Replicate(int rounds = 12) {
@@ -226,7 +226,7 @@ struct TCluster {
     // Node 3 misses some writes, then node 1 compacts past them: images of three chunks.
     void Lag(int writes = 3) {
         for (auto& node : Nodes) node.Rsm->ExtraRecords = 9000;
-        Elect(1);
+        ASSERT_NO_FATAL_FAILURE(Elect(1));
         Isolated = {3};
         for (int i = 1; i <= writes; ++i) Write(1, std::to_string(i));
         Replicate();
@@ -257,7 +257,7 @@ std::vector<std::string> Values(std::initializer_list<int> numbers) {
 
 TEST(Snapshots, compaction_drops_the_applied_prefix) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     for (int i = 1; i <= 4; ++i) cluster.Write(1, std::to_string(i));
     cluster.Replicate();
     auto& leader = cluster[1];
@@ -281,7 +281,7 @@ TEST(Snapshots, compaction_drops_the_applied_prefix) {
     cluster.Compact(3);
     for (int i = 5; i <= 6; ++i) cluster.Write(1, std::to_string(i));
     cluster.Replicate();
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     cluster.Write(2, "7");
     cluster.Replicate();
     for (uint32_t id = 1; id <= 3; ++id) {
@@ -292,7 +292,7 @@ TEST(Snapshots, compaction_drops_the_applied_prefix) {
 
 TEST(Snapshots, compaction_needs_a_committed_image) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Write(1, "1");
     cluster.Replicate();
     cluster.Isolated = {2, 3};
@@ -315,7 +315,7 @@ TEST(Snapshots, compaction_needs_a_committed_image) {
 
 TEST(Snapshots, append_entries_below_the_snapshot_match_its_prefix) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
     cluster.Replicate();
     auto& follower = cluster[2];
@@ -351,7 +351,7 @@ TEST(Snapshots, restart_restores_the_application_from_snapshot_and_tail) {
     TFiles files;
     TCluster cluster(1);
     cluster.Start(1, std::make_shared<TDiskState>(files.Name, 1));
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
     cluster.Replicate(2);
     cluster.Compact(1);
@@ -376,7 +376,7 @@ TEST(Snapshots, restart_restores_the_application_from_snapshot_and_tail) {
         ASSERT_EQ(node.Rsm->Restores, 1);
         ASSERT_EQ(node.Rsm->LastAppliedIndex, snapshot);
         ASSERT_TRUE(node.Rsm->Values == Values({1, 2, 3}));
-        cluster.Elect(1);
+        ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
         cluster.Replicate(2);
         ASSERT_TRUE(node.Rsm->Values == Values({1, 2, 3, 4}));
         last = node.State->LastLogIndex;
@@ -399,7 +399,7 @@ TEST(Snapshots, applications_without_snapshots_work_as_before) {
         applications.push_back(rsm);
         cluster[id].Processor = std::make_shared<TRequestProcessor>(cluster[id].Raft, rsm, TNodeDict{});
     }
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
     cluster.Replicate();
     // Without compaction the library never asks for an image: a restart replays the log.
@@ -449,7 +449,7 @@ TEST(Snapshots, storage_without_snapshots_rejects_compaction) {
     };
     TCluster cluster(1);
     cluster.Start(1, std::make_shared<TOldState>());
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     cluster.Write(1, "1");
     cluster.Replicate(2);
     bool unsupported = false;
@@ -469,7 +469,7 @@ TEST(Snapshots, lagging_follower_installs_a_chunked_snapshot_despite_losses) {
         return false;
     };
     auto& follower = cluster[3];
-    cluster.StepUntil([&] { return !follower.Raft->GetVolatileState()->IncomingRecords.empty(); });
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return !follower.Raft->GetVolatileState()->IncomingRecords.empty(); }));
     // A partial image changes nothing; a restart loses it and the transfer starts over.
     ASSERT_EQ(follower.State->SnapshotIndex, 0);
     ASSERT_TRUE(follower.Rsm->Values.empty());
@@ -478,7 +478,7 @@ TEST(Snapshots, lagging_follower_installs_a_chunked_snapshot_despite_losses) {
     ASSERT_EQ(follower.State->SnapshotIndex, cluster[1].State->SnapshotIndex);
     ASSERT_TRUE(follower.Rsm->Values == Values({1, 2, 3, 4}));
     ASSERT_EQ(follower.Rsm->Restores, 1);
-    cluster.AssertCaughtUp(1, 3);
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCaughtUp(1, 3));
 }
 
 TEST(Snapshots, delayed_reply_after_retries_advances_the_transfer) {
@@ -490,7 +490,7 @@ TEST(Snapshots, delayed_reply_after_retries_advances_the_transfer) {
         held.push_back(m);
         return true;
     };
-    cluster.StepUntil([&] { return held.size() >= 3; });
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return held.size() >= 3; }));
     // Retries of a chunk keep its identity, so a late reply to the first one still counts.
     for (auto reply : held) {
         ASSERT_EQ(reply.Cast<TMessageEx>()->Seqno, held.front().Cast<TMessageEx>()->Seqno);
@@ -507,13 +507,13 @@ TEST(Snapshots, delayed_reply_after_retries_advances_the_transfer) {
     ASSERT_EQ(transfer.Offset, 0);
     ASSERT_EQ(leader.State->CurrentTerm, held.front().Cast<TMessageEx>()->Term);
     cluster.Packets.push_back(held[0]);
-    cluster.Drain();
+    ASSERT_NO_FATAL_FAILURE(cluster.Drain());
     ASSERT_EQ(transfer.Offset, TMessageLimits{}.MaxEntries);
     cluster.Packets.push_back(held[1]);
-    cluster.Drain();
+    ASSERT_NO_FATAL_FAILURE(cluster.Drain());
     ASSERT_EQ(transfer.Offset, TMessageLimits{}.MaxEntries);
     cluster.Replicate(40);
-    cluster.AssertCaughtUp(1, 3);
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCaughtUp(1, 3));
 }
 
 TEST(Snapshots, leader_change_in_the_middle_of_a_transfer) {
@@ -527,7 +527,7 @@ TEST(Snapshots, leader_change_in_the_middle_of_a_transfer) {
         return true;
     };
     auto& follower = cluster[3];
-    cluster.StepUntil([&] { return !follower.Raft->GetVolatileState()->IncomingRecords.empty(); });
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return !follower.Raft->GetVolatileState()->IncomingRecords.empty(); }));
     // Keep the old leader's chunks to deliver them after the new leader takes over.
     cluster.Drop = [&](const auto& m) {
         if (!IsType(m, EMessageType::INSTALL_SNAPSHOT_REQUEST)) return false;
@@ -537,7 +537,7 @@ TEST(Snapshots, leader_change_in_the_middle_of_a_transfer) {
     cluster.Step();
     cluster.Step();
     cluster.Drop = {};
-    cluster.Elect(2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
     ASSERT_TRUE(cluster[1].Raft->GetVolatileState()->SnapshotTransfers.empty());
     for (auto& m : late) cluster.Packets.push_back(m);
     cluster.Write(2, "4");
@@ -545,8 +545,8 @@ TEST(Snapshots, leader_change_in_the_middle_of_a_transfer) {
     ASSERT_EQ(follower.State->SnapshotIndex, cluster[2].State->SnapshotIndex);
     ASSERT_EQ(follower.Rsm->Restores, 1);
     ASSERT_TRUE(follower.Rsm->Values == Values({1, 2, 3, 4}));
-    cluster.AssertCaughtUp(2, 3);
-    cluster.AssertCaughtUp(2, 1);
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCaughtUp(2, 3));
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCaughtUp(2, 1));
 }
 
 // Any exception type is a failure, never a final refusal of the image.
@@ -572,7 +572,7 @@ TEST(Snapshots, storage_failure_reaches_the_embedder_and_is_retried) {
         ASSERT_EQ(chunks, 4);
         ASSERT_EQ(cluster[3].State->SnapshotIndex, cluster[1].State->SnapshotIndex);
         ASSERT_EQ(cluster[3].Rsm->Restores, 1);
-        cluster.AssertCaughtUp(1, 3);
+        ASSERT_NO_FATAL_FAILURE(cluster.AssertCaughtUp(1, 3));
     }
 }
 
@@ -580,7 +580,7 @@ TEST(Snapshots, compaction_during_a_transfer_keeps_its_image) {
     TCluster cluster(3);
     cluster.Lag();
     auto& transfers = cluster[1].Raft->GetVolatileState()->SnapshotTransfers;
-    cluster.StepUntil([&] { return transfers.count(3) && transfers.at(3).Offset; });
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return transfers.count(3) && transfers.at(3).Offset; }));
     const auto first = transfers.at(3).Snapshot->LastIncludedIndex;
     std::vector<uint64_t> installed;
     for (int step = 0; step < 20; ++step) {
@@ -594,12 +594,12 @@ TEST(Snapshots, compaction_during_a_transfer_keeps_its_image) {
     ASSERT_TRUE(installed.size() >= 2);
     ASSERT_EQ(installed.front(), first);
     cluster.Replicate(40);
-    cluster.AssertCaughtUp(1, 3);
+    ASSERT_NO_FATAL_FAILURE(cluster.AssertCaughtUp(1, 3));
 }
 
 TEST(Snapshots, covered_and_contradicting_images) {
     TCluster cluster(3);
-    cluster.Elect(1);
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
     for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
     cluster.Replicate();
     auto& follower = cluster[2];

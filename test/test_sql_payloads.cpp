@@ -30,19 +30,19 @@ TEST(SqlPayloads, sql_prepare_rejects_short_query) {
     TSql sql(":memory:", 1);
     auto command = NewHoldedMessage<TWriteSql>();
     command->QuerySize = UINT32_MAX;
-    Reject([&] { sql.Prepare(command); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Prepare(command); }));
 }
 TEST(SqlPayloads, sql_read_rejects_short_query) {
     TSql sql(":memory:", 1);
     auto command = NewHoldedMessage<TReadSql>();
     command->QuerySize = UINT32_MAX;
-    Reject([&] { sql.Read(command, 0); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(command, 0); }));
 }
 TEST(SqlPayloads, sql_apply_rejects_before_progress) {
     TSql sql(":memory:", 1);
     auto entry = NewHoldedMessage<TSqlLogEntry>();
     entry->QuerySize = UINT32_MAX;
-    Reject([&] { sql.Write(entry, 1); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Write(entry, 1); }));
     ASSERT_EQ(sql.LastAppliedIndex, 0);
 }
 TEST(SqlPayloads, valid_sql_payload_roundtrip) {
@@ -71,7 +71,7 @@ TEST(SqlPayloads, sql_validation_runs_before_request_admission) {
         auto command = NewHoldedMessage<TWriteSql>();
         command->Flags = write ? TCommandRequest::EWrite : TCommandRequest::EConsistent;
         command->QuerySize = UINT32_MAX;
-        Reject([&] { processor.OnCommandRequest(command, {}); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { processor.OnCommandRequest(command, {}); }));
         ASSERT_EQ(state->LastLogIndex, 0);
     }
 }
@@ -79,7 +79,7 @@ TEST(SqlPayloads, sql_read_cannot_insert_update_or_delete) {
     for (const std::string query : {"INSERT INTO t VALUES ('bad')", "UPDATE t SET value='bad'", "DELETE FROM t"}) {
         TSql sql(":memory:", 1);
         Seed(sql);
-        Reject([&] { sql.Read(Query(query), 1); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query(query), 1); }));
         ASSERT_TRUE(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
         ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("1") != std::string::npos);
         ASSERT_EQ(sql.LastAppliedIndex, 1);
@@ -88,14 +88,14 @@ TEST(SqlPayloads, sql_read_cannot_insert_update_or_delete) {
 TEST(SqlPayloads, sql_read_rejects_multi_statement_mutation_before_execution) {
     TSql sql(":memory:", 1);
     Seed(sql);
-    Reject([&] { sql.Read(Query("SELECT value FROM t; UPDATE t SET value='bad';"), 1); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query("SELECT value FROM t; UPDATE t SET value='bad';"), 1); }));
     ASSERT_TRUE(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
 }
 TEST(SqlPayloads, sql_read_cannot_change_schema) {
     for (const std::string query : {"DROP TABLE t", "CREATE TABLE rogue (x)", "ALTER TABLE t ADD COLUMN x"}) {
         TSql sql(":memory:", 1);
         Seed(sql);
-        Reject([&] { sql.Read(Query(query), 1); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query(query), 1); }));
         ASSERT_TRUE(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
     }
 }
@@ -104,7 +104,7 @@ TEST(SqlPayloads, sql_read_rejects_connection_control_and_unsafe_functions) {
          "ATTACH ':memory:' AS other", "VACUUM", "SELECT load_extension('nonexistent')",
          "SELECT readfile('nonexistent')"}) {
         TSql sql(":memory:", 1);
-        Reject([&] { sql.Read(Query(query), 0); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query(query), 0); }));
         ASSERT_EQ(sql.LastAppliedIndex, 0);
     }
 }
@@ -118,12 +118,12 @@ TEST(SqlPayloads, sql_read_rejects_nul_empty_and_second_select) {
     TSql sql(":memory:", 1);
     const std::string embedded("SELECT 1\0;SELECT 2", 18);
     for (const auto& query : {std::string{}, std::string("-- only comment"), std::string("SELECT 1; SELECT 2"), embedded})
-        Reject([&] { sql.Read(Query(query), 0); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query(query), 0); }));
 }
 TEST(SqlPayloads, sql_read_policy_is_restored_after_rejection) {
     TSql sql(":memory:", 1);
     Seed(sql);
-    Reject([&] { sql.Read(Query("DELETE FROM t"), 1); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query("DELETE FROM t"), 1); }));
     Apply(sql, "INSERT INTO t VALUES ('second')", 2);
     ASSERT_EQ(sql.LastAppliedIndex, 2);
     ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("2") != std::string::npos);
@@ -220,7 +220,7 @@ TEST(SqlPayloads, sql_automatic_rollback_is_consumed_without_partial_data) {
 TEST(SqlPayloads, sql_metadata_failure_rolls_back_data_and_does_not_advance) {
     TDatabase file;
     { TSql sql(file.Path, 1); Seed(sql); }
-    file.External("CREATE TRIGGER fail_marker BEFORE UPDATE ON raft_metadata_ BEGIN SELECT RAISE(ABORT,'marker blocked'); END");
+    ASSERT_NO_FATAL_FAILURE(file.External("CREATE TRIGGER fail_marker BEFORE UPDATE ON raft_metadata_ BEGIN SELECT RAISE(ABORT,'marker blocked'); END"));
     {
         TSql sql(file.Path, 1);
         bool failed = false;
@@ -230,7 +230,7 @@ TEST(SqlPayloads, sql_metadata_failure_rolls_back_data_and_does_not_advance) {
         ASSERT_EQ(sql.LastAppliedIndex, 1);
         ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
     }
-    file.External("DROP TRIGGER fail_marker");
+    ASSERT_NO_FATAL_FAILURE(file.External("DROP TRIGGER fail_marker"));
     TSql sql(file.Path, 1);
     ASSERT_EQ(sql.LastAppliedIndex, 1);
     ASSERT_TRUE(Apply(sql, "INSERT INTO t VALUES ('retry')", 2).empty());
@@ -245,7 +245,7 @@ TEST(SqlPayloads, sql_invalid_progress_fails_closed) {
     for (const std::string value : {"NULL", "'-1'", "'42junk'", "'18446744073709551616'", "''", "CAST(X'3432006a756e6b' AS TEXT)"}) {
         TDatabase file;
         { TSql sql(file.Path, 1); Seed(sql); }
-        file.External("UPDATE raft_metadata_ SET value=" + value);
+        ASSERT_NO_FATAL_FAILURE(file.External("UPDATE raft_metadata_ SET value=" + value));
         bool failed = false;
         try { TSql sql(file.Path, 1); }
         catch (const std::exception&) { failed = true; }
@@ -290,23 +290,23 @@ TEST(SqlPayloads, sql_write_rejects_embedded_nul_before_admission) {
     const std::string text = std::string("CREATE TABLE t (x);") + '\0' + "COMMIT";
     auto command = Query(text);
     command->Flags = TCommandRequest::EWrite;
-    Reject([&] { sql.Validate(command); });
-    Reject([&] { sql.Prepare(command); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Validate(command); }));
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Prepare(command); }));
     auto entry = NewHoldedMessage<TSqlLogEntry>(sizeof(TSqlLogEntry) + text.size());
     entry->QuerySize = text.size();
     memcpy(entry->Query, text.data(), text.size());
-    Reject([&] { sql.Write(entry, 1); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Write(entry, 1); }));
     ASSERT_EQ(sql.LastAppliedIndex, 0);
 }
 
 const std::string ExpensiveRead = "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) SELECT sum(x) FROM n";
 TEST(SqlPayloads, sql_read_stops_at_work_budget) {
     TSql sql(":memory:", 1, {.MaxVmSteps = 1000});
-    Reject([&] { sql.Read(Query(ExpensiveRead), 0); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query(ExpensiveRead), 0); }));
     ASSERT_TRUE(ReadText(sql, "SELECT 7 AS v") == "v\n7\n");
     ASSERT_EQ(sql.LastAppliedIndex, 0);
     TSql defaults(":memory:", 1);
-    Reject([&] { defaults.Read(Query(ExpensiveRead), 0); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { defaults.Read(Query(ExpensiveRead), 0); }));
 }
 TEST(SqlPayloads, sql_read_output_budget_counts_headers_separators_and_null) {
     for (const auto& query : {std::string("SELECT 'abc' AS v"), std::string("SELECT NULL AS v"),
@@ -316,12 +316,12 @@ TEST(SqlPayloads, sql_read_output_budget_counts_headers_separators_and_null) {
         TSql exact(":memory:", 1, {.MaxResultBytes = expected.size()});
         ASSERT_TRUE(ReadText(exact, query) == expected);
         TSql shortByOne(":memory:", 1, {.MaxResultBytes = expected.size() - 1});
-        Reject([&] { shortByOne.Read(Query(query), 0); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { shortByOne.Read(Query(query), 0); }));
     }
 }
 TEST(SqlPayloads, sql_read_bounds_accumulated_rows_and_cleans_up) {
     TSql sql(":memory:", 1, {.MaxResultBytes = 64});
-    Reject([&] { sql.Read(Query("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) SELECT x FROM n"), 0); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) SELECT x FROM n"), 0); }));
     ASSERT_TRUE(ReadText(sql, "SELECT 8 AS v") == "v\n8\n");
     ASSERT_TRUE(Apply(sql, "CREATE TABLE t (x); INSERT INTO t VALUES (9)", 1).empty());
     ASSERT_TRUE(ReadText(sql, "SELECT x FROM t") == "x\n9\n");
@@ -361,7 +361,7 @@ TEST(SqlPayloads, sql_read_budget_failures_recover_through_request_processor) {
 TEST(SqlPayloads, sql_read_preserves_nul_bytes_and_counts_their_length) {
     TSql sql(":memory:", 1, {.MaxResultBytes = 6});
     ASSERT_TRUE(ReadText(sql, "SELECT CAST(X'610062' AS TEXT) AS v") == std::string("v\na\0b\n", 6));
-    Reject([&] { sql.Read(Query("SELECT CAST(X'61006263' AS TEXT) AS v"), 0); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query("SELECT CAST(X'61006263' AS TEXT) AS v"), 0); }));
 }
 TEST(SqlPayloads, sql_read_rejects_invalid_limits) {
     for (const auto limits : {TSqlReadLimits{.MaxVmSteps = 0},
@@ -377,7 +377,7 @@ TEST(SqlPayloads, sql_read_value_limit_is_restored_before_writes) {
     TSql sql(":memory:", 1);
     const std::string value(9 * 1024 * 1024, 'x');
     ASSERT_TRUE(Apply(sql, "CREATE TABLE big (v TEXT); INSERT INTO big VALUES ('" + value + "')", 1).empty());
-    Reject([&] { sql.Read(Query("SELECT hex(v) FROM big"), 1); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { sql.Read(Query("SELECT hex(v) FROM big"), 1); }));
     // Writes retain their previous SQLite length limit, even after a failed read.
     ASSERT_TRUE(Apply(sql, "UPDATE big SET v=v||v", 2).empty());
     ASSERT_TRUE(Apply(sql, "UPDATE big SET v=substr(v,1,1)", 3).empty());
@@ -425,8 +425,8 @@ TEST(SqlPayloads, sql_and_raft_restart_do_not_reapply_committed_insert) {
 
 // Larger than one snapshot record; written without the application's policy.
 void FillBig(TDatabase& file) {
-    file.External("CREATE TABLE big (v BLOB); WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c "
-                  "WHERE x < 3000) INSERT INTO big SELECT randomblob(1000) FROM c;");
+    ASSERT_NO_FATAL_FAILURE(file.External("CREATE TABLE big (v BLOB); WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c "
+                  "WHERE x < 3000) INSERT INTO big SELECT randomblob(1000) FROM c;"));
 }
 TEST(SqlPayloads, sql_snapshot_restores_database_and_progress) {
     TDatabase source;
@@ -445,7 +445,7 @@ TEST(SqlPayloads, sql_snapshot_restores_database_and_progress) {
         ASSERT_EQ(follower.LastAppliedIndex, 2);
         ASSERT_TRUE(ReadText(follower, "SELECT value FROM t") == "value\noriginal\nsecond\n");
         ASSERT_TRUE(ReadText(follower, "SELECT count(*) AS n FROM big") == "n\n3000\n");
-        Reject([&] { ReadText(follower, "SELECT x FROM stale"); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { ReadText(follower, "SELECT x FROM stale"); }));
         Apply(follower, "INSERT INTO t VALUES ('third')", 3);
     }
     TSql reopened(target.Path, 1);

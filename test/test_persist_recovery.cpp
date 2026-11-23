@@ -71,7 +71,7 @@ TEST(PersistRecovery, truncated_metadata_is_not_reset) {
         TFiles files;
         files.Seed();
         fs::resize_file(files.Path("state"), size);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
         ASSERT_EQ(fs::file_size(files.Path("state")), size);
     }
 }
@@ -79,7 +79,7 @@ TEST(PersistRecovery, oversized_metadata_is_rejected) {
     TFiles files;
     files.Seed();
     fs::resize_file(files.Path("state"), 21);
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     ASSERT_EQ(fs::file_size(files.Path("state")), 21);
 }
 TEST(PersistRecovery, missing_storage_is_not_recreated) {
@@ -87,7 +87,7 @@ TEST(PersistRecovery, missing_storage_is_not_recreated) {
         TFiles files;
         files.Seed();
         fs::remove(files.Path(kind));
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
         ASSERT_FALSE(fs::exists(files.Path(kind)));
     }
 }
@@ -95,45 +95,45 @@ TEST(PersistRecovery, short_index_is_rejected) {
     TFiles files;
     files.Seed();
     fs::resize_file(files.Path("index"), sizeof(uint64_t));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
 TEST(PersistRecovery, short_entry_is_rejected) {
     TFiles files;
     files.Seed();
     fs::resize_file(files.Path("entries"), sizeof(TLogEntry) + 4);
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
 TEST(PersistRecovery, invalid_entry_header_is_rejected) {
     for (uint32_t len : {0u, 7u, 8u, uint32_t(sizeof(TLogEntry) - 1), UINT32_MAX}) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", sizeof(uint32_t), len);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
     TFiles files;
     files.Seed();
     files.Overwrite("entries", 0, uint32_t(EMessageType::COMMAND_REQUEST));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
 TEST(PersistRecovery, invalid_offsets_are_rejected) {
     for (uint64_t offset : {uint64_t(0), uint64_t(1), UINT64_MAX}) {
         TFiles files;
         files.Seed();
         files.Overwrite("index", sizeof(uint64_t), offset);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
 TEST(PersistRecovery, invalid_term_is_rejected) {
     TFiles files;
     files.Seed();
     files.Overwrite("state", sizeof(uint64_t), uint64_t(0));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
 TEST(PersistRecovery, invalid_log_count_is_rejected) {
     TFiles files;
     files.Seed();
     files.Overwrite("state", 0, UINT64_MAX);
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
 TEST(PersistRecovery, truncate_updates_last_term_and_restarts) {
     TFiles files;
@@ -183,7 +183,7 @@ TEST(PersistRecovery, zero_log_entry_terms_are_rejected_without_mutation) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", index * sizeof(TLogEntry) + sizeof(TMessage), uint64_t(0));
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
 TEST(PersistRecovery, log_terms_newer_than_current_term_are_rejected) {
@@ -191,19 +191,19 @@ TEST(PersistRecovery, log_terms_newer_than_current_term_are_rejected) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", sizeof(TLogEntry) + sizeof(TMessage), term);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
     TFiles files;
     files.Seed();
     files.Overwrite("state", sizeof(uint64_t), uint64_t(4));
-    files.RejectRecovery();
+    ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
 }
 TEST(PersistRecovery, decreasing_log_terms_are_rejected) {
     for (uint64_t index : {0, 1}) {
         TFiles files;
         files.Seed();
         files.Overwrite("entries", index * sizeof(TLogEntry) + sizeof(TMessage), uint64_t(index == 0 ? 6 : 1));
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
 TEST(PersistRecovery, equal_and_skipped_terms_and_full_width_current_term_recover) {
@@ -377,7 +377,7 @@ TEST(PersistRecovery, incomplete_or_corrupt_compacted_store_is_rejected) {
         files.Seed();
         { TDiskState state(files.Name, 1); state.InstallSnapshot(Image(1, 2, {"a"})); }
         damage(files);
-        files.RejectRecovery();
+        ASSERT_NO_FATAL_FAILURE(files.RejectRecovery());
     }
 }
 

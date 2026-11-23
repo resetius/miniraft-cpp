@@ -15,21 +15,21 @@ TEST(AppPayloads, kv_prepare_rejects_inconsistent_lengths) {
     auto command = NewHoldedMessage<TWriteKv>();
     command->KeySize = UINT16_MAX;
     command->ValSize = UINT16_MAX;
-    Reject([&] { kv.Prepare(command); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { kv.Prepare(command); }));
     ASSERT_EQ(kv.LastAppliedIndex, 0);
 }
 TEST(AppPayloads, kv_read_rejects_short_key) {
     TKv kv;
     auto command = NewHoldedMessage<TReadKv>();
     command->KeySize = UINT16_MAX;
-    Reject([&] { kv.Read(command, 0); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { kv.Read(command, 0); }));
 }
 TEST(AppPayloads, kv_apply_rejects_before_state_mutation) {
     TKv kv;
     auto entry = NewHoldedMessage<TKvLogEntry>();
     entry->KeySize = 1;
     entry->ValSize = UINT16_MAX;
-    Reject([&] { kv.Write(entry, 1); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { kv.Write(entry, 1); }));
     ASSERT_EQ(kv.LastAppliedIndex, 0);
     auto list = NewHoldedMessage<TReadKv>();
     ASSERT_EQ(kv.Read(list, 0)->Len, sizeof(TCommandResponse));
@@ -101,12 +101,12 @@ TEST(AppPayloads, kv_invalid_snapshot_leaves_state_unchanged) {
         snapshot.InitPayload(2);
         snapshot.Payload[0] = kv.Snapshot().Payload[0];
         snapshot.Payload[1] = bad;
-        Reject([&] { kv.Apply(snapshot); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { kv.Apply(snapshot); }));
         ASSERT_STREQ(ListKv(kv).c_str(), before.c_str());
     }
     auto snapshot = kv.Snapshot();
     snapshot.Payload[0] = NewHoldedMessage<TLogEntry>();
-    Reject([&] { kv.Apply(snapshot); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { kv.Apply(snapshot); }));
     ASSERT_STREQ(ListKv(kv).c_str(), before.c_str());
     // A key without a value: Write would delete it, so the image cannot hold it.
     auto empty = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + sizeof(TKvEntry) + 3);
@@ -114,7 +114,7 @@ TEST(AppPayloads, kv_invalid_snapshot_leaves_state_unchanged) {
     memcpy(empty->Data, &header, sizeof(header));
     memcpy(empty->Data + sizeof(header), "key", 3);
     snapshot.Payload[0] = empty;
-    Reject([&] { kv.Apply(snapshot); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { kv.Apply(snapshot); }));
     ASSERT_STREQ(ListKv(kv).c_str(), before.c_str());
 }
 TEST(AppPayloads, kv_restores_from_a_stored_snapshot) {
@@ -134,7 +134,7 @@ TEST(AppPayloads, kv_restores_from_a_stored_snapshot) {
 TEST(AppPayloads, dummy_read_rejects_missing_index) {
     TDummyRsm rsm;
     auto command = NewHoldedMessage<TCommandRequest>();
-    Reject([&] { rsm.Read(command, 0); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { rsm.Read(command, 0); }));
 }
 TEST(AppPayloads, dummy_read_copies_only_log_data) {
     TDummyRsm rsm;
@@ -164,7 +164,7 @@ TEST(AppPayloads, invalid_request_is_rejected_before_queue_or_forward) {
         auto command = NewHoldedMessage<TWriteKv>();
         command->Flags = write ? TCommandRequest::EWrite : TCommandRequest::EConsistent;
         command->KeySize = UINT16_MAX;
-        Reject([&] { processor.OnCommandRequest(command, endpoint); });
+        ASSERT_NO_FATAL_FAILURE(Reject([&] { processor.OnCommandRequest(command, endpoint); }));
         endpoint.reset();
         ASSERT_TRUE(weak.expired());
         ASSERT_EQ(state->LastLogIndex, 0);
@@ -219,7 +219,7 @@ TEST(AppPayloads, invalid_committed_application_is_reported) {
     const_cast<TVolatileState*>(raft->GetVolatileState())->CommitIndex = 1;
     auto kv = std::make_shared<TKv>();
     TRequestProcessor processor(raft, kv, {});
-    Reject([&] { processor.ProcessCommitted(); });
+    ASSERT_NO_FATAL_FAILURE(Reject([&] { processor.ProcessCommitted(); }));
     ASSERT_EQ(kv->LastAppliedIndex, 0);
 }
 }
