@@ -421,9 +421,13 @@ void TRaft::OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message) 
     const auto nodeId = message->Src;
     auto transfer = VolatileState->SnapshotTransfers.find(nodeId);
     if (transfer == VolatileState->SnapshotTransfers.end() || !transfer->second.Seqno ||
-        transfer->second.Seqno != message->Seqno) return;
+        transfer->second.Seqno != message->Seqno) {
+        return;
+    }
     const auto index = transfer->second.Snapshot->LastIncludedIndex;
-    if (message->MatchIndex && message->MatchIndex != index) return;
+    if (message->MatchIndex && message->MatchIndex != index) {
+        return;
+    }
     transfer->second.Seqno = 0;
     VolatileState->RpcDue[nodeId] = ITimeSource::Time{};
     if (!message->Success) {
@@ -643,10 +647,14 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
         const auto index = snapshot->LastIncludedIndex;
         const auto term = snapshot->LastIncludedTerm;
         if (snapshot->LeaderId != header->Src || !index || index > maxIndex || !term || term > header->Term ||
-            snapshot->Done > 1 || snapshot->Offset > UINT32_MAX - snapshot->Nentries) return false;
+            snapshot->Done > 1 || snapshot->Offset > UINT32_MAX - snapshot->Nentries) {
+            return false;
+        }
         // An image never contradicts the committed prefix.
         const auto commitIndex = VolatileState->CommitIndex;
-        if (index > commitIndex) return term >= State->LogTerm(commitIndex);
+        if (index > commitIndex) {
+            return term >= State->LogTerm(commitIndex);
+        }
         return index < State->SnapshotIndex ? term <= State->SnapshotTerm : State->LogTerm(index) == term;
     }
     case EMessageType::APPEND_ENTRIES_REQUEST: {
