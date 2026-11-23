@@ -250,7 +250,6 @@ struct TMessageHolder {
     }
 };
 
-// Number of log entries that follow an AppendEntries or InstallSnapshot frame.
 uint32_t PayloadCount(const TMessageHolder<TMessage>& message);
 // Validate the complete frame/batch before emitting any bytes.
 void ValidateMessageTree(const TMessageHolder<TMessage>& message, const TMessageLimits& limits = {});
