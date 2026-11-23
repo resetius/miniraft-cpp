@@ -108,7 +108,6 @@ public:
     // Local proposals require leader state. Role rejection leaves storage and
     // the supplied entry unchanged; followers receive entries through Process.
     uint64_t Append(TMessageHolder<TLogEntry> entry);
-    // Drops the log up to the image's LastIncludedIndex, which must be committed.
     // An image that does not advance the snapshot is ignored.
     void Compact(TMessageHolder<TInstallSnapshotRequest> snapshot);
     uint32_t GetLeaderId() const;

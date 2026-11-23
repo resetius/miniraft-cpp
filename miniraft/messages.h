@@ -109,7 +109,6 @@ struct TInstallSnapshotRequest: public TMessageEx {
     uint64_t Offset = 0;
     uint32_t LeaderId = 0;
     uint32_t Nentries = 0;
-    // Set when the image ends with this message.
     uint32_t Done = 0;
     uint32_t Padding = 0;
 };
