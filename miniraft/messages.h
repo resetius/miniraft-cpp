@@ -100,6 +100,22 @@ struct TAppendEntriesResponse: public TMessageEx {
 
 static_assert(sizeof(TAppendEntriesResponse) == sizeof(TMessageEx) + 16);
 
+// A snapshot image: the payload holds the application records, opaque to Raft.
+struct TInstallSnapshotRequest: public TMessageEx {
+    static constexpr EMessageType MessageType = EMessageType::INSTALL_SNAPSHOT_REQUEST;
+    uint64_t LastIncludedIndex = 0;
+    uint64_t LastIncludedTerm = 0;
+    // Position of the first record of this message in the image.
+    uint64_t Offset = 0;
+    uint32_t LeaderId = 0;
+    uint32_t Nentries = 0;
+    // Set when the image ends with this message.
+    uint32_t Done = 0;
+    uint32_t Padding = 0;
+};
+
+static_assert(sizeof(TInstallSnapshotRequest) == sizeof(TMessageEx) + 40);
+
 struct TCommandRequest: public TMessage {
     static constexpr EMessageType MessageType = EMessageType::COMMAND_REQUEST;
     enum EFlags {
