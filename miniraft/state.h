@@ -46,7 +46,6 @@ struct IState: TStateFields {
 };
 
 struct TState: IState {
-    // Entries after SnapshotIndex.
     std::vector<TMessageHolder<TLogEntry>> Log;
     TMessageHolder<TInstallSnapshotRequest> Snapshot;
 
