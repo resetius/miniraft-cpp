@@ -165,9 +165,11 @@ public:
     // Configuration changes, one server at a time (Ongaro's thesis, 4.1), leader only. Each
     // returns the index of its configuration entry, or zero while a change cannot start:
     // until the leader commits an entry of its term, and until the last configuration commits.
+    // A change is done when GetConfiguration().Index is committed.
     // A new voter joins as a learner and is promoted once it has caught up (thesis, 4.2.1).
     uint64_t AddLearner(uint32_t id);
-    // Also zero while the learner has not caught up.
+    // Zero also while the learner has not caught up. There is no limit on the catch-up rounds:
+    // giving up on a slow learner is up to the caller, with RemoveServer.
     uint64_t PromoteLearner(ITimeSource::Time now, uint32_t id);
     // A leader that removes itself leads until the change commits, without counting itself
     // in majorities, and then steps down.
