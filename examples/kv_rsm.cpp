@@ -46,11 +46,17 @@ TMessageHolder<TMessage> TKv::Read(TMessageHolder<TCommandRequest> message, uint
 
 TMessageHolder<TMessage> TKv::Write(TMessageHolder<TLogEntry> message, uint64_t index) {
     if (LastAppliedIndex < index) {
-        auto entry = message.Cast<TKvLogEntry>();
-        ValidatePayloadRange(message, entry->TKvEntry::Data, uint64_t(entry->KeySize) + entry->ValSize);
-        std::string_view k(entry->TKvEntry::Data, entry->KeySize);
-        if (entry->ValSize) {
-            std::string_view v(entry->TKvEntry::Data + entry->KeySize, entry->ValSize);
+        auto entry = message.Cast<TLogEntry>();
+        if (entry->Len < sizeof(TLogEntry) + sizeof(TKvEntry)) {
+            throw TMessageError("Short KV log entry");
+        }
+        TKvEntry header;
+        memcpy(&header, entry->Data, sizeof(header));
+        const auto data = entry->Data + sizeof(header);
+        ValidatePayloadRange(message, data, uint64_t(header.KeySize) + header.ValSize);
+        std::string_view k(data, header.KeySize);
+        if (header.ValSize) {
+            std::string_view v(data + header.KeySize, header.ValSize);
             H[std::string(k)] = std::string(v);
         } else {
             H.erase(std::string(k));
