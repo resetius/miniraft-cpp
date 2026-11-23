@@ -396,7 +396,7 @@ void TRaft::OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntries
             .SetRpcDue(nodeId, ITimeSource::Time{})
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
-            .CommitAdvance(GetConfiguration().Voters, Id, *State);
+            .CommitAdvance(Configuration().Voters, Id, *State);
         CatchUp(now, nodeId);
     } else {
         if (rpc.PrevIndex <= VolatileState->MatchIndex[nodeId]) {
@@ -525,7 +525,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
             .SetNextIndex(nodeId, matchIndex+1)
             .SetBatchSize(nodeId, 1024)
             .SetBackOff(nodeId, 1)
-            .CommitAdvance(GetConfiguration().Voters, Id, *State);
+            .CommitAdvance(Configuration().Voters, Id, *State);
         CatchUp(now, nodeId);
     } else {
         // The follower cannot hold records it was not sent.
@@ -557,14 +557,14 @@ bool TRaft::CanChangeConfiguration() const {
     // The fix to single-server changes (Ongaro, raft-dev, 2015-07-10): no configuration entry
     // before an entry of the leader's term commits. And one change at a time (thesis, 4.1).
     const auto commitIndex = VolatileState->CommitIndex;
-    return State->LogTerm(commitIndex) == State->CurrentTerm && GetConfiguration().Index <= commitIndex;
+    return State->LogTerm(commitIndex) == State->CurrentTerm && Configuration().Index <= commitIndex;
 }
 
 uint64_t TRaft::AppendConfiguration(TConfiguration configuration) {
-    const auto previous = GetConfiguration();
+    const auto previous = Configuration();
     AppendEntry(ConfigurationEntry(configuration, State->CurrentTerm));
     const auto index = State->LastLogIndex;
-    const auto& current = GetConfiguration();
+    const auto& current = Configuration();
     for (auto id : Peers(true)) {
         VolatileState->NextIndex.try_emplace(id, index);
     }
@@ -586,7 +586,7 @@ uint64_t TRaft::AddLearner(uint32_t id) {
     if (StateName != EState::LEADER) {
         throw std::logic_error("Only a leader can change the configuration");
     }
-    auto configuration = GetConfiguration();
+    auto configuration = Configuration();
     if (id == Id || !Nodes.contains(id)) {
         throw std::invalid_argument("Unknown Raft server");
     }
@@ -604,7 +604,7 @@ uint64_t TRaft::PromoteLearner(ITimeSource::Time now, uint32_t id) {
     if (StateName != EState::LEADER) {
         throw std::logic_error("Only a leader can change the configuration");
     }
-    auto configuration = GetConfiguration();
+    auto configuration = Configuration();
     if (!configuration.Learners.erase(id)) {
         throw std::invalid_argument("Raft server is not a learner");
     }
@@ -620,7 +620,7 @@ uint64_t TRaft::RemoveServer(uint32_t id) {
     if (StateName != EState::LEADER) {
         throw std::logic_error("Only a leader can change the configuration");
     }
-    auto configuration = GetConfiguration();
+    auto configuration = Configuration();
     if (!configuration.Voters.erase(id) && !configuration.Learners.erase(id)) {
         throw std::invalid_argument("Raft server is not a member");
     }
@@ -635,7 +635,7 @@ uint64_t TRaft::RemoveServer(uint32_t id) {
 
 void TRaft::StepDownIfRemoved(ITimeSource::Time now) {
     // Thesis, 4.2.2: the removed leader steps down once the new configuration commits.
-    const auto& configuration = GetConfiguration();
+    const auto& configuration = Configuration();
     if (StateName != EState::LEADER || configuration.Voters.contains(Id) ||
         configuration.Index > VolatileState->CommitIndex) {
         return;
@@ -646,7 +646,7 @@ void TRaft::StepDownIfRemoved(ITimeSource::Time now) {
 bool TRaft::CanCampaign() const {
     // A learner never campaigns. A server outside its configuration does while that
     // configuration is not committed: it may be the one that can commit it (thesis, 4.2.2).
-    const auto& configuration = GetConfiguration();
+    const auto& configuration = Configuration();
     return configuration.Voters.contains(Id) ||
         (!configuration.Learners.contains(Id) && configuration.Index > VolatileState->CommitIndex);
 }
@@ -933,7 +933,7 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
         due = now + TTimeout::Election;
     } else if (*due <= now) {
         // Learners do not count, nor does a leader outside its configuration.
-        const auto& voters = GetConfiguration().Voters;
+        const auto& voters = Configuration().Voters;
         size_t heard = voters.contains(Id);
         for (auto id : VolatileState->Replied) {
             heard += voters.contains(id);
@@ -945,7 +945,7 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
         VolatileState->Replied.clear();
         due = now + TTimeout::Election;
     }
-    for (auto id : GetConfiguration().Learners) {
+    for (auto id : Configuration().Learners) {
         VolatileState->CatchUp.try_emplace(id, TVolatileState::TCatchUp {
             .Target = State->LastLogIndex,
             .Start = now,
@@ -969,8 +969,8 @@ void TRaft::LeaderTimeout(ITimeSource::Time now) {
         }
     }
 
-    if (GetConfiguration().Voters.size() == 1) {
-        VolatileState->CommitAdvance(GetConfiguration().Voters, Id, *State);
+    if (Configuration().Voters.size() == 1) {
+        VolatileState->CommitAdvance(Configuration().Voters, Id, *State);
     }
     StepDownIfRemoved(now);
 }
@@ -992,7 +992,7 @@ uint64_t TRaft::ApproveRead() {
 uint64_t TRaft::CommitSeqno() const {
     if (StateName != EState::LEADER || VolatileState->CommitIndex == 0 ||
         State->LogTerm(VolatileState->CommitIndex) != State->CurrentTerm) return 0;
-    const auto& voters = GetConfiguration().Voters;
+    const auto& voters = Configuration().Voters;
     std::vector<uint64_t> acknowledgements;
     acknowledgements.reserve(voters.size());
     for (auto id : voters) {
@@ -1035,7 +1035,7 @@ void TRaft::ProcessTimeout(ITimeSource::Time now) {
 
     if (StateName == EState::CANDIDATE) {
         // A server outside its configuration does not count its own vote.
-        const auto& voters = GetConfiguration().Voters;
+        const auto& voters = Configuration().Voters;
         size_t votes = voters.contains(Id);
         for (auto id : VolatileState->Votes) {
             votes += voters.contains(id);
@@ -1133,7 +1133,11 @@ uint32_t TRaft::GetLeaderId() const {
     return VolatileState->LeaderId;
 }
 
-const TConfiguration& TRaft::GetConfiguration() const {
+TConfiguration TRaft::GetConfiguration() const {
+    return Configuration();
+}
+
+const TConfiguration& TRaft::Configuration() const {
     return Configurations.back();
 }
 
@@ -1146,9 +1150,9 @@ std::vector<uint32_t> TRaft::Peers(bool learners) const {
             }
         }
     };
-    add(GetConfiguration().Voters);
+    add(Configuration().Voters);
     if (learners) {
-        add(GetConfiguration().Learners);
+        add(Configuration().Learners);
     }
     return peers;
 }

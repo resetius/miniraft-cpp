@@ -176,7 +176,7 @@ public:
     uint64_t RemoveServer(uint32_t id);
     uint32_t GetLeaderId() const;
     // The last configuration in the log, in effect even before it commits.
-    const TConfiguration& GetConfiguration() const;
+    TConfiguration GetConfiguration() const;
     uint64_t GetLastIndex() const;
     uint64_t ApproveRead();
     // Highest barrier confirmed by a fresh majority in this leadership term.
@@ -203,15 +203,15 @@ public:
     }
 
     int GetMinVotes() const {
-        return GetConfiguration().Voters.size() / 2 + 1;
+        return Configuration().Voters.size() / 2 + 1;
     }
 
     int GetNpeers() const {
-        return GetConfiguration().Voters.size() - GetConfiguration().Voters.contains(Id);
+        return Configuration().Voters.size() - Configuration().Voters.contains(Id);
     }
 
     int GetNservers() const {
-        return GetConfiguration().Voters.size();
+        return Configuration().Voters.size();
     }
 
 private:
@@ -248,6 +248,8 @@ private:
     bool ValidateRpc(TMessageHolder<TMessage> message) const;
     // Members other than this server that have a node.
     std::vector<uint32_t> Peers(bool learners) const;
+    // Valid until the log changes.
+    const TConfiguration& Configuration() const;
 
     uint32_t Id;
     TNodeDict Nodes;
