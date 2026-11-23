@@ -57,7 +57,8 @@ using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 // The members of the cluster. The leader replicates to all of them, but only
 // voters count for elections and commitment.
 struct TConfiguration {
-    // The log entry that set it; zero for the one TRaft was started with.
+    // The log entry that set it, the snapshot index for one in a snapshot, and zero for the
+    // one TRaft was started with.
     uint64_t Index = 0;
     std::set<uint32_t> Voters;
     std::set<uint32_t> Learners;
@@ -160,7 +161,8 @@ public:
     // Local proposals require leader state. Role rejection leaves storage and
     // the supplied entry unchanged; followers receive entries through Process.
     uint64_t Append(TMessageHolder<TLogEntry> entry);
-    // An image that does not advance the snapshot is ignored.
+    // An image that does not advance the snapshot is ignored. The stored image starts with
+    // a record of the configuration at its index; IRsm::Apply never gets that record.
     void Compact(TMessageHolder<TInstallSnapshotRequest> snapshot);
     // Configuration changes, one server at a time (Ongaro's thesis, 4.1), leader only. Each
     // returns the index of its configuration entry, or zero while a change cannot start:
@@ -233,6 +235,8 @@ private:
     void RemoveLast();
     bool CanChangeConfiguration() const;
     uint64_t AppendConfiguration(TConfiguration configuration);
+    const TConfiguration& ConfigurationAt(uint64_t index) const;
+    void OnSnapshot(TConfiguration configuration);
     void StepDownIfRemoved(ITimeSource::Time now);
     bool CanCampaign() const;
 

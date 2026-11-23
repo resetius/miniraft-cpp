@@ -1,6 +1,8 @@
 #include <miniraft/raft.h>
+#include <miniraft/persist.h>
 #include <chrono>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <optional>
@@ -95,6 +97,12 @@ struct TCluster {
             node->ProcessTimeout(Now);
         }
         ASSERT_NO_FATAL_FAILURE(Drain());
+    }
+    // A snapshot of the committed log with no application records.
+    void Compact(uint32_t id, uint64_t index = 0) {
+        auto& node = (*this)[id];
+        node.Compact(NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
+            .LastIncludedIndex = index ? index : node.GetVolatileState()->CommitIndex}));
     }
     template<class F>
     void StepUntil(F done, int steps = 100) {
@@ -634,6 +642,97 @@ TEST(Membership, at_most_one_uncommitted_change_under_failures) {
     ASSERT_GT(leaders.size(), 2);
 }
 
+TEST(Membership, configuration_survives_compaction_and_restart) {
+    struct TDirectory {
+        std::filesystem::path Path = std::filesystem::temp_directory_path() /
+            ("miniraft-membership-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        TDirectory() { std::filesystem::create_directory(Path); }
+        ~TDirectory() { std::error_code ignored; std::filesystem::remove_all(Path, ignored); }
+    } directory;
+    const auto name = (directory.Path / "raft").string();
+    {
+        TCluster cluster(4, TConfiguration{.Voters = {1, 2, 3}});
+        cluster.Start(2, std::make_shared<TDiskState>(name, 2));
+        ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
+        ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+        ASSERT_NE(cluster[1].AddLearner(4), 0);
+        uint64_t voter = 0;
+        ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return voter || (voter = cluster[1].PromoteLearner(cluster.Now, 4)); }));
+        ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+        // The log of node 2 loses both configuration entries.
+        ASSERT_NO_FATAL_FAILURE(cluster.Compact(2));
+        const auto snapshot = cluster[2].GetState()->SnapshotIndex;
+        ASSERT_GE(snapshot, voter);
+        const TConfiguration all{.Index = snapshot, .Voters = {1, 2, 3, 4}};
+        ASSERT_EQ(cluster[2].GetConfiguration(), all);
+        cluster.Write(1, 2);
+        ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+
+        cluster.Start(2, std::make_shared<TDiskState>(name, 2));
+        ASSERT_EQ(cluster[2].GetConfiguration(), all);
+        // Without node 1, node 2 needs both other voters for a vote and for a commit.
+        cluster.Drop = [](const auto& m) { return m->Src == 1 || m->Dst == 1; };
+        ASSERT_NO_FATAL_FAILURE(cluster.Elect(2));
+        cluster.Write(2);
+        ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+        ASSERT_EQ(cluster.Commit(2), cluster[2].GetLastIndex());
+    }
+}
+
+TEST(Membership, new_server_gets_the_configuration_from_a_snapshot) {
+    TCluster cluster(4, TConfiguration{.Voters = {1, 2, 3}});
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    cluster.Drop = [](const auto& m) { return m->Dst == 4; };
+    const auto learner = cluster[1].AddLearner(4);
+    ASSERT_NE(learner, 0);
+    cluster.Write(1, 3);
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    ASSERT_NO_FATAL_FAILURE(cluster.Compact(1));
+    const auto snapshot = cluster[1].GetState()->SnapshotIndex;
+    ASSERT_GT(snapshot, learner);
+
+    cluster.Drop = {};
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return cluster[4].GetState()->SnapshotIndex == snapshot; }));
+    ASSERT_EQ(cluster[4].GetConfiguration(), (TConfiguration{.Index = snapshot, .Voters = {1, 2, 3}, .Learners = {4}}));
+    uint64_t voter = 0;
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return voter || (voter = cluster[1].PromoteLearner(cluster.Now, 4)); }));
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    ASSERT_EQ(cluster[4].GetConfiguration(), (TConfiguration{.Index = voter, .Voters = {1, 2, 3, 4}}));
+    ASSERT_EQ(cluster.Term(4), cluster.Term(1));
+}
+
+TEST(Membership, snapshot_holds_the_configuration_at_its_index) {
+    TCluster cluster(4, TConfiguration{.Voters = {1, 2, 3}});
+    ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    const auto learner = cluster[1].AddLearner(4);
+    cluster.Write(1, 2);
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+    const auto between = cluster.Commit(3);
+    ASSERT_GT(between, learner);
+    uint64_t voter = 0;
+    ASSERT_NO_FATAL_FAILURE(cluster.StepUntil([&] { return voter || (voter = cluster[1].PromoteLearner(cluster.Now, 4)); }));
+    ASSERT_NO_FATAL_FAILURE(cluster.Replicate());
+
+    ASSERT_NO_FATAL_FAILURE(cluster.Compact(3, between));
+    const TConfiguration all{.Index = voter, .Voters = {1, 2, 3, 4}};
+    ASSERT_EQ(cluster[3].GetConfiguration(), all);
+    cluster.Restart(3);
+    ASSERT_EQ(cluster[3].GetConfiguration(), all);
+    // The image alone has the configuration at its index.
+    auto image = std::make_shared<TState>();
+    image->InstallSnapshot(cluster[3].GetState()->GetSnapshot());
+    TRaft restored(image, 3, {}, TConfiguration{});
+    ASSERT_EQ(restored.GetConfiguration(), (TConfiguration{.Index = between, .Voters = {1, 2, 3}, .Learners = {4}}));
+
+    // An image made before configurations were in snapshots keeps the initial one.
+    auto old = std::make_shared<TState>();
+    old->InstallSnapshot(NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
+        .LastIncludedIndex = 3, .LastIncludedTerm = 1, .Done = 1}));
+    ASSERT_EQ(TRaft(old, 1, {}).GetConfiguration(), (TConfiguration{.Voters = {1}}));
+}
+
 TEST(Membership, configuration_changes_are_checked) {
     TCluster cluster(3);
     ASSERT_NO_FATAL_FAILURE(cluster.Elect(1));
@@ -669,6 +768,17 @@ TEST(Membership, configuration_changes_are_checked) {
         cluster[2].Process(cluster.Now, append);
         ASSERT_TRUE(cluster.Packets.empty());
         ASSERT_EQ(cluster[2].GetLastIndex(), last);
+
+        // So is an image that starts with one.
+        auto image = NewHoldedMessage(
+            TMessageEx{.Src = 1, .Dst = 2, .Term = cluster.Term(1), .Seqno = 1001},
+            TInstallSnapshotRequest{.LastIncludedIndex = last + 10, .LastIncludedTerm = cluster.Term(1),
+                .LeaderId = 1, .Nentries = 1, .Done = 1});
+        image.InitPayload(1);
+        image.Payload[0] = config;
+        cluster[2].Process(cluster.Now, image);
+        ASSERT_TRUE(cluster.Packets.empty());
+        ASSERT_EQ(cluster[2].GetState()->SnapshotIndex, 0);
     }
 }
 

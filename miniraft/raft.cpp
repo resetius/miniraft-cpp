@@ -68,6 +68,34 @@ TConfiguration ReadConfiguration(const TMessageHolder<TLogEntry>& entry) {
     return configuration;
 }
 
+// The first record of an image is the configuration at its index; older images have none.
+std::optional<TConfiguration> ImageConfiguration(const TMessageHolder<TInstallSnapshotRequest>& image) {
+    if (!image.PayloadSize) {
+        return {};
+    }
+    auto record = image.Payload[0].Maybe<TLogEntry>();
+    if (!record || record.Cast()->Flags != TLogEntry::EConfiguration) {
+        return {};
+    }
+    return ReadConfiguration(record.Cast());
+}
+
+// The records of the application.
+TMessageHolder<TInstallSnapshotRequest> ApplicationImage(TMessageHolder<TInstallSnapshotRequest> image) {
+    if (!ImageConfiguration(image)) {
+        return image;
+    }
+    auto application = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
+        .LastIncludedIndex = image->LastIncludedIndex,
+        .LastIncludedTerm = image->LastIncludedTerm,
+        .Nentries = image.PayloadSize - 1,
+        .Done = 1,
+    });
+    application.PayloadSize = image.PayloadSize - 1;
+    application.Payload = std::shared_ptr<TMessageHolder<TMessage>[]>(image.Payload, image.Payload.get() + 1);
+    return application;
+}
+
 } // namespace
 
 void TDummyRsm::Validate(TMessageHolder<TCommandRequest> message) const {
@@ -249,6 +277,12 @@ TRaft::TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, TC
             if (id != Id && !Nodes.contains(id)) {
                 throw std::invalid_argument("Invalid Raft peer configuration");
             }
+        }
+    }
+    if (State->SnapshotIndex) {
+        if (auto snapshot = ImageConfiguration(State->GetSnapshot())) {
+            initial = std::move(*snapshot);
+            initial.Index = State->SnapshotIndex;
         }
     }
     for (auto i = State->SnapshotIndex + 1; i <= State->LastLogIndex; ++i) {
@@ -480,6 +514,7 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
         snapshot.InitPayload(records.size());
         std::copy(records.begin(), records.end(), snapshot.Payload.get());
     }
+    const auto configuration = ImageConfiguration(snapshot).value_or(ConfigurationAt(index));
     try {
         State->InstallSnapshot(snapshot);
     } catch (...) {
@@ -489,9 +524,11 @@ void TRaft::OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnap
             incoming = {};
             records.clear();
             VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, State->SnapshotIndex);
+            OnSnapshot(configuration);
         }
         throw;
     }
+    OnSnapshot(configuration);
     incoming = {};
     records.clear();
     VolatileState->CommitIndex = std::max(VolatileState->CommitIndex, index);
@@ -871,6 +908,9 @@ bool TRaft::ValidateRpc(TMessageHolder<TMessage> message) const {
             snapshot->Done > 1 || snapshot->Offset > UINT32_MAX - snapshot->Nentries) {
             return false;
         }
+        if (!snapshot->Offset) {
+            try { ImageConfiguration(snapshot); } catch (const TMessageError&) { return false; }
+        }
         // An image never contradicts the committed prefix.
         const auto commitIndex = VolatileState->CommitIndex;
         if (index > commitIndex) {
@@ -1118,15 +1158,36 @@ void TRaft::Compact(TMessageHolder<TInstallSnapshotRequest> snapshot) {
         }
         ValidateMessageHeader(record->Type, record->Len);
     }
+    const auto term = State->LogTerm(index);
+    const auto configuration = ConfigurationAt(index);
     auto image = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{
         .LastIncludedIndex = index,
-        .LastIncludedTerm = State->LogTerm(index),
-        .Nentries = snapshot.PayloadSize,
+        .LastIncludedTerm = term,
+        .Nentries = snapshot.PayloadSize + 1,
         .Done = 1,
     });
-    image.PayloadSize = snapshot.PayloadSize;
-    image.Payload = snapshot.Payload;
+    image.InitPayload(snapshot.PayloadSize + 1);
+    image.Payload[0] = ConfigurationEntry(configuration, term);
+    std::copy(snapshot.Payload.get(), snapshot.Payload.get() + snapshot.PayloadSize, image.Payload.get() + 1);
     State->InstallSnapshot(std::move(image));
+    OnSnapshot(configuration);
+}
+
+const TConfiguration& TRaft::ConfigurationAt(uint64_t index) const {
+    auto after = std::upper_bound(Configurations.begin(), Configurations.end(), index,
+        [](uint64_t index, const TConfiguration& configuration) {
+            return index < configuration.Index;
+        });
+    return *std::prev(after);
+}
+
+void TRaft::OnSnapshot(TConfiguration configuration) {
+    // The entries the image covers are gone; a replaced log takes its configurations with it.
+    configuration.Index = State->SnapshotIndex;
+    std::erase_if(Configurations, [&](const auto& entry) {
+        return entry.Index <= State->SnapshotIndex || entry.Index > State->LastLogIndex;
+    });
+    Configurations.insert(Configurations.begin(), std::move(configuration));
 }
 
 uint32_t TRaft::GetLeaderId() const {
@@ -1372,7 +1433,7 @@ void TRequestProcessor::ProcessCommitted() {
     if (Rsm->LastAppliedIndex < state->SnapshotIndex) {
         // The log before the snapshot is gone: the application starts from the image.
         auto snapshot = state->GetSnapshot();
-        Rsm->Apply(snapshot);
+        Rsm->Apply(ApplicationImage(snapshot));
         Rsm->LastAppliedIndex = snapshot->LastIncludedIndex;
     }
     auto commitIndex = Raft->GetVolatileState()->CommitIndex;
