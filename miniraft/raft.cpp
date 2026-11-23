@@ -591,6 +591,8 @@ void TRaft::Process(ITimeSource::Time now, TMessageHolder<TMessage> message, con
             StateName = EState::FOLLOWER;
             VolatileState->LeaderId = 0;
             VolatileState->SnapshotTransfers.clear();
+            VolatileState->Incoming = {};
+            VolatileState->IncomingRecords.clear();
             if (VolatileState->ElectionDue <= now || VolatileState->ElectionDue == ITimeSource::Max) {
                 VolatileState->ElectionDue = MakeElection(now);
             }
