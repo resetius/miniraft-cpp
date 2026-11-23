@@ -1,8 +1,10 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <queue>
 #include <deque>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -52,6 +54,15 @@ private:
 
 using TNodeDict = std::unordered_map<uint32_t, std::shared_ptr<INode>>;
 
+// The members of the cluster. The leader replicates to all of them, but only
+// voters count for elections and commitment.
+struct TConfiguration {
+    std::set<uint32_t> Voters;
+    std::set<uint32_t> Learners;
+
+    bool operator==(const TConfiguration& other) const = default;
+};
+
 struct TVolatileState {
     struct TAppendRpc { uint64_t Seqno, PrevIndex, LastIndex; };
     static constexpr size_t MaxPendingAppendRpcs = 256;
@@ -69,6 +80,25 @@ struct TVolatileState {
     std::unordered_map<uint32_t, int> BatchSize;
     std::unordered_map<uint32_t, int> BackOff;
     ITimeSource::Time ElectionDue;
+    // Last message from the leader of the current term.
+    ITimeSource::Time LeaderSeen = ITimeSource::Time::min();
+    // Leader: peers that replied since the last check of the majority, and the next check.
+    std::unordered_set<uint32_t> Replied;
+    std::optional<ITimeSource::Time> QuorumCheckDue;
+    // Leader: catch-up rounds of the learners (Ongaro's thesis, 4.2.1). A round ends when
+    // the learner has the entries the leader had at its start.
+    struct TCatchUp {
+        uint64_t Target = 0;
+        ITimeSource::Time Start;
+        // The last round ended within an election timeout.
+        bool LastShort = false;
+
+        // And the current one has not run longer.
+        bool CaughtUp(ITimeSource::Time now) const {
+            return LastShort && now - Start < TTimeout::Election;
+        }
+    };
+    std::unordered_map<uint32_t, TCatchUp> CatchUp;
 
     std::vector<uint64_t> Indices;
 
@@ -86,7 +116,8 @@ struct TVolatileState {
     std::vector<TMessageHolder<TMessage>> IncomingRecords;
 
     TVolatileState& Vote(uint32_t id);
-    TVolatileState& CommitAdvance(int nservers, const IState& state);
+    // The leader's own log counts only if it is one of the voters.
+    TVolatileState& CommitAdvance(const std::set<uint32_t>& voters, uint32_t leaderId, const IState& state);
     TVolatileState& SetCommitIndex(uint64_t index);
     TVolatileState& SetElectionDue(ITimeSource::Time);
     TVolatileState& SetNextIndex(uint32_t id, uint64_t nextIndex);
@@ -113,7 +144,10 @@ enum class EState: int {
 
 class TRaft {
 public:
+    // All servers are voters.
     TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes);
+    // The nodes reach every member other than this server.
+    TRaft(std::shared_ptr<IState> state, int node, const TNodeDict& nodes, TConfiguration configuration);
 
     void Process(ITimeSource::Time now, TMessageHolder<TMessage> message, const std::shared_ptr<INode>& replyTo = {});
     void ProcessTimeout(ITimeSource::Time now);
@@ -124,6 +158,7 @@ public:
     // An image that does not advance the snapshot is ignored.
     void Compact(TMessageHolder<TInstallSnapshotRequest> snapshot);
     uint32_t GetLeaderId() const;
+    const TConfiguration& GetConfiguration() const;
     uint64_t GetLastIndex() const;
     uint64_t ApproveRead();
     // Highest barrier confirmed by a fresh majority in this leadership term.
@@ -150,15 +185,15 @@ public:
     }
 
     int GetMinVotes() const {
-        return MinVotes;
+        return Configuration.Voters.size() / 2 + 1;
     }
 
     int GetNpeers() const {
-        return Npeers;
+        return Configuration.Voters.size() - Configuration.Voters.contains(Id);
     }
 
     int GetNservers() const {
-        return Nservers;
+        return Configuration.Voters.size();
     }
 
 private:
@@ -171,9 +206,11 @@ private:
     void OnRequestVote(ITimeSource::Time now, TMessageHolder<TRequestVoteRequest> message);
     void OnRequestVote(TMessageHolder<TRequestVoteResponse> message);
     void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesRequest> message);
-    void OnAppendEntries(TMessageHolder<TAppendEntriesResponse> message);
+    void OnAppendEntries(ITimeSource::Time now, TMessageHolder<TAppendEntriesResponse> message);
     void OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotRequest> message);
-    void OnInstallSnapshot(TMessageHolder<TInstallSnapshotResponse> message);
+    void OnInstallSnapshot(ITimeSource::Time now, TMessageHolder<TInstallSnapshotResponse> message);
+    void StepDown(ITimeSource::Time now);
+    void CatchUp(ITimeSource::Time now, uint32_t nodeId);
 
     void LeaderTimeout(ITimeSource::Time now);
     void CandidateTimeout(ITimeSource::Time now);
@@ -185,12 +222,12 @@ private:
     ITimeSource::Time MakeElection(ITimeSource::Time now);
     uint64_t NextSeqno();
     bool ValidateRpc(TMessageHolder<TMessage> message) const;
+    // Members other than this server that have a node.
+    std::vector<uint32_t> Peers(bool learners) const;
 
     uint32_t Id;
     TNodeDict Nodes;
-    int MinVotes;
-    int Npeers;
-    int Nservers;
+    TConfiguration Configuration;
     std::shared_ptr<IState> State;
     std::unique_ptr<TVolatileState> VolatileState;
     uint64_t Seqno = 1; // zero is reserved for an unconfirmed read
