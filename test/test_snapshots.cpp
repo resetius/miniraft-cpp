@@ -496,6 +496,14 @@ void test_delayed_reply_after_retries_advances_the_transfer(void**) {
     const auto& transfer = cluster[1].Raft->GetVolatileState()->SnapshotTransfers.at(3);
     assert_int_equal(transfer.Offset, 0);
     cluster.Drop = {};
+    // A stale-term reply with the chunk's seqno is dropped: the transfer does not move.
+    auto& leader = cluster[1];
+    leader.Raft->Process(cluster.Now, NewHoldedMessage(
+        TMessageEx{.Src = 3, .Dst = 1, .Term = leader.State->CurrentTerm - 1,
+            .Seqno = held.front().Cast<TMessageEx>()->Seqno},
+        TInstallSnapshotResponse{}));
+    assert_int_equal(transfer.Offset, 0);
+    assert_int_equal(leader.State->CurrentTerm, held.front().Cast<TMessageEx>()->Term);
     cluster.Packets.push_back(held[0]);
     cluster.Drain();
     assert_int_equal(transfer.Offset, TMessageLimits{}.MaxEntries);
