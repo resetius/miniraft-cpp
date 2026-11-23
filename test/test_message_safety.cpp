@@ -1,14 +1,9 @@
 #include <miniraft/raft.h>
 #include <functional>
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 
 namespace {
-void test_typed_allocations_reject_undersized_storage(void**) {
+TEST(MessageSafety, typed_allocations_reject_undersized_storage) {
     for (uint32_t size : {0u, 7u, 8u, uint32_t(sizeof(TRequestVoteRequest) - 1)}) {
         for (bool explicitType : {false, true}) {
             bool rejected = false;
@@ -16,19 +11,19 @@ void test_typed_allocations_reject_undersized_storage(void**) {
                 if (explicitType) NewHoldedMessage<TRequestVoteRequest>(uint32_t(EMessageType::REQUEST_VOTE_REQUEST), size);
                 else NewHoldedMessage<TRequestVoteRequest>(size);
             } catch (const std::invalid_argument&) { rejected = true; }
-            assert_true(rejected);
+            ASSERT_TRUE(rejected);
         }
     }
 }
-void test_short_wrong_type_and_empty_casts_are_rejected(void**) {
+TEST(MessageSafety, short_wrong_type_and_empty_casts_are_rejected) {
     auto shortFrame = NewHoldedMessage<TMessage>(uint32_t(EMessageType::REQUEST_VOTE_REQUEST), sizeof(TMessage));
     auto wrongType = NewHoldedMessage<TMessage>(uint32_t(EMessageType::LOG_ENTRY), sizeof(TRequestVoteRequest));
     for (auto message : {shortFrame, wrongType, TMessageHolder<TMessage>{}}) {
-        assert_false(message.IsEx());
-        assert_false(message.Maybe<TRequestVoteRequest>());
+        ASSERT_FALSE(message.IsEx());
+        ASSERT_FALSE(message.Maybe<TRequestVoteRequest>());
         bool rejected = false;
         try { message.Cast<TRequestVoteRequest>(); } catch (const std::bad_cast&) { rejected = true; }
-        assert_true(rejected);
+        ASSERT_TRUE(rejected);
     }
 }
 struct TEndpoint : INode {
@@ -39,7 +34,7 @@ struct TEndpoint : INode {
     }
     void Drain() override {}
 };
-void test_raft_batches_respect_budget_and_continue_replication(void**) {
+TEST(MessageSafety, raft_batches_respect_budget_and_continue_replication) {
     auto state = std::make_shared<TState>();
     state->CurrentTerm = 2;
     auto entry = NewHoldedMessage<TLogEntry>(1024 * 1024);
@@ -51,24 +46,24 @@ void test_raft_batches_respect_budget_and_continue_replication(void**) {
     auto* progress = const_cast<TVolatileState*>(raft.GetVolatileState());
     progress->BatchSize[2] = 1024;
     raft.ProcessTimeout(ITimeSource::Time{});
-    assert_int_equal(peer->Sent.size(), 1);
+    ASSERT_EQ(peer->Sent.size(), 1);
     auto first = peer->Sent[0];
     ValidateMessageTree(first);
-    assert_true(first->Nentries > 0);
-    assert_true(first->Nentries < 100);
-    assert_int_equal(first->Nentries, first.PayloadSize);
+    ASSERT_TRUE(first->Nentries > 0);
+    ASSERT_TRUE(first->Nentries < 100);
+    ASSERT_EQ(first->Nentries, first.PayloadSize);
     auto reply = NewHoldedMessage(TMessageEx{.Src = 2, .Dst = 1, .Term = 2, .Seqno = first->Seqno},
                                  TAppendEntriesResponse{.MatchIndex = first->Nentries, .Success = 1});
     raft.Process(ITimeSource::Time{}, reply);
     raft.ProcessTimeout(ITimeSource::Time{});
-    assert_int_equal(peer->Sent.size(), 2);
+    ASSERT_EQ(peer->Sent.size(), 2);
     auto second = peer->Sent[1];
     ValidateMessageTree(second);
-    assert_int_equal(second->PrevLogIndex, first->Nentries);
-    assert_int_equal(first->Nentries + second->Nentries, 100);
-    assert_true(second->Nentries > 0);
+    ASSERT_EQ(second->PrevLogIndex, first->Nentries);
+    ASSERT_EQ(first->Nentries + second->Nentries, 100);
+    ASSERT_TRUE(second->Nentries > 0);
 }
-void test_invalid_proposal_does_not_mutate_persistent_state(void**) {
+TEST(MessageSafety, invalid_proposal_does_not_mutate_persistent_state) {
     auto state = std::make_shared<TState>();
     TRaft raft(state, 1, {});
     raft.Become(EState::LEADER);
@@ -78,33 +73,23 @@ void test_invalid_proposal_does_not_mutate_persistent_state(void**) {
         entry->Term = 99;
         bool rejected = false;
         try { raft.Append(entry); } catch (const TMessageError&) { rejected = true; }
-        assert_true(rejected);
-        assert_int_equal(state->LastLogIndex, 0);
-        assert_int_equal(entry->Term, 99);
+        ASSERT_TRUE(rejected);
+        ASSERT_EQ(state->LastLogIndex, 0);
+        ASSERT_EQ(entry->Term, 99);
     }
 }
-void test_unsendable_reply_becomes_error_reply(void**) {
+TEST(MessageSafety, unsendable_reply_becomes_error_reply) {
     auto oversized = NewHoldedMessage<TCommandResponse>(sizeof(TCommandResponse) + TMessageLimits{}.MaxFrameBytes);
     oversized->Index = 7;
     oversized->Cookie = 42;
     auto reply = MakeSendable(oversized).Cast<TCommandResponse>();
-    assert_int_equal(reply->Len, sizeof(TCommandResponse));
-    assert_int_equal(reply->Index, 7);
-    assert_int_equal(reply->Cookie, 42);
-    assert_int_equal(reply->ErrorCode, 2);
+    ASSERT_EQ(reply->Len, sizeof(TCommandResponse));
+    ASSERT_EQ(reply->Index, 7);
+    ASSERT_EQ(reply->Cookie, 42);
+    ASSERT_EQ(reply->ErrorCode, 2);
     auto valid = NewHoldedMessage<TCommandResponse>();
-    assert_true(MakeSendable(valid).Mes == valid.Mes);
+    ASSERT_TRUE(MakeSendable(valid).Mes == valid.Mes);
     auto request = NewHoldedMessage<TCommandRequest>(sizeof(TCommandRequest) + TMessageLimits{}.MaxFrameBytes);
-    assert_false(MakeSendable(request));
+    ASSERT_FALSE(MakeSendable(request));
 }
-}
-int main() {
-    const CMUnitTest tests[] = {
-        cmocka_unit_test(test_typed_allocations_reject_undersized_storage),
-        cmocka_unit_test(test_short_wrong_type_and_empty_casts_are_rejected),
-        cmocka_unit_test(test_raft_batches_respect_budget_and_continue_replication),
-        cmocka_unit_test(test_invalid_proposal_does_not_mutate_persistent_state),
-        cmocka_unit_test(test_unsendable_reply_becomes_error_reply),
-    };
-    return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

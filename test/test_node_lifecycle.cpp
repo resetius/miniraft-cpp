@@ -9,14 +9,11 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 
 namespace {
+
+NNet::TInitializer Init; // ignores SIGPIPE: the woken write fails with EPIPE
 
 // Resumes the woken coroutines in batches, as one coroio poll does.
 struct TFakeLoop {
@@ -137,7 +134,7 @@ struct TFakeNet {
         node.Drain();
         Wires.back()->Wake(Wires.back()->Connector);
         Loop.Step();
-        assert_true(node.IsConnected());
+        ASSERT_TRUE(node.IsConnected());
     }
 };
 
@@ -163,7 +160,7 @@ NNet::TVoidTask ReadUntilFailure(std::shared_ptr<TFakeNode> node,
     }
 }
 
-void test_write_failure_drops_queue_and_reconnects(void**) {
+TEST(NodeLifecycle, write_failure_drops_queue_and_reconnects) {
     TFakeNet net;
     auto node = net.MakeNode();
     net.Connect(*node);
@@ -173,27 +170,27 @@ void test_write_failure_drops_queue_and_reconnects(void**) {
     node->Send(one);
     node->Send(two);
     node->Drain(); // suspended inside "one"
-    assert_int_equal(first->Written.size(), 10);
+    ASSERT_EQ(first->Written.size(), 10);
 
     first->Break();
     net.Loop.Step();
-    assert_false(node->IsConnected());
-    assert_true(first->ShutDown);
+    ASSERT_FALSE(node->IsConnected());
+    ASSERT_TRUE(first->ShutDown);
 
     node->Drain(); // the next attempt waits for the retry delay
-    assert_int_equal(net.Wires.size(), 1);
+    ASSERT_EQ(net.Wires.size(), 1);
     net.Time->Current += std::chrono::seconds(1);
     net.Connect(*node);
-    assert_int_equal(net.Wires.size(), 2);
-    assert_true(net.Wires.back()->Written.empty());
+    ASSERT_EQ(net.Wires.size(), 2);
+    ASSERT_TRUE(net.Wires.back()->Written.empty());
     auto three = Entry("three");
     node->Send(three);
     node->Drain();
-    assert_true(net.Wires.back()->Written == Bytes(three));
+    ASSERT_TRUE(net.Wires.back()->Written == Bytes(three));
 }
 
 // coroio reports a refused connect as a success; the first write then fails.
-void test_unreachable_peer_does_not_keep_messages(void**) {
+TEST(NodeLifecycle, unreachable_peer_does_not_keep_messages) {
     TFakeNet net;
     auto node = net.MakeNode();
     net.Connect(*node);
@@ -202,7 +199,7 @@ void test_unreachable_peer_does_not_keep_messages(void**) {
         node->Send(Entry("stale"));
     }
     node->Drain(); // the failed write takes the queue with it
-    assert_false(node->IsConnected());
+    ASSERT_FALSE(node->IsConnected());
 
     for (int i = 0; i < 100; ++i) {
         node->Send(Entry("stale"));
@@ -211,7 +208,7 @@ void test_unreachable_peer_does_not_keep_messages(void**) {
     node->Drain();
     net.Wires.back()->Break(); // so does a failed attempt
     net.Loop.Step();
-    assert_false(node->IsConnected());
+    ASSERT_FALSE(node->IsConnected());
 
     // OutboundServe calls it right after failing the forwarded requests.
     node->Send(Entry("stale"));
@@ -221,10 +218,10 @@ void test_unreachable_peer_does_not_keep_messages(void**) {
     node->Send(fresh);
     net.Time->Current += std::chrono::seconds(1);
     net.Connect(*node);
-    assert_true(net.Wires.back()->Written == Bytes(fresh));
+    ASSERT_TRUE(net.Wires.back()->Written == Bytes(fresh));
 }
 
-void test_read_failure_and_write_wakeup_in_one_batch(void**) {
+TEST(NodeLifecycle, read_failure_and_write_wakeup_in_one_batch) {
     TFakeNet net;
     auto node = net.MakeNode();
     net.Connect(*node);
@@ -240,25 +237,25 @@ void test_read_failure_and_write_wakeup_in_one_batch(void**) {
     // The reader disconnects first; the drainer must still be alive after it.
     wire->Break();
     net.Loop.Step();
-    assert_true(failed);
-    assert_false(node->IsConnected());
-    assert_true(connection.expired());
+    ASSERT_TRUE(failed);
+    ASSERT_FALSE(node->IsConnected());
+    ASSERT_TRUE(connection.expired());
 
     net.Time->Current += std::chrono::seconds(1);
     net.Connect(*node);
     auto two = Entry("two");
     node->Send(two);
     node->Drain();
-    assert_true(net.Wires.back()->Written == Bytes(two));
+    ASSERT_TRUE(net.Wires.back()->Written == Bytes(two));
 }
 
-void test_stale_reader_cannot_disconnect_new_connection(void**) {
+TEST(NodeLifecycle, stale_reader_cannot_disconnect_new_connection) {
     TFakeNet net;
     auto node = net.MakeNode();
     net.Connect(*node);
     auto old = node->GetConnection();
     node->Disconnect(old);
-    assert_false(node->IsConnected());
+    ASSERT_FALSE(node->IsConnected());
 
     net.Time->Current += std::chrono::seconds(1);
     node->Drain();
@@ -266,18 +263,18 @@ void test_stale_reader_cannot_disconnect_new_connection(void**) {
     auto wire = net.Wires.back();
     wire->Wake(wire->Connector);
     net.Loop.Step();
-    assert_true(node->IsConnected());
+    ASSERT_TRUE(node->IsConnected());
 
     auto current = node->GetConnection();
     node->Disconnect(old);
-    assert_true(node->GetConnection() == current);
-    assert_false(wire->ShutDown);
+    ASSERT_TRUE(node->GetConnection() == current);
+    ASSERT_FALSE(wire->ShutDown);
     node->Disconnect(current);
-    assert_false(node->IsConnected());
-    assert_true(wire->ShutDown);
+    ASSERT_FALSE(node->IsConnected());
+    ASSERT_TRUE(wire->ShutDown);
 }
 
-void test_destroy_node_with_suspended_drainer(void**) {
+TEST(NodeLifecycle, destroy_node_with_suspended_drainer) {
     TFakeNet net;
     auto node = net.MakeNode();
     net.Connect(*node);
@@ -288,27 +285,27 @@ void test_destroy_node_with_suspended_drainer(void**) {
     std::weak_ptr<TFakeNode::TConnection> connection = node->GetConnection();
 
     node.reset();
-    assert_true(wire->ShutDown);
-    assert_false(connection.expired()); // held by the suspended drainer
+    ASSERT_TRUE(wire->ShutDown);
+    ASSERT_FALSE(connection.expired()); // held by the suspended drainer
     net.Loop.Step();
-    assert_true(connection.expired());
+    ASSERT_TRUE(connection.expired());
 }
 
-void test_destroy_node_with_pending_connect(void**) {
+TEST(NodeLifecycle, destroy_node_with_pending_connect) {
     TFakeNet net;
     auto node = net.MakeNode();
     node->Drain();
     auto wire = net.Wires.back();
-    assert_true(wire->Deadline == NNet::TTime::max());
+    ASSERT_TRUE(wire->Deadline == NNet::TTime::max());
 
     node.reset();
-    assert_true(wire->ShutDown);
+    ASSERT_TRUE(wire->ShutDown);
     net.Loop.Step();
     // Only net.Wires and this test hold the wire once the connector returned.
-    assert_int_equal(wire.use_count(), 2);
+    ASSERT_EQ(wire.use_count(), 2);
 }
 
-void test_unsendable_reply_is_rejected_alone(void**) {
+TEST(NodeLifecycle, unsendable_reply_is_rejected_alone) {
     TFakeNet net;
     auto node = net.MakeNode();
     net.Connect(*node);
@@ -320,7 +317,7 @@ void test_unsendable_reply_is_rejected_alone(void**) {
     node->Send(two);
     node->Drain();
     auto rejected = NewHoldedMessage(TCommandResponse{.Cookie = 7, .ErrorCode = 2});
-    assert_true(net.Wires.back()->Written == Bytes(one) + Bytes(rejected) + Bytes(two));
+    ASSERT_TRUE(net.Wires.back()->Written == Bytes(one) + Bytes(rejected) + Bytes(two));
 }
 
 NNet::TVoidSuspendedTask ConnectSocket(NNet::TSocket& socket) {
@@ -333,7 +330,7 @@ NNet::TVoidSuspendedTask AcceptSocket(NNet::TSocket& listener, NNet::TSocket& ac
 
 // The peer never reads, so the drainer waits on a full socket; destroying the
 // node must shut the socket down so the poller wakes the drainer.
-void test_destroy_node_wakes_writer_on_full_socket(void**) {
+TEST(NodeLifecycle, destroy_node_wakes_writer_on_full_socket) {
     NNet::TLoop<NNet::TPoll> loop;
     NNet::TSocket listener(NNet::TAddress{"127.0.0.1", 8891}, loop.Poller());
     listener.Bind();
@@ -359,26 +356,12 @@ void test_destroy_node_wakes_writer_on_full_socket(void**) {
     }
 
     node.reset();
-    assert_false(connection.expired());
+    ASSERT_FALSE(connection.expired());
     for (int i = 0; i < 100 && !connection.expired(); ++i) {
         loop.Step();
     }
-    assert_true(connection.expired());
+    ASSERT_TRUE(connection.expired());
 }
 
 } // namespace
 
-int main() {
-    NNet::TInitializer init; // ignores SIGPIPE: the woken write fails with EPIPE
-    const CMUnitTest tests[] = {
-        cmocka_unit_test(test_write_failure_drops_queue_and_reconnects),
-        cmocka_unit_test(test_unreachable_peer_does_not_keep_messages),
-        cmocka_unit_test(test_read_failure_and_write_wakeup_in_one_batch),
-        cmocka_unit_test(test_stale_reader_cannot_disconnect_new_connection),
-        cmocka_unit_test(test_destroy_node_with_suspended_drainer),
-        cmocka_unit_test(test_destroy_node_with_pending_connect),
-        cmocka_unit_test(test_unsendable_reply_is_rejected_alone),
-        cmocka_unit_test(test_destroy_node_wakes_writer_on_full_socket),
-    };
-    return cmocka_run_group_tests(tests, nullptr, nullptr);
-}

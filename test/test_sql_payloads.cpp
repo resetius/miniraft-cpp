@@ -2,12 +2,7 @@
 #include <miniraft/persist.h>
 #include <filesystem>
 #include <chrono>
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 namespace {
 TMessageHolder<TReadSql> Query(const std::string& text) {
     auto message = NewHoldedMessage<TReadSql>(sizeof(TReadSql) + text.size());
@@ -29,44 +24,44 @@ void Seed(TSql& sql) { Apply(sql, "CREATE TABLE t (value TEXT); INSERT INTO t VA
 template<class F> void Reject(F action) {
     bool rejected = false;
     try { action(); } catch (const TMessageError&) { rejected = true; }
-    assert_true(rejected);
+    ASSERT_TRUE(rejected);
 }
-void test_sql_prepare_rejects_short_query(void**) {
+TEST(SqlPayloads, sql_prepare_rejects_short_query) {
     TSql sql(":memory:", 1);
     auto command = NewHoldedMessage<TWriteSql>();
     command->QuerySize = UINT32_MAX;
     Reject([&] { sql.Prepare(command); });
 }
-void test_sql_read_rejects_short_query(void**) {
+TEST(SqlPayloads, sql_read_rejects_short_query) {
     TSql sql(":memory:", 1);
     auto command = NewHoldedMessage<TReadSql>();
     command->QuerySize = UINT32_MAX;
     Reject([&] { sql.Read(command, 0); });
 }
-void test_sql_apply_rejects_before_progress(void**) {
+TEST(SqlPayloads, sql_apply_rejects_before_progress) {
     TSql sql(":memory:", 1);
     auto entry = NewHoldedMessage<TSqlLogEntry>();
     entry->QuerySize = UINT32_MAX;
     Reject([&] { sql.Write(entry, 1); });
-    assert_int_equal(sql.LastAppliedIndex, 0);
+    ASSERT_EQ(sql.LastAppliedIndex, 0);
 }
-void test_valid_sql_payload_roundtrip(void**) {
+TEST(SqlPayloads, valid_sql_payload_roundtrip) {
     TSql sql(":memory:", 1);
     const std::string query = "CREATE TABLE test (value TEXT); INSERT INTO test VALUES ('ok');";
     auto command = NewHoldedMessage<TWriteSql>(sizeof(TWriteSql) + query.size());
     command->QuerySize = query.size();
     memcpy(command->Query, query.data(), query.size());
     sql.Write(sql.Prepare(command), 1);
-    assert_int_equal(sql.LastAppliedIndex, 1);
+    ASSERT_EQ(sql.LastAppliedIndex, 1);
     const std::string select = "SELECT value FROM test";
     auto read = NewHoldedMessage<TReadSql>(sizeof(TReadSql) + select.size());
     read->QuerySize = select.size();
     memcpy(read->Query, select.data(), select.size());
     auto result = sql.Read(read, 1).Cast<TCommandResponse>();
     std::string text(result->Data, result->Len - sizeof(TCommandResponse));
-    assert_true(text.find("ok") != std::string::npos);
+    ASSERT_TRUE(text.find("ok") != std::string::npos);
 }
-void test_sql_validation_runs_before_request_admission(void**) {
+TEST(SqlPayloads, sql_validation_runs_before_request_admission) {
     auto state = std::make_shared<TState>();
     auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
     auto sql = std::make_shared<TSql>(":memory:", 1);
@@ -77,61 +72,61 @@ void test_sql_validation_runs_before_request_admission(void**) {
         command->Flags = write ? TCommandRequest::EWrite : TCommandRequest::EConsistent;
         command->QuerySize = UINT32_MAX;
         Reject([&] { processor.OnCommandRequest(command, {}); });
-        assert_int_equal(state->LastLogIndex, 0);
+        ASSERT_EQ(state->LastLogIndex, 0);
     }
 }
-void test_sql_read_cannot_insert_update_or_delete(void**) {
+TEST(SqlPayloads, sql_read_cannot_insert_update_or_delete) {
     for (const std::string query : {"INSERT INTO t VALUES ('bad')", "UPDATE t SET value='bad'", "DELETE FROM t"}) {
         TSql sql(":memory:", 1);
         Seed(sql);
         Reject([&] { sql.Read(Query(query), 1); });
-        assert_true(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
-        assert_true(ReadText(sql, "SELECT count(*) FROM t").find("1") != std::string::npos);
-        assert_int_equal(sql.LastAppliedIndex, 1);
+        ASSERT_TRUE(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
+        ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("1") != std::string::npos);
+        ASSERT_EQ(sql.LastAppliedIndex, 1);
     }
 }
-void test_sql_read_rejects_multi_statement_mutation_before_execution(void**) {
+TEST(SqlPayloads, sql_read_rejects_multi_statement_mutation_before_execution) {
     TSql sql(":memory:", 1);
     Seed(sql);
     Reject([&] { sql.Read(Query("SELECT value FROM t; UPDATE t SET value='bad';"), 1); });
-    assert_true(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
+    ASSERT_TRUE(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
 }
-void test_sql_read_cannot_change_schema(void**) {
+TEST(SqlPayloads, sql_read_cannot_change_schema) {
     for (const std::string query : {"DROP TABLE t", "CREATE TABLE rogue (x)", "ALTER TABLE t ADD COLUMN x"}) {
         TSql sql(":memory:", 1);
         Seed(sql);
         Reject([&] { sql.Read(Query(query), 1); });
-        assert_true(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
+        ASSERT_TRUE(ReadText(sql, "SELECT value FROM t").find("original") != std::string::npos);
     }
 }
-void test_sql_read_rejects_connection_control_and_unsafe_functions(void**) {
+TEST(SqlPayloads, sql_read_rejects_connection_control_and_unsafe_functions) {
     for (const std::string query : {"PRAGMA query_only=OFF", "BEGIN", "COMMIT", "SAVEPOINT x",
          "ATTACH ':memory:' AS other", "VACUUM", "SELECT load_extension('nonexistent')",
          "SELECT readfile('nonexistent')"}) {
         TSql sql(":memory:", 1);
         Reject([&] { sql.Read(Query(query), 0); });
-        assert_int_equal(sql.LastAppliedIndex, 0);
+        ASSERT_EQ(sql.LastAppliedIndex, 0);
     }
 }
-void test_sql_read_supports_comments_ctes_and_safe_functions(void**) {
+TEST(SqlPayloads, sql_read_supports_comments_ctes_and_safe_functions) {
     TSql sql(":memory:", 1);
     Seed(sql);
-    assert_true(ReadText(sql, "-- leading comment\n SELECT upper(value), 'a;b' FROM t; -- tail").find("ORIGINAL") != std::string::npos);
-    assert_true(ReadText(sql, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<3) SELECT sum(x) FROM n").find("6") != std::string::npos);
+    ASSERT_TRUE(ReadText(sql, "-- leading comment\n SELECT upper(value), 'a;b' FROM t; -- tail").find("ORIGINAL") != std::string::npos);
+    ASSERT_TRUE(ReadText(sql, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<3) SELECT sum(x) FROM n").find("6") != std::string::npos);
 }
-void test_sql_read_rejects_nul_empty_and_second_select(void**) {
+TEST(SqlPayloads, sql_read_rejects_nul_empty_and_second_select) {
     TSql sql(":memory:", 1);
     const std::string embedded("SELECT 1\0;SELECT 2", 18);
     for (const auto& query : {std::string{}, std::string("-- only comment"), std::string("SELECT 1; SELECT 2"), embedded})
         Reject([&] { sql.Read(Query(query), 0); });
 }
-void test_sql_read_policy_is_restored_after_rejection(void**) {
+TEST(SqlPayloads, sql_read_policy_is_restored_after_rejection) {
     TSql sql(":memory:", 1);
     Seed(sql);
     Reject([&] { sql.Read(Query("DELETE FROM t"), 1); });
     Apply(sql, "INSERT INTO t VALUES ('second')", 2);
-    assert_int_equal(sql.LastAppliedIndex, 2);
-    assert_true(ReadText(sql, "SELECT count(*) FROM t").find("2") != std::string::npos);
+    ASSERT_EQ(sql.LastAppliedIndex, 2);
+    ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("2") != std::string::npos);
 }
 struct TDatabase {
     std::filesystem::path Directory;
@@ -141,30 +136,33 @@ struct TDatabase {
         Directory = std::filesystem::temp_directory_path() /
             ("miniraft-sql-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
              "-" + std::to_string(counter++));
-        assert_true(std::filesystem::create_directory(Directory));
+        EXPECT_TRUE(std::filesystem::create_directory(Directory));
+        if (!std::filesystem::is_directory(Directory)) {
+            throw std::runtime_error("cannot create " + Directory.string());
+        }
         Path = (Directory / "db").string();
     }
     ~TDatabase() { std::error_code ignored; std::filesystem::remove_all(Directory, ignored); }
     void External(const std::string& query) {
         sqlite3* db = nullptr;
-        assert_int_equal(sqlite3_open((Path + ".1").c_str(), &db), SQLITE_OK);
+        ASSERT_EQ(sqlite3_open((Path + ".1").c_str(), &db), SQLITE_OK);
         int rc = sqlite3_exec(db, query.c_str(), nullptr, nullptr, nullptr);
         sqlite3_close(db);
-        assert_int_equal(rc, SQLITE_OK);
+        ASSERT_EQ(rc, SQLITE_OK);
     }
 };
-void test_sql_write_cannot_escape_managed_transaction(void**) {
+TEST(SqlPayloads, sql_write_cannot_escape_managed_transaction) {
     for (const std::string control : {"COMMIT", "END", "ROLLBACK", "BEGIN", "SAVEPOINT x", "RELEASE x",
          "PRAGMA user_version=7", "ATTACH ':memory:' AS other"}) {
         TSql sql(":memory:", 1);
         Seed(sql);
         auto error = Apply(sql, "INSERT INTO t VALUES ('partial'); " + control + "; INSERT INTO missing VALUES (1);", 2);
-        assert_false(error.empty());
-        assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
-        assert_int_equal(sql.LastAppliedIndex, 2);
+        ASSERT_FALSE(error.empty());
+        ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
+        ASSERT_EQ(sql.LastAppliedIndex, 2);
     }
 }
-void test_sql_write_cannot_modify_progress_metadata(void**) {
+TEST(SqlPayloads, sql_write_cannot_modify_progress_metadata) {
     for (const std::string mutation : {"DELETE FROM raft_metadata_", "UPDATE RAFT_METADATA_ SET value='999'",
          "DROP TABLE raft_metadata_", "ALTER TABLE raft_metadata_ RENAME TO stolen",
          "CREATE INDEX tamper ON raft_metadata_ (value)",
@@ -173,53 +171,53 @@ void test_sql_write_cannot_modify_progress_metadata(void**) {
         TSql sql(":memory:", 1);
         Seed(sql);
         auto error = Apply(sql, "INSERT INTO t VALUES ('partial'); " + mutation, 2);
-        assert_false(error.empty());
-        assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
-        assert_true(ReadText(sql, "SELECT value FROM raft_metadata_ WHERE key='LastAppliedIndex'").find("\n2\n") != std::string::npos);
-        assert_int_equal(sql.LastAppliedIndex, 2);
+        ASSERT_FALSE(error.empty());
+        ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
+        ASSERT_TRUE(ReadText(sql, "SELECT value FROM raft_metadata_ WHERE key='LastAppliedIndex'").find("\n2\n") != std::string::npos);
+        ASSERT_EQ(sql.LastAppliedIndex, 2);
     }
 }
-void test_sql_failed_write_progress_survives_restart(void**) {
+TEST(SqlPayloads, sql_failed_write_progress_survives_restart) {
     TDatabase file;
     {
         TSql sql(file.Path, 1);
         Seed(sql);
-        assert_false(Apply(sql, "INSERT INTO t VALUES ('partial'); INSERT INTO missing VALUES (1)", 2).empty());
-        assert_int_equal(sql.LastAppliedIndex, 2);
-        assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
+        ASSERT_FALSE(Apply(sql, "INSERT INTO t VALUES ('partial'); INSERT INTO missing VALUES (1)", 2).empty());
+        ASSERT_EQ(sql.LastAppliedIndex, 2);
+        ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
     }
     {
         TSql sql(file.Path, 1);
-        assert_int_equal(sql.LastAppliedIndex, 2);
+        ASSERT_EQ(sql.LastAppliedIndex, 2);
         Apply(sql, "INSERT INTO t VALUES ('must not replay')", 2);
-        assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
-        assert_true(Apply(sql, "INSERT INTO t VALUES ('next')", 3).empty());
+        ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
+        ASSERT_TRUE(Apply(sql, "INSERT INTO t VALUES ('next')", 3).empty());
     }
     TSql sql(file.Path, 1);
-    assert_int_equal(sql.LastAppliedIndex, 3);
-    assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n2\n") != std::string::npos);
+    ASSERT_EQ(sql.LastAppliedIndex, 3);
+    ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n2\n") != std::string::npos);
 }
-void test_sql_write_handles_trailing_comment_without_losing_progress(void**) {
+TEST(SqlPayloads, sql_write_handles_trailing_comment_without_losing_progress) {
     TDatabase file;
     {
         TSql sql(file.Path, 1);
         Seed(sql);
-        assert_true(Apply(sql, "INSERT INTO t VALUES ('next'); -- trailing comment", 2).empty());
-        assert_int_equal(sql.LastAppliedIndex, 2);
+        ASSERT_TRUE(Apply(sql, "INSERT INTO t VALUES ('next'); -- trailing comment", 2).empty());
+        ASSERT_EQ(sql.LastAppliedIndex, 2);
     }
     TSql sql(file.Path, 1);
-    assert_int_equal(sql.LastAppliedIndex, 2);
-    assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n2\n") != std::string::npos);
+    ASSERT_EQ(sql.LastAppliedIndex, 2);
+    ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n2\n") != std::string::npos);
 }
-void test_sql_automatic_rollback_is_consumed_without_partial_data(void**) {
+TEST(SqlPayloads, sql_automatic_rollback_is_consumed_without_partial_data) {
     TSql sql(":memory:", 1);
-    assert_true(Apply(sql, "CREATE TABLE u (x INTEGER UNIQUE); INSERT INTO u VALUES (1)", 1).empty());
-    assert_false(Apply(sql, "INSERT INTO u VALUES (2); INSERT OR ROLLBACK INTO u VALUES (1)", 2).empty());
-    assert_int_equal(sql.LastAppliedIndex, 2);
-    assert_true(ReadText(sql, "SELECT count(*) FROM u").find("\n1\n") != std::string::npos);
-    assert_true(Apply(sql, "INSERT INTO u VALUES (3)", 3).empty());
+    ASSERT_TRUE(Apply(sql, "CREATE TABLE u (x INTEGER UNIQUE); INSERT INTO u VALUES (1)", 1).empty());
+    ASSERT_FALSE(Apply(sql, "INSERT INTO u VALUES (2); INSERT OR ROLLBACK INTO u VALUES (1)", 2).empty());
+    ASSERT_EQ(sql.LastAppliedIndex, 2);
+    ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM u").find("\n1\n") != std::string::npos);
+    ASSERT_TRUE(Apply(sql, "INSERT INTO u VALUES (3)", 3).empty());
 }
-void test_sql_metadata_failure_rolls_back_data_and_does_not_advance(void**) {
+TEST(SqlPayloads, sql_metadata_failure_rolls_back_data_and_does_not_advance) {
     TDatabase file;
     { TSql sql(file.Path, 1); Seed(sql); }
     file.External("CREATE TRIGGER fail_marker BEFORE UPDATE ON raft_metadata_ BEGIN SELECT RAISE(ABORT,'marker blocked'); END");
@@ -228,22 +226,22 @@ void test_sql_metadata_failure_rolls_back_data_and_does_not_advance(void**) {
         bool failed = false;
         try { Apply(sql, "INSERT INTO t VALUES ('partial')", 2); }
         catch (const std::runtime_error&) { failed = true; }
-        assert_true(failed);
-        assert_int_equal(sql.LastAppliedIndex, 1);
-        assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
+        ASSERT_TRUE(failed);
+        ASSERT_EQ(sql.LastAppliedIndex, 1);
+        ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
     }
     file.External("DROP TRIGGER fail_marker");
     TSql sql(file.Path, 1);
-    assert_int_equal(sql.LastAppliedIndex, 1);
-    assert_true(Apply(sql, "INSERT INTO t VALUES ('retry')", 2).empty());
+    ASSERT_EQ(sql.LastAppliedIndex, 1);
+    ASSERT_TRUE(Apply(sql, "INSERT INTO t VALUES ('retry')", 2).empty());
 }
-void test_sql_progress_restores_full_uint64_range(void**) {
+TEST(SqlPayloads, sql_progress_restores_full_uint64_range) {
     TDatabase file;
-    { TSql sql(file.Path, 1); assert_true(Apply(sql, "CREATE TABLE t (x)", UINT64_MAX).empty()); }
+    { TSql sql(file.Path, 1); ASSERT_TRUE(Apply(sql, "CREATE TABLE t (x)", UINT64_MAX).empty()); }
     TSql sql(file.Path, 1);
-    assert_true(sql.LastAppliedIndex == UINT64_MAX);
+    ASSERT_TRUE(sql.LastAppliedIndex == UINT64_MAX);
 }
-void test_sql_invalid_progress_fails_closed(void**) {
+TEST(SqlPayloads, sql_invalid_progress_fails_closed) {
     for (const std::string value : {"NULL", "'-1'", "'42junk'", "'18446744073709551616'", "''", "CAST(X'3432006a756e6b' AS TEXT)"}) {
         TDatabase file;
         { TSql sql(file.Path, 1); Seed(sql); }
@@ -251,43 +249,43 @@ void test_sql_invalid_progress_fails_closed(void**) {
         bool failed = false;
         try { TSql sql(file.Path, 1); }
         catch (const std::exception&) { failed = true; }
-        assert_true(failed);
+        ASSERT_TRUE(failed);
     }
 }
 
-void test_sql_busy_write_does_not_consume_entry(void**) {
+TEST(SqlPayloads, sql_busy_write_does_not_consume_entry) {
     for (const std::string lock : {"BEGIN IMMEDIATE", "BEGIN; SELECT * FROM t"}) {
         TDatabase file;
         TSql sql(file.Path, 1);
         Seed(sql);
         sqlite3* other = nullptr;
-        assert_int_equal(sqlite3_open((file.Path + ".1").c_str(), &other), SQLITE_OK);
-        assert_int_equal(sqlite3_exec(other, lock.c_str(), nullptr, nullptr, nullptr), SQLITE_OK);
+        ASSERT_EQ(sqlite3_open((file.Path + ".1").c_str(), &other), SQLITE_OK);
+        ASSERT_EQ(sqlite3_exec(other, lock.c_str(), nullptr, nullptr, nullptr), SQLITE_OK);
         bool failed = false;
         try { Apply(sql, "INSERT INTO t VALUES ('busy')", 2); }
         catch (const std::runtime_error&) { failed = true; }
         sqlite3_exec(other, "ROLLBACK", nullptr, nullptr, nullptr);
         sqlite3_close(other);
-        assert_true(failed);
-        assert_int_equal(sql.LastAppliedIndex, 1);
-        assert_true(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
-        assert_true(Apply(sql, "INSERT INTO t VALUES ('retry')", 2).empty());
-        assert_int_equal(sql.LastAppliedIndex, 2);
+        ASSERT_TRUE(failed);
+        ASSERT_EQ(sql.LastAppliedIndex, 1);
+        ASSERT_TRUE(ReadText(sql, "SELECT count(*) FROM t").find("\n1\n") != std::string::npos);
+        ASSERT_TRUE(Apply(sql, "INSERT INTO t VALUES ('retry')", 2).empty());
+        ASSERT_EQ(sql.LastAppliedIndex, 2);
     }
 }
-void test_sql_write_error_classification(void**) {
+TEST(SqlPayloads, sql_write_error_classification) {
     // SQLITE_TOOBIG at the default 10^9-byte limit needs about 1 GB, and TSql keeps its
     // connection private, so the classification is checked directly.
     for (int code : {SQLITE_ERROR, SQLITE_AUTH, SQLITE_CONSTRAINT, SQLITE_CONSTRAINT_UNIQUE,
                      SQLITE_MISMATCH, SQLITE_TOOBIG, SQLITE_RANGE}) {
-        assert_true(IsDeterministicSqlError(code));
+        ASSERT_TRUE(IsDeterministicSqlError(code));
     }
     for (int code : {SQLITE_BUSY, SQLITE_LOCKED, SQLITE_IOERR, SQLITE_IOERR_WRITE, SQLITE_NOMEM,
                      SQLITE_FULL, SQLITE_INTERRUPT, SQLITE_READONLY, SQLITE_CORRUPT}) {
-        assert_false(IsDeterministicSqlError(code));
+        ASSERT_FALSE(IsDeterministicSqlError(code));
     }
 }
-void test_sql_write_rejects_embedded_nul_before_admission(void**) {
+TEST(SqlPayloads, sql_write_rejects_embedded_nul_before_admission) {
     TSql sql(":memory:", 1);
     const std::string text = std::string("CREATE TABLE t (x);") + '\0' + "COMMIT";
     auto command = Query(text);
@@ -298,37 +296,37 @@ void test_sql_write_rejects_embedded_nul_before_admission(void**) {
     entry->QuerySize = text.size();
     memcpy(entry->Query, text.data(), text.size());
     Reject([&] { sql.Write(entry, 1); });
-    assert_int_equal(sql.LastAppliedIndex, 0);
+    ASSERT_EQ(sql.LastAppliedIndex, 0);
 }
 
 const std::string ExpensiveRead = "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) SELECT sum(x) FROM n";
-void test_sql_read_stops_at_work_budget(void**) {
+TEST(SqlPayloads, sql_read_stops_at_work_budget) {
     TSql sql(":memory:", 1, {.MaxVmSteps = 1000});
     Reject([&] { sql.Read(Query(ExpensiveRead), 0); });
-    assert_true(ReadText(sql, "SELECT 7 AS v") == "v\n7\n");
-    assert_int_equal(sql.LastAppliedIndex, 0);
+    ASSERT_TRUE(ReadText(sql, "SELECT 7 AS v") == "v\n7\n");
+    ASSERT_EQ(sql.LastAppliedIndex, 0);
     TSql defaults(":memory:", 1);
     Reject([&] { defaults.Read(Query(ExpensiveRead), 0); });
 }
-void test_sql_read_output_budget_counts_headers_separators_and_null(void**) {
+TEST(SqlPayloads, sql_read_output_budget_counts_headers_separators_and_null) {
     for (const auto& query : {std::string("SELECT 'abc' AS v"), std::string("SELECT NULL AS v"),
          std::string("SELECT 1 AS a, 2 AS b"), std::string("SELECT 1 AS v WHERE 0")}) {
         TSql reference(":memory:", 1);
         const auto expected = ReadText(reference, query);
         TSql exact(":memory:", 1, {.MaxResultBytes = expected.size()});
-        assert_true(ReadText(exact, query) == expected);
+        ASSERT_TRUE(ReadText(exact, query) == expected);
         TSql shortByOne(":memory:", 1, {.MaxResultBytes = expected.size() - 1});
         Reject([&] { shortByOne.Read(Query(query), 0); });
     }
 }
-void test_sql_read_bounds_accumulated_rows_and_cleans_up(void**) {
+TEST(SqlPayloads, sql_read_bounds_accumulated_rows_and_cleans_up) {
     TSql sql(":memory:", 1, {.MaxResultBytes = 64});
     Reject([&] { sql.Read(Query("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) SELECT x FROM n"), 0); });
-    assert_true(ReadText(sql, "SELECT 8 AS v") == "v\n8\n");
-    assert_true(Apply(sql, "CREATE TABLE t (x); INSERT INTO t VALUES (9)", 1).empty());
-    assert_true(ReadText(sql, "SELECT x FROM t") == "x\n9\n");
+    ASSERT_TRUE(ReadText(sql, "SELECT 8 AS v") == "v\n8\n");
+    ASSERT_TRUE(Apply(sql, "CREATE TABLE t (x); INSERT INTO t VALUES (9)", 1).empty());
+    ASSERT_TRUE(ReadText(sql, "SELECT x FROM t") == "x\n9\n");
 }
-void test_sql_read_budget_failures_recover_through_request_processor(void**) {
+TEST(SqlPayloads, sql_read_budget_failures_recover_through_request_processor) {
     struct TSink : INode {
         std::vector<std::pair<uint32_t, uint32_t>> Replies;
         void Send(TMessageHolder<TMessage> message) override {
@@ -353,41 +351,41 @@ void test_sql_read_budget_failures_recover_through_request_processor(void**) {
             processor.ProcessWaiting();
         }
     }
-    assert_int_equal(client->Replies.size(), 6);
+    ASSERT_EQ(client->Replies.size(), 6);
     for (size_t i = 0; i < client->Replies.size(); ++i) {
-        assert_int_equal(client->Replies[i].first, i + 1);
-        assert_int_equal(client->Replies[i].second, i % 3 == 2 ? 0 : 2);
+        ASSERT_EQ(client->Replies[i].first, i + 1);
+        ASSERT_EQ(client->Replies[i].second, i % 3 == 2 ? 0 : 2);
     }
-    assert_int_equal(raft->CurrentStateName(), EState::LEADER);
+    ASSERT_EQ(raft->CurrentStateName(), EState::LEADER);
 }
-void test_sql_read_preserves_nul_bytes_and_counts_their_length(void**) {
+TEST(SqlPayloads, sql_read_preserves_nul_bytes_and_counts_their_length) {
     TSql sql(":memory:", 1, {.MaxResultBytes = 6});
-    assert_true(ReadText(sql, "SELECT CAST(X'610062' AS TEXT) AS v") == std::string("v\na\0b\n", 6));
+    ASSERT_TRUE(ReadText(sql, "SELECT CAST(X'610062' AS TEXT) AS v") == std::string("v\na\0b\n", 6));
     Reject([&] { sql.Read(Query("SELECT CAST(X'61006263' AS TEXT) AS v"), 0); });
 }
-void test_sql_read_rejects_invalid_limits(void**) {
+TEST(SqlPayloads, sql_read_rejects_invalid_limits) {
     for (const auto limits : {TSqlReadLimits{.MaxVmSteps = 0},
          TSqlReadLimits{.MaxResultBytes = TMessageLimits{}.MaxFrameBytes}}) {
         bool rejected = false;
         try { TSql sql(":memory:", 1, limits); }
         catch (const std::invalid_argument&) { rejected = true; }
-        assert_true(rejected);
+        ASSERT_TRUE(rejected);
     }
 }
 
-void test_sql_read_value_limit_is_restored_before_writes(void**) {
+TEST(SqlPayloads, sql_read_value_limit_is_restored_before_writes) {
     TSql sql(":memory:", 1);
     const std::string value(9 * 1024 * 1024, 'x');
-    assert_true(Apply(sql, "CREATE TABLE big (v TEXT); INSERT INTO big VALUES ('" + value + "')", 1).empty());
+    ASSERT_TRUE(Apply(sql, "CREATE TABLE big (v TEXT); INSERT INTO big VALUES ('" + value + "')", 1).empty());
     Reject([&] { sql.Read(Query("SELECT hex(v) FROM big"), 1); });
     // Writes retain their previous SQLite length limit, even after a failed read.
-    assert_true(Apply(sql, "UPDATE big SET v=v||v", 2).empty());
-    assert_true(Apply(sql, "UPDATE big SET v=substr(v,1,1)", 3).empty());
-    assert_true(ReadText(sql, "SELECT v FROM big") == "v\nx\n");
-    assert_int_equal(sql.LastAppliedIndex, 3);
+    ASSERT_TRUE(Apply(sql, "UPDATE big SET v=v||v", 2).empty());
+    ASSERT_TRUE(Apply(sql, "UPDATE big SET v=substr(v,1,1)", 3).empty());
+    ASSERT_TRUE(ReadText(sql, "SELECT v FROM big") == "v\nx\n");
+    ASSERT_EQ(sql.LastAppliedIndex, 3);
 }
 
-void test_sql_and_raft_restart_do_not_reapply_committed_insert(void**) {
+TEST(SqlPayloads, sql_and_raft_restart_do_not_reapply_committed_insert) {
     TDatabase file;
     const auto logPath = file.Path + "-raft";
     {
@@ -405,23 +403,23 @@ void test_sql_and_raft_restart_do_not_reapply_committed_insert(void**) {
             raft->ProcessTimeout(now);
             processor.ProcessCommitted();
         }
-        assert_int_equal(sql->LastAppliedIndex, 3);
-        assert_true(ReadText(*sql, "SELECT count(*) AS n FROM t") == "n\n1\n");
+        ASSERT_EQ(sql->LastAppliedIndex, 3);
+        ASSERT_TRUE(ReadText(*sql, "SELECT count(*) AS n FROM t") == "n\n1\n");
     }
     {
         auto state = std::make_shared<TDiskState>(logPath, 1);
         auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
         auto sql = std::make_shared<TSql>(file.Path, 1);
-        assert_int_equal(sql->LastAppliedIndex, 3);
+        ASSERT_EQ(sql->LastAppliedIndex, 3);
         TRequestProcessor processor(raft, sql, {});
         processor.ProcessCommitted(); // server timer can fire before any leader is known
         const auto beforeElection = sql->LastAppliedIndex;
         raft->ProcessTimeout(ITimeSource::Time{});
         processor.ProcessCommitted();
         processor.ProcessCommitted();
-        assert_true(ReadText(*sql, "SELECT count(*) AS n FROM t") == "n\n1\n");
-        assert_int_equal(beforeElection, 3);
-        assert_int_equal(sql->LastAppliedIndex, 4); // new-term stub advanced framework progress
+        ASSERT_TRUE(ReadText(*sql, "SELECT count(*) AS n FROM t") == "n\n1\n");
+        ASSERT_EQ(beforeElection, 3);
+        ASSERT_EQ(sql->LastAppliedIndex, 4); // new-term stub advanced framework progress
     }
 }
 
@@ -430,31 +428,31 @@ void FillBig(TDatabase& file) {
     file.External("CREATE TABLE big (v BLOB); WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c "
                   "WHERE x < 3000) INSERT INTO big SELECT randomblob(1000) FROM c;");
 }
-void test_sql_snapshot_restores_database_and_progress(void**) {
+TEST(SqlPayloads, sql_snapshot_restores_database_and_progress) {
     TDatabase source;
     FillBig(source);
     TSql leader(source.Path, 1);
     Seed(leader);
     Apply(leader, "INSERT INTO t VALUES ('second')", 2);
     auto snapshot = leader.Snapshot();
-    assert_int_equal(snapshot->LastIncludedIndex, 2);
-    assert_true(snapshot.PayloadSize > 1);
+    ASSERT_EQ(snapshot->LastIncludedIndex, 2);
+    ASSERT_TRUE(snapshot.PayloadSize > 1);
     TDatabase target;
     {
         TSql follower(target.Path, 1);
         Apply(follower, "CREATE TABLE stale (x)", 1);
         follower.Apply(snapshot);
-        assert_int_equal(follower.LastAppliedIndex, 2);
-        assert_true(ReadText(follower, "SELECT value FROM t") == "value\noriginal\nsecond\n");
-        assert_true(ReadText(follower, "SELECT count(*) AS n FROM big") == "n\n3000\n");
+        ASSERT_EQ(follower.LastAppliedIndex, 2);
+        ASSERT_TRUE(ReadText(follower, "SELECT value FROM t") == "value\noriginal\nsecond\n");
+        ASSERT_TRUE(ReadText(follower, "SELECT count(*) AS n FROM big") == "n\n3000\n");
         Reject([&] { ReadText(follower, "SELECT x FROM stale"); });
         Apply(follower, "INSERT INTO t VALUES ('third')", 3);
     }
     TSql reopened(target.Path, 1);
-    assert_int_equal(reopened.LastAppliedIndex, 3);
-    assert_true(ReadText(reopened, "SELECT value FROM t") == "value\noriginal\nsecond\nthird\n");
+    ASSERT_EQ(reopened.LastAppliedIndex, 3);
+    ASSERT_TRUE(ReadText(reopened, "SELECT value FROM t") == "value\noriginal\nsecond\nthird\n");
 }
-void test_sql_invalid_snapshot_leaves_database_unchanged(void**) {
+TEST(SqlPayloads, sql_invalid_snapshot_leaves_database_unchanged) {
     TDatabase source;
     FillBig(source);
     TSql leader(source.Path, 1);
@@ -466,9 +464,9 @@ void test_sql_invalid_snapshot_leaves_database_unchanged(void**) {
     auto check = [&](TMessageHolder<TInstallSnapshotRequest> image) {
         bool rejected = false;
         try { follower.Apply(image); } catch (const std::exception&) { rejected = true; }
-        assert_true(rejected);
-        assert_int_equal(follower.LastAppliedIndex, 2);
-        assert_true(ReadText(follower, "SELECT value FROM t") == before);
+        ASSERT_TRUE(rejected);
+        ASSERT_EQ(follower.LastAppliedIndex, 2);
+        ASSERT_TRUE(ReadText(follower, "SELECT value FROM t") == before);
     };
     auto moved = leader.Snapshot();
     moved->LastIncludedIndex = 7;
@@ -484,7 +482,7 @@ void test_sql_invalid_snapshot_leaves_database_unchanged(void**) {
     garbage.Payload[0] = record;
     check(garbage);
 }
-void test_sql_snapshot_after_an_election_stub_installs_and_restarts(void**) {
+TEST(SqlPayloads, sql_snapshot_after_an_election_stub_installs_and_restarts) {
     TDatabase file;
     const auto logPath = file.Path + "-raft";
     {
@@ -502,7 +500,7 @@ void test_sql_snapshot_after_an_election_stub_installs_and_restarts(void**) {
             raft->ProcessTimeout(now);
             processor.ProcessCommitted();
         }
-        assert_int_equal(sql->LastAppliedIndex, 3);
+        ASSERT_EQ(sql->LastAppliedIndex, 3);
     }
     TMessageHolder<TInstallSnapshotRequest> image;
     {
@@ -513,9 +511,9 @@ void test_sql_snapshot_after_an_election_stub_installs_and_restarts(void**) {
         TRequestProcessor processor(raft, sql, {});
         raft->ProcessTimeout(ITimeSource::Time{});
         processor.ProcessCommitted();
-        assert_int_equal(sql->LastAppliedIndex, 4);
+        ASSERT_EQ(sql->LastAppliedIndex, 4);
         raft->Compact(sql->Snapshot());
-        assert_int_equal(state->SnapshotIndex, 3);
+        ASSERT_EQ(state->SnapshotIndex, 3);
         image = state->GetSnapshot();
     }
     {
@@ -525,8 +523,8 @@ void test_sql_snapshot_after_an_election_stub_installs_and_restarts(void**) {
         auto follower = std::make_shared<TSql>(":memory:", 2);
         TRequestProcessor processor(std::make_shared<TRaft>(state, 2, TNodeDict{}), follower, {});
         processor.ProcessCommitted();
-        assert_int_equal(follower->LastAppliedIndex, 3);
-        assert_true(ReadText(*follower, "SELECT value FROM t") == "value\nonce\n");
+        ASSERT_EQ(follower->LastAppliedIndex, 3);
+        ASSERT_TRUE(ReadText(*follower, "SELECT value FROM t") == "value\nonce\n");
     }
     // The compacted node restarts before its next write.
     auto state = std::make_shared<TDiskState>(logPath, 1);
@@ -534,10 +532,10 @@ void test_sql_snapshot_after_an_election_stub_installs_and_restarts(void**) {
     auto sql = std::make_shared<TSql>(file.Path, 1);
     TRequestProcessor processor(raft, sql, {});
     processor.ProcessCommitted();
-    assert_int_equal(sql->LastAppliedIndex, 3);
-    assert_true(ReadText(*sql, "SELECT value FROM t") == "value\nonce\n");
+    ASSERT_EQ(sql->LastAppliedIndex, 3);
+    ASSERT_TRUE(ReadText(*sql, "SELECT value FROM t") == "value\nonce\n");
 }
-void test_sql_restores_from_a_stored_snapshot(void**) {
+TEST(SqlPayloads, sql_restores_from_a_stored_snapshot) {
     TSql source(":memory:", 1);
     Seed(source);
     auto image = source.Snapshot();
@@ -549,48 +547,8 @@ void test_sql_restores_from_a_stored_snapshot(void**) {
     auto sql = std::make_shared<TSql>(file.Path, 1);
     TRequestProcessor processor(raft, sql, {});
     processor.ProcessCommitted();
-    assert_int_equal(sql->LastAppliedIndex, 1);
-    assert_true(ReadText(*sql, "SELECT value FROM t") == "value\noriginal\n");
+    ASSERT_EQ(sql->LastAppliedIndex, 1);
+    ASSERT_TRUE(ReadText(*sql, "SELECT value FROM t") == "value\noriginal\n");
 }
 
-}
-int main() {
-    const CMUnitTest tests[] = {
-        cmocka_unit_test(test_sql_prepare_rejects_short_query),
-        cmocka_unit_test(test_sql_read_rejects_short_query),
-        cmocka_unit_test(test_sql_apply_rejects_before_progress),
-        cmocka_unit_test(test_valid_sql_payload_roundtrip),
-        cmocka_unit_test(test_sql_validation_runs_before_request_admission),
-        cmocka_unit_test(test_sql_read_cannot_insert_update_or_delete),
-        cmocka_unit_test(test_sql_read_rejects_multi_statement_mutation_before_execution),
-        cmocka_unit_test(test_sql_read_cannot_change_schema),
-        cmocka_unit_test(test_sql_read_rejects_connection_control_and_unsafe_functions),
-        cmocka_unit_test(test_sql_read_supports_comments_ctes_and_safe_functions),
-        cmocka_unit_test(test_sql_read_rejects_nul_empty_and_second_select),
-        cmocka_unit_test(test_sql_read_policy_is_restored_after_rejection),
-        cmocka_unit_test(test_sql_write_cannot_escape_managed_transaction),
-        cmocka_unit_test(test_sql_write_cannot_modify_progress_metadata),
-        cmocka_unit_test(test_sql_failed_write_progress_survives_restart),
-        cmocka_unit_test(test_sql_write_handles_trailing_comment_without_losing_progress),
-        cmocka_unit_test(test_sql_automatic_rollback_is_consumed_without_partial_data),
-        cmocka_unit_test(test_sql_metadata_failure_rolls_back_data_and_does_not_advance),
-        cmocka_unit_test(test_sql_progress_restores_full_uint64_range),
-        cmocka_unit_test(test_sql_write_error_classification),
-        cmocka_unit_test(test_sql_invalid_progress_fails_closed),
-        cmocka_unit_test(test_sql_busy_write_does_not_consume_entry),
-        cmocka_unit_test(test_sql_write_rejects_embedded_nul_before_admission),
-        cmocka_unit_test(test_sql_read_stops_at_work_budget),
-        cmocka_unit_test(test_sql_read_output_budget_counts_headers_separators_and_null),
-        cmocka_unit_test(test_sql_read_bounds_accumulated_rows_and_cleans_up),
-        cmocka_unit_test(test_sql_read_budget_failures_recover_through_request_processor),
-        cmocka_unit_test(test_sql_read_preserves_nul_bytes_and_counts_their_length),
-        cmocka_unit_test(test_sql_read_rejects_invalid_limits),
-        cmocka_unit_test(test_sql_read_value_limit_is_restored_before_writes),
-        cmocka_unit_test(test_sql_and_raft_restart_do_not_reapply_committed_insert),
-        cmocka_unit_test(test_sql_snapshot_restores_database_and_progress),
-        cmocka_unit_test(test_sql_invalid_snapshot_leaves_database_unchanged),
-        cmocka_unit_test(test_sql_snapshot_after_an_election_stub_installs_and_restarts),
-        cmocka_unit_test(test_sql_restores_from_a_stored_snapshot),
-    };
-    return cmocka_run_group_tests(tests, nullptr, nullptr);
 }

@@ -10,12 +10,7 @@
 #include <miniraft/timesource.h>
 #include <miniraft/persist.h>
 
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 
 namespace {
 
@@ -92,9 +87,9 @@ void SetPayload(TMessageHolder<T>& dst, const std::vector<TMessageHolder<TMessag
 
 void assert_terms(const std::vector<TMessageHolder<TLogEntry>>& log, const std::vector<uint64_t>& terms)
 {
-    assert_int_equal(log.size(), terms.size());
+    ASSERT_EQ(log.size(), terms.size());
     for (size_t i = 0; i < log.size(); i++) {
-        assert_int_equal(log[i]->Term, terms[i]);
+        ASSERT_EQ(log[i]->Term, terms[i]);
     }
 }
 
@@ -106,96 +101,96 @@ void assert_message_equal(TMessageHolder<TMessage> m1, const T& m2) {
     if (memcmp(m.Mes, &m2, sizeof(T)) != 0) {
         const char* p1 = (const char*)m.Mes;
         const char* p2 = (const char*)&m2;
-        assert_memory_equal(p1, p2, sizeof(m2));
+        ASSERT_EQ(0, memcmp(p1, p2, sizeof(m2)));
     }
 }
 
 } // namespace {
 
-void test_empty(void** state) {
+TEST(Raft, empty) {
 
 }
 
-void test_message_create(void** state) {
+TEST(Raft, message_create) {
     auto mes = NewHoldedMessage<TMessage>(0, 8);
-    assert_true(mes->Len == 8);
-    assert_true(mes->Type == 0);
+    ASSERT_TRUE(mes->Len == 8);
+    ASSERT_TRUE(mes->Type == 0);
 }
 
-void test_message_cast(void** state) {
+TEST(Raft, message_cast) {
     TMessageHolder<TMessage> mes = NewHoldedMessage(TLogEntry{});
     auto casted = mes.Cast<TLogEntry>();
-    assert_true(mes.RawData == casted.RawData);
-    assert_true(mes->Len == casted->Len);
+    ASSERT_TRUE(mes.RawData == casted.RawData);
+    ASSERT_TRUE(mes->Len == casted->Len);
 
     auto casted2 = mes.Maybe<TRequestVoteRequest>();
-    assert_false(casted2);
+    ASSERT_FALSE(casted2);
 
     auto maybeCasted = mes.Maybe<TLogEntry>();
-    assert_true(maybeCasted);
+    ASSERT_TRUE(maybeCasted);
     auto casted3 = maybeCasted.Cast();
-    assert_true(mes.RawData == casted3.RawData);
-    assert_true(mes->Len == casted3->Len);
+    ASSERT_TRUE(mes.RawData == casted3.RawData);
+    ASSERT_TRUE(mes->Len == casted3->Len);
 }
 
-void test_initial(void**) {
+TEST(Raft, initial) {
     auto raft = MakeRaft();
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
-void test_numbers(void**) {
+TEST(Raft, numbers) {
     auto raft = MakeRaft({}, 3);
-    assert_int_equal(raft->GetMinVotes(), 2);
-    assert_int_equal(raft->GetNservers(), 3);
-    assert_int_equal(raft->GetNpeers(), 2);
+    ASSERT_EQ(raft->GetMinVotes(), 2);
+    ASSERT_EQ(raft->GetNservers(), 3);
+    ASSERT_EQ(raft->GetNpeers(), 2);
 
     raft = MakeRaft({}, 2);
-    assert_int_equal(raft->GetMinVotes(), 2);
-    assert_int_equal(raft->GetNservers(), 2);
-    assert_int_equal(raft->GetNpeers(), 1);
+    ASSERT_EQ(raft->GetMinVotes(), 2);
+    ASSERT_EQ(raft->GetNservers(), 2);
+    ASSERT_EQ(raft->GetNpeers(), 1);
 
     raft = MakeRaft({}, 1);
-    assert_int_equal(raft->GetMinVotes(), 1);
-    assert_int_equal(raft->GetNservers(), 1);
-    assert_int_equal(raft->GetNpeers(), 0);
+    ASSERT_EQ(raft->GetMinVotes(), 1);
+    ASSERT_EQ(raft->GetNservers(), 1);
+    ASSERT_EQ(raft->GetNpeers(), 0);
 
     raft = MakeRaft({}, 5);
-    assert_int_equal(raft->GetMinVotes(), 3);
-    assert_int_equal(raft->GetNservers(), 5);
-    assert_int_equal(raft->GetNpeers(), 4);
+    ASSERT_EQ(raft->GetMinVotes(), 3);
+    ASSERT_EQ(raft->GetNservers(), 5);
+    ASSERT_EQ(raft->GetNpeers(), 4);
 
     raft = MakeRaft({}, 10);
-    assert_int_equal(raft->GetMinVotes(), 6);
-    assert_int_equal(raft->GetNservers(), 10);
-    assert_int_equal(raft->GetNpeers(), 9);
+    ASSERT_EQ(raft->GetMinVotes(), 6);
+    ASSERT_EQ(raft->GetNservers(), 10);
+    ASSERT_EQ(raft->GetNpeers(), 9);
 }
 
-void test_become(void**) {
+TEST(Raft, become) {
     auto raft = MakeRaft();
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::FOLLOWER);
     raft->Become(EState::CANDIDATE);
-    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::CANDIDATE);
 }
 
-void test_become_same_func(void**) {
+TEST(Raft, become_same_func) {
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft({}, 3);
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::FOLLOWER);
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
-void test_follower_to_candidate_on_timeout(void**) {
+TEST(Raft, follower_to_candidate_on_timeout) {
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft({}, 3);
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->ProcessTimeout(ts->Now());
-    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::CANDIDATE);
 }
 
-void test_follower_append_entries_small_term(void**) {
+TEST(Raft, follower_append_entries_small_term) {
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](const TMessageHolder<TMessage>& message) {
         messages.push_back(message);
@@ -215,15 +210,15 @@ void test_follower_append_entries_small_term(void**) {
     });
     raft->Process(ts->Now(), mes);
 
-    assert_true(messages.size() == 1);
+    ASSERT_TRUE(messages.size() == 1);
     auto maybeReply = messages[0].Maybe<TAppendEntriesResponse>();
-    assert_true(maybeReply);
+    ASSERT_TRUE(maybeReply);
     auto reply = maybeReply.Cast();
-    assert_true(reply->Dst == 2);
-    assert_false(reply->Success);
+    ASSERT_TRUE(reply->Dst == 2);
+    ASSERT_FALSE(reply->Success);
 }
 
-void test_stale_append_entries_does_not_postpone_election(void**) {
+TEST(Raft, stale_append_entries_does_not_postpone_election) {
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](const TMessageHolder<TMessage>& message) {
         messages.push_back(message);
@@ -232,10 +227,10 @@ void test_stale_append_entries_does_not_postpone_election(void**) {
     auto raft = MakeRaft(onSend, 3);
     // start an election, current term becomes 2, election due is in the future
     raft->ProcessTimeout(ts->Now());
-    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::CANDIDATE);
     auto term = raft->GetState()->CurrentTerm;
     auto electionDue = raft->GetVolatileState()->ElectionDue;
-    assert_true(electionDue > ts->Now());
+    ASSERT_TRUE(electionDue > ts->Now());
 
     // a stale leader keeps sending append entries with an outdated term
     for (int i = 0; i < 10; i++) {
@@ -253,18 +248,18 @@ void test_stale_append_entries_does_not_postpone_election(void**) {
         });
         raft->Process(ts->Now(), mes);
         raft->ProcessTimeout(ts->Now());
-        assert_true(raft->GetVolatileState()->ElectionDue == electionDue);
-        assert_int_equal(raft->GetState()->CurrentTerm, term);
+        ASSERT_TRUE(raft->GetVolatileState()->ElectionDue == electionDue);
+        ASSERT_EQ(raft->GetState()->CurrentTerm, term);
     }
 
     // the original deadline still starts the next election round
     ts->Advance(std::chrono::duration_cast<std::chrono::milliseconds>(electionDue - ts->Now()));
     raft->ProcessTimeout(ts->Now());
-    assert_int_equal(raft->GetState()->CurrentTerm, term + 1);
-    assert_true(raft->CurrentStateName() == EState::CANDIDATE);
+    ASSERT_EQ(raft->GetState()->CurrentTerm, term + 1);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::CANDIDATE);
 }
 
-void test_follower_append_entries_7a(void**) {
+TEST(Raft, follower_append_entries_7a) {
     // leader: 1,1,1,4,4,5,5,6,6,6
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](const TMessageHolder<TMessage>& message) {
@@ -289,15 +284,15 @@ void test_follower_append_entries_7a(void**) {
     });
     SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
-    assert_int_equal(messages.size(), 1);
-    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
+    ASSERT_EQ(messages.size(), 1);
+    ASSERT_TRUE(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
-    assert_true(last->Success);
-    assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->LastLogIndex == 10);
+    ASSERT_TRUE(last->Success);
+    ASSERT_TRUE(last->MatchIndex = 10);
+    ASSERT_TRUE(raft->GetState()->LastLogIndex == 10);
 }
 
-void test_follower_append_entries_7b(void**) {
+TEST(Raft, follower_append_entries_7b) {
     // leader: 1,1,1,4,4,5,5,6,6,6
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](const TMessageHolder<TMessage>& message) {
@@ -322,15 +317,15 @@ void test_follower_append_entries_7b(void**) {
     });
     SetPayload(mes, MakeLog({4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
-    assert_int_equal(messages.size(), 1);
-    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
+    ASSERT_EQ(messages.size(), 1);
+    ASSERT_TRUE(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
-    assert_true(last->Success);
-    assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->LastLogIndex == 10);
+    ASSERT_TRUE(last->Success);
+    ASSERT_TRUE(last->MatchIndex = 10);
+    ASSERT_TRUE(raft->GetState()->LastLogIndex == 10);
 }
 
-void test_follower_append_entries_7c(void**) {
+TEST(Raft, follower_append_entries_7c) {
     // leader: 1,1,1,4,4,5,5,6,6,6
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](const TMessageHolder<TMessage>& message) {
@@ -355,15 +350,15 @@ void test_follower_append_entries_7c(void**) {
     });
     SetPayload(mes, MakeLog({6}));
     raft->Process(ts->Now(), mes);
-    assert_int_equal(messages.size(), 1);
-    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
+    ASSERT_EQ(messages.size(), 1);
+    ASSERT_TRUE(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
-    assert_true(last->Success);
-    assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->LastLogIndex == 11);
+    ASSERT_TRUE(last->Success);
+    ASSERT_TRUE(last->MatchIndex = 10);
+    ASSERT_TRUE(raft->GetState()->LastLogIndex == 11);
 }
 
-void test_follower_append_entries_7f(void**) {
+TEST(Raft, follower_append_entries_7f) {
     // leader: 1,1,1,4,4,5,5,6,6,6
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](const TMessageHolder<TMessage>& message) {
@@ -388,16 +383,16 @@ void test_follower_append_entries_7f(void**) {
     });
     SetPayload(mes, MakeLog({4,4,5,5,6,6,6}));
     raft->Process(ts->Now(), mes);
-    assert_int_equal(messages.size(), 1);
-    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
+    ASSERT_EQ(messages.size(), 1);
+    ASSERT_TRUE(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
-    assert_true(last->Success);
-    assert_true(last->MatchIndex = 10);
-    assert_true(raft->GetState()->LastLogIndex == 10);
+    ASSERT_TRUE(last->Success);
+    ASSERT_TRUE(last->MatchIndex = 10);
+    ASSERT_TRUE(raft->GetState()->LastLogIndex == 10);
     assert_terms(std::static_pointer_cast<TState>(raft->GetState())->Log, {1,1,1,4,4,5,5,6,6,6});
 }
 
-void test_follower_append_entries_empty_to_empty_log(void**) {
+TEST(Raft, follower_append_entries_empty_to_empty_log) {
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](auto message) {
         messages.emplace_back(std::move(message));
@@ -416,15 +411,15 @@ void test_follower_append_entries_empty_to_empty_log(void**) {
         .Nentries = 0,
     });
     raft->Process(ts->Now(), mes);
-    assert_int_equal(messages.size(), 1);
-    assert_true(messages.back().Maybe<TAppendEntriesResponse>());
+    ASSERT_EQ(messages.size(), 1);
+    ASSERT_TRUE(messages.back().Maybe<TAppendEntriesResponse>());
     auto last = messages.back().Cast<TAppendEntriesResponse>();
-    assert_int_equal(last->Dst, 2);
-    assert_true(last->Success);
-    assert_int_equal(last->MatchIndex, 0);
+    ASSERT_EQ(last->Dst, 2);
+    ASSERT_TRUE(last->Success);
+    ASSERT_EQ(last->MatchIndex, 0);
 }
 
-void test_candidate_initiate_election(void**) {
+TEST(Raft, candidate_initiate_election) {
     std::vector<TMessageHolder<TRequestVoteRequest>> messages;
     auto onSend = [&](auto message) {
         messages.emplace_back(message.template Cast<TRequestVoteRequest>());
@@ -435,8 +430,8 @@ void test_candidate_initiate_election(void**) {
     auto term = raft->GetState()->CurrentTerm;
     raft->Become(EState::CANDIDATE);
     raft->ProcessTimeout(ts->Now());
-    assert_int_equal(raft->GetState()->CurrentTerm, term+1);
-    assert_int_equal(messages.size(), 2);
+    ASSERT_EQ(raft->GetState()->CurrentTerm, term+1);
+    ASSERT_EQ(messages.size(), 2);
     auto r = NewHoldedMessage(TMessageEx {
         .Src = 1,
         .Dst = 0,
@@ -452,7 +447,7 @@ void test_candidate_initiate_election(void**) {
     assert_message_equal(messages[1], *r.Mes);
 }
 
-void test_candidate_vote_request_small_term(void**) {
+TEST(Raft, candidate_vote_request_small_term) {
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](auto message) {
         messages.emplace_back(std::move(message));
@@ -477,12 +472,12 @@ void test_candidate_vote_request_small_term(void**) {
     }, TRequestVoteResponse {
         .VoteGranted = false,
     });
-    assert_int_equal(messages.size(), 1);
+    ASSERT_EQ(messages.size(), 1);
     assert_message_equal(messages[0], *res.Mes);
-    assert_int_equal(raft->GetState()->CurrentTerm, 1);
+    ASSERT_EQ(raft->GetState()->CurrentTerm, 1);
 }
 
-void test_candidate_vote_request_ok_term(void**) {
+TEST(Raft, candidate_vote_request_ok_term) {
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](auto message) {
         messages.emplace_back(std::move(message));
@@ -507,12 +502,12 @@ void test_candidate_vote_request_ok_term(void**) {
     }, TRequestVoteResponse {
         .VoteGranted = true,
     });
-    assert_int_equal(messages.size(), 1);
+    ASSERT_EQ(messages.size(), 1);
     assert_message_equal(messages[0], *res.Mes);
-    assert_int_equal(raft->GetState()->CurrentTerm, 1);
+    ASSERT_EQ(raft->GetState()->CurrentTerm, 1);
 }
 
-void test_candidate_vote_request_big(void**) {
+TEST(Raft, candidate_vote_request_big) {
     auto raft = MakeRaft();
     auto ts = std::make_shared<TFakeTimeSource>();
     raft->Become(EState::CANDIDATE);
@@ -526,22 +521,22 @@ void test_candidate_vote_request_big(void**) {
         .CandidateId = 2,
     });
     raft->Process(ts->Now(), req);
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::FOLLOWER);
 }
 
-void test_candidate_vote_after_start(void**) {
+TEST(Raft, candidate_vote_after_start) {
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](auto message) {
         messages.emplace_back(std::move(message));
     };
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft(onSend, 3);
-    assert_true(raft->CurrentStateName() == EState::FOLLOWER);
+    ASSERT_TRUE(raft->CurrentStateName() == EState::FOLLOWER);
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::CANDIDATE);
     raft->ProcessTimeout(ts->Now());
-    assert_int_equal(raft->GetState()->VotedFor, 1);
-    assert_int_equal(raft->GetState()->CurrentTerm, 2);
+    ASSERT_EQ(raft->GetState()->VotedFor, 1);
+    ASSERT_EQ(raft->GetState()->CurrentTerm, 2);
     auto req = NewHoldedMessage(TMessageEx {
         .Src = 2,
         .Dst = 1,
@@ -553,7 +548,7 @@ void test_candidate_vote_after_start(void**) {
     });
     raft->Process(ts->Now(), req);
     auto last = messages.back().Cast<TRequestVoteResponse>();
-    assert_int_equal(last->VoteGranted, false);
+    ASSERT_EQ(last->VoteGranted, false);
 
     // request with higher term => follower
     req = NewHoldedMessage(TMessageEx {
@@ -567,11 +562,11 @@ void test_candidate_vote_after_start(void**) {
     });
     raft->Process(ts->Now(), req);
     last = messages.back().Cast<TRequestVoteResponse>();
-    assert_int_equal(raft->GetState()->VotedFor, 3);
-    assert_int_equal(last->VoteGranted, true);
+    ASSERT_EQ(raft->GetState()->VotedFor, 3);
+    ASSERT_EQ(last->VoteGranted, true);
 }
 
-void test_election_5_nodes(void**) {
+TEST(Raft, election_5_nodes) {
     auto ts = std::make_shared<TFakeTimeSource>();
     auto raft = MakeRaft({}, 5);
     ts->Advance(std::chrono::milliseconds(10000));
@@ -588,19 +583,19 @@ void test_election_5_nodes(void**) {
 
     raft->Process(ts->Now(), req);
 
-    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    ASSERT_EQ(raft->CurrentStateName(), EState::CANDIDATE);
     req->Src = 2;
     raft->Process(ts->Now(), req);
     raft->ProcessTimeout(ts->Now());
-    assert_int_equal(raft->CurrentStateName(), EState::CANDIDATE);
+    ASSERT_EQ(raft->CurrentStateName(), EState::CANDIDATE);
 
     req->Src = 4;
     raft->Process(ts->Now(), req);
     raft->ProcessTimeout(ts->Now());
-    assert_int_equal(raft->CurrentStateName(), EState::LEADER);
+    ASSERT_EQ(raft->CurrentStateName(), EState::LEADER);
 }
 
-void test_commit_advance(void**) {
+TEST(Raft, commit_advance) {
     auto state = TState {
         /*.CurrentTerm =*/ 1,
         0,
@@ -612,9 +607,9 @@ void test_commit_advance(void**) {
     };
 
     auto s1 = TVolatileState(s).CommitAdvance(3, state);
-    assert_int_equal(s1.CommitIndex, 1);
+    ASSERT_EQ(s1.CommitIndex, 1);
     s1 = TVolatileState(s).CommitAdvance(5, state);
-    assert_int_equal(s1.CommitIndex, 0);
+    ASSERT_EQ(s1.CommitIndex, 0);
 
     s = TVolatileState {
         .MatchIndex = {{1, 1}, {2, 2}}
@@ -624,12 +619,12 @@ void test_commit_advance(void**) {
         state.Append(entry);
     }
     s1 = TVolatileState(s).CommitAdvance(3, state);
-    assert_int_equal(s1.CommitIndex, 2);
+    ASSERT_EQ(s1.CommitIndex, 2);
     s1 = TVolatileState(s).CommitAdvance(5, state);
-    assert_int_equal(s1.CommitIndex, 1);
+    ASSERT_EQ(s1.CommitIndex, 1);
 }
 
-void test_commit_advance_wrong_term(void**) {
+TEST(Raft, commit_advance_wrong_term) {
     auto state = TState {
         /*.CurrentTerm =*/ 2,
         0,
@@ -639,10 +634,10 @@ void test_commit_advance_wrong_term(void**) {
         .MatchIndex = {{1, 1}, {2, 2}}
     };
     auto s1 = TVolatileState(s).CommitAdvance(3, state);
-    assert_int_equal(s1.CommitIndex, 0);
+    ASSERT_EQ(s1.CommitIndex, 0);
 }
 
-void test_leader_heartbeat(void**) {
+TEST(Raft, leader_heartbeat) {
     std::vector<TMessageHolder<TMessage>> messages;
     auto onSend = [&](auto message) {
         messages.emplace_back(std::move(message));
@@ -652,36 +647,36 @@ void test_leader_heartbeat(void**) {
     ts->Advance(std::chrono::milliseconds(10000));
     raft->Become(EState::LEADER);
     raft->ProcessTimeout(ts->Now());
-    assert_int_equal(messages.size(), 2);
+    ASSERT_EQ(messages.size(), 2);
     auto maybeReq0 = messages[0].Maybe<TAppendEntriesRequest>();
     auto maybeReq1 = messages[1].Maybe<TAppendEntriesRequest>();
-    assert_true(maybeReq0);
-    assert_true(maybeReq1);
+    ASSERT_TRUE(maybeReq0);
+    ASSERT_TRUE(maybeReq1);
     auto req0 = maybeReq0.Cast();
     auto req1 = maybeReq1.Cast();
-    assert_int_equal(req0->Src, 1);
-    assert_int_equal(req1->Src, 1);
-    assert_true((req0->Dst == 2 && req1->Dst == 3) || (req0->Dst == 3 && req1->Dst == 2));
-    assert_int_equal(req0->Nentries, 0);
-    assert_int_equal(req1->Nentries, 0);
+    ASSERT_EQ(req0->Src, 1);
+    ASSERT_EQ(req1->Src, 1);
+    ASSERT_TRUE((req0->Dst == 2 && req1->Dst == 3) || (req0->Dst == 3 && req1->Dst == 2));
+    ASSERT_EQ(req0->Nentries, 0);
+    ASSERT_EQ(req1->Nentries, 0);
 }
 
-void test_disk_state(void**) {
+TEST(Raft, disk_state) {
     remove("test_disk_state.entries.1");
     remove("test_disk_state.index.1");
     remove("test_disk_state.state.1");
 
     TDiskState state("test_disk_state", 1);
-    assert_int_equal(state.LastLogIndex, 0);
-    assert_int_equal(state.CurrentTerm, 1);
-    assert_int_equal(state.VotedFor, 0);
+    ASSERT_EQ(state.LastLogIndex, 0);
+    ASSERT_EQ(state.CurrentTerm, 1);
+    ASSERT_EQ(state.VotedFor, 0);
     state.CurrentTerm = 6;
     state.Commit();
     auto log = MakeLog<TLogEntry>({1,1,1,4,4,5,5,6,6});
     for (auto entry : log) {
         state.Append(entry);
     }
-    assert_int_equal(state.LastLogIndex, 9);
+    ASSERT_EQ(state.LastLogIndex, 9);
 
     std::vector<TMessageHolder<TLogEntry>> log2;
     for (int i = 1; i <= state.LastLogIndex; i++) {
@@ -692,26 +687,26 @@ void test_disk_state(void**) {
     assert_terms(log2, {1,1,1,4,4,5,5,6,6});
 }
 
-void test_disk_state_restore1(void**) {
+TEST(Raft, disk_state_restore1) {
     remove("test_disk_state_restore1.entries.1");
     remove("test_disk_state_restore1.index.1");
     remove("test_disk_state_restore1.state.1");
 
     std::unique_ptr<TDiskState> state = std::make_unique<TDiskState>("test_disk_state_restore1", 1);
-    assert_int_equal(state->LastLogIndex, 0);
-    assert_int_equal(state->CurrentTerm, 1);
-    assert_int_equal(state->VotedFor, 0);
+    ASSERT_EQ(state->LastLogIndex, 0);
+    ASSERT_EQ(state->CurrentTerm, 1);
+    ASSERT_EQ(state->VotedFor, 0);
     auto log = MakeLog<TLogEntry>({1});
     for (auto entry : log) {
         state->Append(entry);
     }
-    assert_int_equal(state->LastLogIndex, 1);
+    ASSERT_EQ(state->LastLogIndex, 1);
 
     state.reset();
     state = std::make_unique<TDiskState>("test_disk_state_restore1", 1);
-    assert_int_equal(state->CurrentTerm, 1);
-    assert_int_equal(state->VotedFor, 0);
-    assert_int_equal(state->LastLogIndex, 1);
+    ASSERT_EQ(state->CurrentTerm, 1);
+    ASSERT_EQ(state->VotedFor, 0);
+    ASSERT_EQ(state->LastLogIndex, 1);
 
     std::vector<TMessageHolder<TLogEntry>> log2;
     for (int i = 1; i <= state->LastLogIndex; i++) {
@@ -723,15 +718,15 @@ void test_disk_state_restore1(void**) {
 }
 
 
-void test_disk_state_restore(void**) {
+TEST(Raft, disk_state_restore) {
     remove("test_disk_state_restore.entries.1");
     remove("test_disk_state_restore.index.1");
     remove("test_disk_state_restore.state.1");
 
     std::unique_ptr<TDiskState> state = std::make_unique<TDiskState>("test_disk_state_restore", 1);
-    assert_int_equal(state->LastLogIndex, 0);
-    assert_int_equal(state->CurrentTerm, 1);
-    assert_int_equal(state->VotedFor, 0);
+    ASSERT_EQ(state->LastLogIndex, 0);
+    ASSERT_EQ(state->CurrentTerm, 1);
+    ASSERT_EQ(state->VotedFor, 0);
     // Raft persists a new current term before appending entries from that term.
     state->CurrentTerm = 10;
     state->Commit();
@@ -739,15 +734,15 @@ void test_disk_state_restore(void**) {
     for (auto entry : log) {
         state->Append(entry);
     }
-    assert_int_equal(state->LastLogIndex, 9);
+    ASSERT_EQ(state->LastLogIndex, 9);
     state->VotedFor = 2;
     state->Commit();
 
     state.reset();
     state = std::make_unique<TDiskState>("test_disk_state_restore", 1);
-    assert_int_equal(state->CurrentTerm, 10);
-    assert_int_equal(state->VotedFor, 2);
-    assert_int_equal(state->LastLogIndex, 9);
+    ASSERT_EQ(state->CurrentTerm, 10);
+    ASSERT_EQ(state->VotedFor, 2);
+    ASSERT_EQ(state->LastLogIndex, 9);
 
     std::vector<TMessageHolder<TLogEntry>> log2;
     for (int i = 1; i <= state->LastLogIndex; i++) {
@@ -756,38 +751,5 @@ void test_disk_state_restore(void**) {
     }
 
     assert_terms(log2, {1,1,1,4,4,5,5,6,6});
-}
-
-int main() {
-    const struct CMUnitTest tests[] = {
-        cmocka_unit_test(test_empty),
-        cmocka_unit_test(test_message_create),
-        cmocka_unit_test(test_message_cast),
-        cmocka_unit_test(test_initial),
-        cmocka_unit_test(test_numbers),
-        cmocka_unit_test(test_become),
-        cmocka_unit_test(test_become_same_func),
-        cmocka_unit_test(test_follower_to_candidate_on_timeout),
-        cmocka_unit_test(test_follower_append_entries_small_term),
-        cmocka_unit_test(test_stale_append_entries_does_not_postpone_election),
-        cmocka_unit_test(test_follower_append_entries_7a),
-        cmocka_unit_test(test_follower_append_entries_7b),
-        cmocka_unit_test(test_follower_append_entries_7c),
-        cmocka_unit_test(test_follower_append_entries_7f),
-        cmocka_unit_test(test_follower_append_entries_empty_to_empty_log),
-        cmocka_unit_test(test_candidate_initiate_election),
-        cmocka_unit_test(test_candidate_vote_request_small_term),
-        cmocka_unit_test(test_candidate_vote_request_ok_term),
-        cmocka_unit_test(test_candidate_vote_request_big),
-        cmocka_unit_test(test_candidate_vote_after_start),
-        cmocka_unit_test(test_election_5_nodes),
-        cmocka_unit_test(test_commit_advance),
-        cmocka_unit_test(test_commit_advance_wrong_term),
-        cmocka_unit_test(test_leader_heartbeat),
-        cmocka_unit_test(test_disk_state),
-        cmocka_unit_test(test_disk_state_restore1),
-        cmocka_unit_test(test_disk_state_restore),
-    };
-    return cmocka_run_group_tests(tests, NULL, NULL);
 }
 

@@ -5,12 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <set>
-#include <stdarg.h>
-#include <stddef.h>
-#include <setjmp.h>
-extern "C" {
-#include <cmocka.h>
-}
+#include <gtest/gtest.h>
 
 namespace {
 namespace fs = std::filesystem;
@@ -25,7 +20,11 @@ struct TEndpoint : INode {
 // Fails a test that reads an entry the snapshot has dropped.
 struct TCheckedState : TState {
     TMessageHolder<TLogEntry> Get(int64_t index) const override {
-        assert_true(uint64_t(index) > SnapshotIndex && uint64_t(index) <= LastLogIndex);
+        bool live = uint64_t(index) > SnapshotIndex && uint64_t(index) <= LastLogIndex;
+        EXPECT_TRUE(live) << "read of dropped entry " << index;
+        if (!live) {
+            throw std::out_of_range("entry was dropped by the snapshot");
+        }
         return TState::Get(index);
     }
 };
@@ -140,7 +139,10 @@ struct TFiles {
         Directory = fs::temp_directory_path() /
             ("miniraft-snapshots-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
              "-" + std::to_string(counter++));
-        assert_true(fs::create_directory(Directory));
+        EXPECT_TRUE(fs::create_directory(Directory));
+        if (!fs::is_directory(Directory)) {
+            throw std::runtime_error("cannot create " + Directory.string());
+        }
         Name = (Directory / "raft").string();
     }
     ~TFiles() { std::error_code ignored; fs::remove_all(Directory, ignored); }
@@ -183,7 +185,7 @@ struct TCluster {
     void Drain() {
         size_t budget = 100000;
         while (!Packets.empty()) {
-            assert_true(budget-- > 0);
+            ASSERT_TRUE(budget-- > 0);
             auto m = Packets.front();
             Packets.pop_front();
             auto ex = m.Cast<TMessageEx>();
@@ -209,7 +211,7 @@ struct TCluster {
         Drain();
         raft->ProcessTimeout(Now);
         Drain();
-        assert_int_equal(raft->CurrentStateName(), EState::LEADER);
+        ASSERT_EQ(raft->CurrentStateName(), EState::LEADER);
     }
     void Replicate(int rounds = 12) {
         for (int round = 0; round < rounds; ++round) Step();
@@ -234,16 +236,16 @@ struct TCluster {
     void AssertCaughtUp(uint32_t leader, uint32_t follower) {
         auto& l = (*this)[leader];
         auto& f = (*this)[follower];
-        assert_int_equal(f.State->LastLogIndex, l.State->LastLogIndex);
-        assert_int_equal(f.State->LastLogTerm, l.State->LastLogTerm);
-        assert_int_equal(l.Raft->GetVolatileState()->MatchIndex.at(follower), l.State->LastLogIndex);
-        assert_true(f.Rsm->Values == l.Rsm->Values);
-        assert_int_equal(f.Rsm->LastAppliedIndex, l.Rsm->LastAppliedIndex);
-        assert_true(l.Raft->GetVolatileState()->SnapshotTransfers.empty());
+        ASSERT_EQ(f.State->LastLogIndex, l.State->LastLogIndex);
+        ASSERT_EQ(f.State->LastLogTerm, l.State->LastLogTerm);
+        ASSERT_EQ(l.Raft->GetVolatileState()->MatchIndex.at(follower), l.State->LastLogIndex);
+        ASSERT_TRUE(f.Rsm->Values == l.Rsm->Values);
+        ASSERT_EQ(f.Rsm->LastAppliedIndex, l.Rsm->LastAppliedIndex);
+        ASSERT_TRUE(l.Raft->GetVolatileState()->SnapshotTransfers.empty());
     }
     template<class F> void StepUntil(F done) {
         for (int i = 0; i < 100 && !done(); ++i) Step();
-        assert_true(done());
+        ASSERT_TRUE(done());
     }
 };
 
@@ -253,7 +255,7 @@ std::vector<std::string> Values(std::initializer_list<int> numbers) {
     return values;
 }
 
-void test_compaction_drops_the_applied_prefix(void**) {
+TEST(Snapshots, compaction_drops_the_applied_prefix) {
     TCluster cluster(3);
     cluster.Elect(1);
     for (int i = 1; i <= 4; ++i) cluster.Write(1, std::to_string(i));
@@ -263,16 +265,16 @@ void test_compaction_drops_the_applied_prefix(void**) {
     const auto term = leader.State->LogTerm(applied);
     const auto last = leader.State->LastLogIndex;
     cluster.Compact(1);
-    assert_int_equal(leader.State->SnapshotIndex, applied);
-    assert_int_equal(leader.State->SnapshotTerm, term);
-    assert_int_equal(leader.State->LogTerm(applied), term);
-    assert_int_equal(leader.State->LastLogIndex, last);
-    assert_int_equal(std::static_pointer_cast<TState>(leader.State)->Log.size(), last - applied);
-    assert_int_equal(leader.State->GetSnapshot()->LastIncludedIndex, applied);
-    assert_int_equal(leader.State->GetSnapshot().PayloadSize, 4);
+    ASSERT_EQ(leader.State->SnapshotIndex, applied);
+    ASSERT_EQ(leader.State->SnapshotTerm, term);
+    ASSERT_EQ(leader.State->LogTerm(applied), term);
+    ASSERT_EQ(leader.State->LastLogIndex, last);
+    ASSERT_EQ(std::static_pointer_cast<TState>(leader.State)->Log.size(), last - applied);
+    ASSERT_EQ(leader.State->GetSnapshot()->LastIncludedIndex, applied);
+    ASSERT_EQ(leader.State->GetSnapshot().PayloadSize, 4);
     // An image that does not advance the snapshot changes nothing.
     cluster.Compact(1);
-    assert_int_equal(leader.State->SnapshotIndex, applied);
+    ASSERT_EQ(leader.State->SnapshotIndex, applied);
 
     // Followers compact too; replication and a leader change go on above the snapshots.
     cluster.Compact(2);
@@ -283,12 +285,12 @@ void test_compaction_drops_the_applied_prefix(void**) {
     cluster.Write(2, "7");
     cluster.Replicate();
     for (uint32_t id = 1; id <= 3; ++id) {
-        assert_true(cluster[id].Rsm->Values == Values({1, 2, 3, 4, 5, 6, 7}));
-        assert_int_equal(cluster[id].State->SnapshotIndex, applied);
+        ASSERT_TRUE(cluster[id].Rsm->Values == Values({1, 2, 3, 4, 5, 6, 7}));
+        ASSERT_EQ(cluster[id].State->SnapshotIndex, applied);
     }
 }
 
-void test_compaction_needs_a_committed_image(void**) {
+TEST(Snapshots, compaction_needs_a_committed_image) {
     TCluster cluster(3);
     cluster.Elect(1);
     cluster.Write(1, "1");
@@ -300,18 +302,18 @@ void test_compaction_needs_a_committed_image(void**) {
     image->LastIncludedIndex = leader.State->LastLogIndex;
     bool rejected = false;
     try { leader.Raft->Compact(image); } catch (const std::invalid_argument&) { rejected = true; }
-    assert_true(rejected);
+    ASSERT_TRUE(rejected);
 
     image = leader.Rsm->Snapshot();
     image.Payload[0] = NewHoldedMessage(TCommandResponse{});
     rejected = false;
     try { leader.Raft->Compact(image); } catch (const TMessageError&) { rejected = true; }
-    assert_true(rejected);
-    assert_int_equal(leader.State->SnapshotIndex, 0);
-    assert_false(leader.State->GetSnapshot());
+    ASSERT_TRUE(rejected);
+    ASSERT_EQ(leader.State->SnapshotIndex, 0);
+    ASSERT_FALSE(leader.State->GetSnapshot());
 }
 
-void test_append_entries_below_the_snapshot_match_its_prefix(void**) {
+TEST(Snapshots, append_entries_below_the_snapshot_match_its_prefix) {
     TCluster cluster(3);
     cluster.Elect(1);
     for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
@@ -319,7 +321,7 @@ void test_append_entries_below_the_snapshot_match_its_prefix(void**) {
     auto& follower = cluster[2];
     cluster.Compact(2);
     const auto snapshot = follower.State->SnapshotIndex;
-    assert_true(snapshot > 2);
+    ASSERT_TRUE(snapshot > 2);
     // A leader that probes below the follower's snapshot resends entries it has dropped.
     auto& leader = cluster[1];
     auto request = NewHoldedMessage(
@@ -336,16 +338,16 @@ void test_append_entries_below_the_snapshot_match_its_prefix(void**) {
                     {3, std::make_shared<TEndpoint>([](auto) {})}};
     TRaft raft(follower.State, 2, peers);
     raft.Process(cluster.Now, request);
-    assert_int_equal(replies.size(), 1);
+    ASSERT_EQ(replies.size(), 1);
     auto reply = replies[0].Cast<TAppendEntriesResponse>();
-    assert_true(reply->Success);
-    assert_int_equal(reply->MatchIndex, snapshot + 1);
-    assert_int_equal(follower.State->LastLogIndex, snapshot + 1);
-    assert_int_equal(follower.State->SnapshotIndex, snapshot);
-    assert_int_equal(raft.GetVolatileState()->CommitIndex, snapshot + 1);
+    ASSERT_TRUE(reply->Success);
+    ASSERT_EQ(reply->MatchIndex, snapshot + 1);
+    ASSERT_EQ(follower.State->LastLogIndex, snapshot + 1);
+    ASSERT_EQ(follower.State->SnapshotIndex, snapshot);
+    ASSERT_EQ(raft.GetVolatileState()->CommitIndex, snapshot + 1);
 }
 
-void test_restart_restores_the_application_from_snapshot_and_tail(void**) {
+TEST(Snapshots, restart_restores_the_application_from_snapshot_and_tail) {
     TFiles files;
     TCluster cluster(1);
     cluster.Start(1, std::make_shared<TDiskState>(files.Name, 1));
@@ -354,11 +356,11 @@ void test_restart_restores_the_application_from_snapshot_and_tail(void**) {
     cluster.Replicate(2);
     cluster.Compact(1);
     const auto snapshot = cluster[1].State->SnapshotIndex;
-    assert_true(snapshot >= 4);
+    ASSERT_TRUE(snapshot >= 4);
     // The prefix is gone from disk: only files of the snapshot remain.
-    assert_false(fs::exists(files.Name + ".entries.1"));
-    assert_false(fs::exists(files.Name + ".index.1"));
-    assert_true(fs::exists(files.Name + ".snapshot.1." + std::to_string(snapshot)));
+    ASSERT_FALSE(fs::exists(files.Name + ".entries.1"));
+    ASSERT_FALSE(fs::exists(files.Name + ".index.1"));
+    ASSERT_TRUE(fs::exists(files.Name + ".snapshot.1." + std::to_string(snapshot)));
     cluster.Write(1, "4");
     cluster.Replicate(2);
     auto last = cluster[1].State->LastLogIndex;
@@ -367,16 +369,16 @@ void test_restart_restores_the_application_from_snapshot_and_tail(void**) {
     for (int restart = 0; restart < 2; ++restart) {
         cluster.Start(1, std::make_shared<TDiskState>(files.Name, 1));
         auto& node = cluster[1];
-        assert_int_equal(node.State->SnapshotIndex, snapshot);
-        assert_int_equal(node.State->LastLogIndex, last);
-        assert_int_equal(node.Raft->GetVolatileState()->CommitIndex, snapshot);
+        ASSERT_EQ(node.State->SnapshotIndex, snapshot);
+        ASSERT_EQ(node.State->LastLogIndex, last);
+        ASSERT_EQ(node.Raft->GetVolatileState()->CommitIndex, snapshot);
         node.Processor->ProcessCommitted();
-        assert_int_equal(node.Rsm->Restores, 1);
-        assert_int_equal(node.Rsm->LastAppliedIndex, snapshot);
-        assert_true(node.Rsm->Values == Values({1, 2, 3}));
+        ASSERT_EQ(node.Rsm->Restores, 1);
+        ASSERT_EQ(node.Rsm->LastAppliedIndex, snapshot);
+        ASSERT_TRUE(node.Rsm->Values == Values({1, 2, 3}));
         cluster.Elect(1);
         cluster.Replicate(2);
-        assert_true(node.Rsm->Values == Values({1, 2, 3, 4}));
+        ASSERT_TRUE(node.Rsm->Values == Values({1, 2, 3, 4}));
         last = node.State->LastLogIndex;
     }
     // A durable application that is ahead of the snapshot keeps its progress.
@@ -385,11 +387,11 @@ void test_restart_restores_the_application_from_snapshot_and_tail(void**) {
     durable->LastAppliedIndex = cluster[1].Rsm->LastAppliedIndex;
     cluster.Start(1, std::make_shared<TDiskState>(files.Name, 1), durable);
     cluster[1].Processor->ProcessCommitted();
-    assert_int_equal(durable->Restores, 0);
-    assert_true(durable->Values == Values({1, 2, 3, 4}));
+    ASSERT_EQ(durable->Restores, 0);
+    ASSERT_TRUE(durable->Values == Values({1, 2, 3, 4}));
 }
 
-void test_applications_without_snapshots_work_as_before(void**) {
+TEST(Snapshots, applications_without_snapshots_work_as_before) {
     TCluster cluster(3);
     std::vector<std::shared_ptr<TPlainRsm>> applications;
     for (uint32_t id = 1; id <= 3; ++id) {
@@ -406,11 +408,11 @@ void test_applications_without_snapshots_work_as_before(void**) {
     processor.ProcessCommitted();
     applications.push_back(restarted);
     for (const auto& rsm : applications) {
-        assert_true(rsm->Values == Values({1, 2, 3}));
-        assert_int_equal(rsm->SnapshotCalls, 0);
+        ASSERT_TRUE(rsm->Values == Values({1, 2, 3}));
+        ASSERT_EQ(rsm->SnapshotCalls, 0);
     }
     for (uint32_t id = 1; id <= 3; ++id) {
-        assert_int_equal(cluster[id].State->SnapshotIndex, 0);
+        ASSERT_EQ(cluster[id].State->SnapshotIndex, 0);
     }
 
     // With an image in storage, the application's refusal reaches the embedder and
@@ -423,13 +425,13 @@ void test_applications_without_snapshots_work_as_before(void**) {
     for (int attempt = 1; attempt <= 2; ++attempt) {
         bool reported = false;
         try { restore.ProcessCommitted(); } catch (const std::runtime_error&) { reported = true; }
-        assert_true(reported);
-        assert_int_equal(unsupported->SnapshotCalls, attempt);
-        assert_int_equal(unsupported->LastAppliedIndex, 0);
+        ASSERT_TRUE(reported);
+        ASSERT_EQ(unsupported->SnapshotCalls, attempt);
+        ASSERT_EQ(unsupported->LastAppliedIndex, 0);
     }
 }
 
-void test_storage_without_snapshots_rejects_compaction(void**) {
+TEST(Snapshots, storage_without_snapshots_rejects_compaction) {
     struct TOldState : IState {
         std::vector<TMessageHolder<TLogEntry>> Log;
         void RemoveLast() override { Log.pop_back(); LastLogIndex = Log.size(); }
@@ -452,12 +454,12 @@ void test_storage_without_snapshots_rejects_compaction(void**) {
     cluster.Replicate(2);
     bool unsupported = false;
     try { cluster.Compact(1); } catch (const std::runtime_error&) { unsupported = true; }
-    assert_true(unsupported);
-    assert_int_equal(cluster[1].State->SnapshotIndex, 0);
-    assert_int_equal(cluster[1].State->LastLogIndex, 2);
+    ASSERT_TRUE(unsupported);
+    ASSERT_EQ(cluster[1].State->SnapshotIndex, 0);
+    ASSERT_EQ(cluster[1].State->LastLogIndex, 2);
 }
 
-void test_lagging_follower_installs_a_chunked_snapshot_despite_losses(void**) {
+TEST(Snapshots, lagging_follower_installs_a_chunked_snapshot_despite_losses) {
     TCluster cluster(3);
     cluster.Lag(4);
     int chunks = 0, replies = 0;
@@ -469,17 +471,17 @@ void test_lagging_follower_installs_a_chunked_snapshot_despite_losses(void**) {
     auto& follower = cluster[3];
     cluster.StepUntil([&] { return !follower.Raft->GetVolatileState()->IncomingRecords.empty(); });
     // A partial image changes nothing; a restart loses it and the transfer starts over.
-    assert_int_equal(follower.State->SnapshotIndex, 0);
-    assert_true(follower.Rsm->Values.empty());
+    ASSERT_EQ(follower.State->SnapshotIndex, 0);
+    ASSERT_TRUE(follower.Rsm->Values.empty());
     cluster.Start(3, follower.State, follower.Rsm);
     cluster.Replicate(100);
-    assert_int_equal(follower.State->SnapshotIndex, cluster[1].State->SnapshotIndex);
-    assert_true(follower.Rsm->Values == Values({1, 2, 3, 4}));
-    assert_int_equal(follower.Rsm->Restores, 1);
+    ASSERT_EQ(follower.State->SnapshotIndex, cluster[1].State->SnapshotIndex);
+    ASSERT_TRUE(follower.Rsm->Values == Values({1, 2, 3, 4}));
+    ASSERT_EQ(follower.Rsm->Restores, 1);
     cluster.AssertCaughtUp(1, 3);
 }
 
-void test_delayed_reply_after_retries_advances_the_transfer(void**) {
+TEST(Snapshots, delayed_reply_after_retries_advances_the_transfer) {
     TCluster cluster(3);
     cluster.Lag();
     std::vector<TMessageHolder<TMessage>> held;
@@ -491,10 +493,10 @@ void test_delayed_reply_after_retries_advances_the_transfer(void**) {
     cluster.StepUntil([&] { return held.size() >= 3; });
     // Retries of a chunk keep its identity, so a late reply to the first one still counts.
     for (auto reply : held) {
-        assert_int_equal(reply.Cast<TMessageEx>()->Seqno, held.front().Cast<TMessageEx>()->Seqno);
+        ASSERT_EQ(reply.Cast<TMessageEx>()->Seqno, held.front().Cast<TMessageEx>()->Seqno);
     }
     const auto& transfer = cluster[1].Raft->GetVolatileState()->SnapshotTransfers.at(3);
-    assert_int_equal(transfer.Offset, 0);
+    ASSERT_EQ(transfer.Offset, 0);
     cluster.Drop = {};
     // A stale-term reply with the chunk's seqno is dropped: the transfer does not move.
     auto& leader = cluster[1];
@@ -502,19 +504,19 @@ void test_delayed_reply_after_retries_advances_the_transfer(void**) {
         TMessageEx{.Src = 3, .Dst = 1, .Term = leader.State->CurrentTerm - 1,
             .Seqno = held.front().Cast<TMessageEx>()->Seqno},
         TInstallSnapshotResponse{}));
-    assert_int_equal(transfer.Offset, 0);
-    assert_int_equal(leader.State->CurrentTerm, held.front().Cast<TMessageEx>()->Term);
+    ASSERT_EQ(transfer.Offset, 0);
+    ASSERT_EQ(leader.State->CurrentTerm, held.front().Cast<TMessageEx>()->Term);
     cluster.Packets.push_back(held[0]);
     cluster.Drain();
-    assert_int_equal(transfer.Offset, TMessageLimits{}.MaxEntries);
+    ASSERT_EQ(transfer.Offset, TMessageLimits{}.MaxEntries);
     cluster.Packets.push_back(held[1]);
     cluster.Drain();
-    assert_int_equal(transfer.Offset, TMessageLimits{}.MaxEntries);
+    ASSERT_EQ(transfer.Offset, TMessageLimits{}.MaxEntries);
     cluster.Replicate(40);
     cluster.AssertCaughtUp(1, 3);
 }
 
-void test_leader_change_in_the_middle_of_a_transfer(void**) {
+TEST(Snapshots, leader_change_in_the_middle_of_a_transfer) {
     TCluster cluster(3);
     cluster.Lag();
     cluster.Compact(2);
@@ -536,19 +538,19 @@ void test_leader_change_in_the_middle_of_a_transfer(void**) {
     cluster.Step();
     cluster.Drop = {};
     cluster.Elect(2);
-    assert_true(cluster[1].Raft->GetVolatileState()->SnapshotTransfers.empty());
+    ASSERT_TRUE(cluster[1].Raft->GetVolatileState()->SnapshotTransfers.empty());
     for (auto& m : late) cluster.Packets.push_back(m);
     cluster.Write(2, "4");
     cluster.Replicate(40);
-    assert_int_equal(follower.State->SnapshotIndex, cluster[2].State->SnapshotIndex);
-    assert_int_equal(follower.Rsm->Restores, 1);
-    assert_true(follower.Rsm->Values == Values({1, 2, 3, 4}));
+    ASSERT_EQ(follower.State->SnapshotIndex, cluster[2].State->SnapshotIndex);
+    ASSERT_EQ(follower.Rsm->Restores, 1);
+    ASSERT_TRUE(follower.Rsm->Values == Values({1, 2, 3, 4}));
     cluster.AssertCaughtUp(2, 3);
     cluster.AssertCaughtUp(2, 1);
 }
 
 // Any exception type is a failure, never a final refusal of the image.
-void test_storage_failure_reaches_the_embedder_and_is_retried(void**) {
+TEST(Snapshots, storage_failure_reaches_the_embedder_and_is_retried) {
     for (auto [afterInstall, logicError] : {std::pair{false, false}, {true, false}, {false, true}, {true, true}}) {
         TCluster cluster(3);
         auto state = std::make_shared<TFailingState>();
@@ -566,15 +568,15 @@ void test_storage_failure_reaches_the_embedder_and_is_retried(void**) {
             try { cluster.Step(); } catch (const std::exception&) { ++reported; }
         }
         // Only the last chunk comes again: it installs the kept image or finds it installed.
-        assert_int_equal(reported, 1);
-        assert_int_equal(chunks, 4);
-        assert_int_equal(cluster[3].State->SnapshotIndex, cluster[1].State->SnapshotIndex);
-        assert_int_equal(cluster[3].Rsm->Restores, 1);
+        ASSERT_EQ(reported, 1);
+        ASSERT_EQ(chunks, 4);
+        ASSERT_EQ(cluster[3].State->SnapshotIndex, cluster[1].State->SnapshotIndex);
+        ASSERT_EQ(cluster[3].Rsm->Restores, 1);
         cluster.AssertCaughtUp(1, 3);
     }
 }
 
-void test_compaction_during_a_transfer_keeps_its_image(void**) {
+TEST(Snapshots, compaction_during_a_transfer_keeps_its_image) {
     TCluster cluster(3);
     cluster.Lag();
     auto& transfers = cluster[1].Raft->GetVolatileState()->SnapshotTransfers;
@@ -589,13 +591,13 @@ void test_compaction_during_a_transfer_keeps_its_image(void**) {
         if (index && (installed.empty() || installed.back() != index)) installed.push_back(index);
     }
     // The first transfer ends with the image it started with, newer ones follow.
-    assert_true(installed.size() >= 2);
-    assert_int_equal(installed.front(), first);
+    ASSERT_TRUE(installed.size() >= 2);
+    ASSERT_EQ(installed.front(), first);
     cluster.Replicate(40);
     cluster.AssertCaughtUp(1, 3);
 }
 
-void test_covered_and_contradicting_images(void**) {
+TEST(Snapshots, covered_and_contradicting_images) {
     TCluster cluster(3);
     cluster.Elect(1);
     for (int i = 1; i <= 3; ++i) cluster.Write(1, std::to_string(i));
@@ -613,37 +615,20 @@ void test_covered_and_contradicting_images(void**) {
             : cluster.Packets.back().Cast<TInstallSnapshotResponse>();
     };
     // An image against the committed prefix is dropped like any invalid RPC.
-    assert_false(send(3, term - 1, 0));
-    assert_false(send(last + 5, term - 1, 0));
+    ASSERT_FALSE(send(3, term - 1, 0));
+    ASSERT_FALSE(send(last + 5, term - 1, 0));
     // The log has the boundary entry: acknowledged at once, from any chunk.
     auto reply = send(3, term, 4096);
-    assert_true(reply);
-    assert_int_equal(reply->MatchIndex, 3);
+    ASSERT_TRUE(reply);
+    ASSERT_EQ(reply->MatchIndex, 3);
     cluster.Compact(2);
     reply = send(2, term, 0);
-    assert_true(reply);
-    assert_int_equal(reply->MatchIndex, 2);
-    assert_int_equal(follower.State->LastLogIndex, last);
-    assert_int_equal(follower.State->SnapshotIndex, last);
-    assert_true(follower.Raft->GetVolatileState()->IncomingRecords.empty());
+    ASSERT_TRUE(reply);
+    ASSERT_EQ(reply->MatchIndex, 2);
+    ASSERT_EQ(follower.State->LastLogIndex, last);
+    ASSERT_EQ(follower.State->SnapshotIndex, last);
+    ASSERT_TRUE(follower.Raft->GetVolatileState()->IncomingRecords.empty());
 }
 
 } // namespace
 
-int main() {
-    const CMUnitTest tests[] = {
-        cmocka_unit_test(test_compaction_drops_the_applied_prefix),
-        cmocka_unit_test(test_compaction_needs_a_committed_image),
-        cmocka_unit_test(test_append_entries_below_the_snapshot_match_its_prefix),
-        cmocka_unit_test(test_restart_restores_the_application_from_snapshot_and_tail),
-        cmocka_unit_test(test_applications_without_snapshots_work_as_before),
-        cmocka_unit_test(test_storage_without_snapshots_rejects_compaction),
-        cmocka_unit_test(test_lagging_follower_installs_a_chunked_snapshot_despite_losses),
-        cmocka_unit_test(test_delayed_reply_after_retries_advances_the_transfer),
-        cmocka_unit_test(test_leader_change_in_the_middle_of_a_transfer),
-        cmocka_unit_test(test_storage_failure_reaches_the_embedder_and_is_retried),
-        cmocka_unit_test(test_compaction_during_a_transfer_keeps_its_image),
-        cmocka_unit_test(test_covered_and_contradicting_images),
-    };
-    return cmocka_run_group_tests(tests, nullptr, nullptr);
-}
