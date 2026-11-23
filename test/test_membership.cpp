@@ -586,7 +586,11 @@ TEST(Membership, at_most_one_uncommitted_change_under_failures) {
         seed ^= seed << 5;
         return seed;
     };
-    cluster.Drop = [&](const auto&) { return random() % 10 == 0; };
+    int installs = 0;
+    cluster.Drop = [&](const auto& m) {
+        installs += m->Type == uint32_t(EMessageType::INSTALL_SNAPSHOT_REQUEST);
+        return random() % 10 == 0;
+    };
     std::map<uint64_t, uint32_t> leaders;
     // Each committed entry as it was first seen committed, and the highest commit index ever.
     std::map<uint64_t, std::string> committed;
@@ -595,6 +599,12 @@ TEST(Membership, at_most_one_uncommitted_change_under_failures) {
     for (int step = 0; step < 3000; ++step) {
         if (step % 97 == 0) {
             cluster.Restart(1 + random() % 5);
+        }
+        // The servers that join later catch up through InstallSnapshot.
+        if (step % 13 == 0) {
+            for (uint32_t id = 1; id <= 3; ++id) {
+                ASSERT_NO_FATAL_FAILURE(cluster.Compact(id));
+            }
         }
         for (uint32_t id = 1; id <= 5; ++id) {
             auto& node = cluster[id];
@@ -640,6 +650,7 @@ TEST(Membership, at_most_one_uncommitted_change_under_failures) {
     }
     ASSERT_GT(changes, 20);
     ASSERT_GT(leaders.size(), 2);
+    ASSERT_GT(installs, 0);
 }
 
 TEST(Membership, configuration_survives_compaction_and_restart) {
