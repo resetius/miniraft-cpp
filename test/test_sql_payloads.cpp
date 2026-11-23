@@ -425,6 +425,81 @@ void test_sql_and_raft_restart_do_not_reapply_committed_insert(void**) {
     }
 }
 
+// Larger than one snapshot record; written without the application's policy.
+void FillBig(TDatabase& file) {
+    file.External("CREATE TABLE big (v BLOB); WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c "
+                  "WHERE x < 3000) INSERT INTO big SELECT randomblob(1000) FROM c;");
+}
+void test_sql_snapshot_restores_database_and_progress(void**) {
+    TDatabase source;
+    FillBig(source);
+    TSql leader(source.Path, 1);
+    Seed(leader);
+    Apply(leader, "INSERT INTO t VALUES ('second')", 2);
+    auto snapshot = leader.Snapshot();
+    assert_int_equal(snapshot->LastIncludedIndex, 2);
+    assert_true(snapshot.PayloadSize > 1);
+    TDatabase target;
+    {
+        TSql follower(target.Path, 1);
+        Apply(follower, "CREATE TABLE stale (x)", 1);
+        follower.Apply(snapshot);
+        assert_int_equal(follower.LastAppliedIndex, 2);
+        assert_true(ReadText(follower, "SELECT value FROM t") == "value\noriginal\nsecond\n");
+        assert_true(ReadText(follower, "SELECT count(*) AS n FROM big") == "n\n3000\n");
+        Reject([&] { ReadText(follower, "SELECT x FROM stale"); });
+        Apply(follower, "INSERT INTO t VALUES ('third')", 3);
+    }
+    TSql reopened(target.Path, 1);
+    assert_int_equal(reopened.LastAppliedIndex, 3);
+    assert_true(ReadText(reopened, "SELECT value FROM t") == "value\noriginal\nsecond\nthird\n");
+}
+void test_sql_invalid_snapshot_leaves_database_unchanged(void**) {
+    TDatabase source;
+    FillBig(source);
+    TSql leader(source.Path, 1);
+    Seed(leader);
+    TSql follower(":memory:", 1);
+    Seed(follower);
+    Apply(follower, "INSERT INTO t VALUES ('mine')", 2);
+    const auto before = ReadText(follower, "SELECT value FROM t");
+    auto check = [&](TMessageHolder<TInstallSnapshotRequest> image) {
+        bool rejected = false;
+        try { follower.Apply(image); } catch (const std::exception&) { rejected = true; }
+        assert_true(rejected);
+        assert_int_equal(follower.LastAppliedIndex, 2);
+        assert_true(ReadText(follower, "SELECT value FROM t") == before);
+    };
+    auto moved = leader.Snapshot();
+    moved->LastIncludedIndex = 7;
+    check(moved);
+    auto truncated = leader.Snapshot();
+    truncated.PayloadSize -= 1;
+    check(truncated);
+    auto garbage = NewHoldedMessage(TMessageEx{}, TInstallSnapshotRequest{.LastIncludedIndex = 1});
+    const std::string text = "not a database";
+    auto record = NewHoldedMessage<TLogEntry>(sizeof(TLogEntry) + text.size());
+    memcpy(record->Data, text.data(), text.size());
+    garbage.InitPayload(1);
+    garbage.Payload[0] = record;
+    check(garbage);
+}
+void test_sql_restores_from_a_stored_snapshot(void**) {
+    TSql source(":memory:", 1);
+    Seed(source);
+    auto image = source.Snapshot();
+    image->LastIncludedTerm = 1;
+    auto state = std::make_shared<TState>();
+    state->InstallSnapshot(image);
+    auto raft = std::make_shared<TRaft>(state, 1, TNodeDict{});
+    TDatabase file;
+    auto sql = std::make_shared<TSql>(file.Path, 1);
+    TRequestProcessor processor(raft, sql, {});
+    processor.ProcessCommitted();
+    assert_int_equal(sql->LastAppliedIndex, 1);
+    assert_true(ReadText(*sql, "SELECT value FROM t") == "value\noriginal\n");
+}
+
 }
 int main() {
     const CMUnitTest tests[] = {
@@ -459,6 +534,9 @@ int main() {
         cmocka_unit_test(test_sql_read_rejects_invalid_limits),
         cmocka_unit_test(test_sql_read_value_limit_is_restored_before_writes),
         cmocka_unit_test(test_sql_and_raft_restart_do_not_reapply_committed_insert),
+        cmocka_unit_test(test_sql_snapshot_restores_database_and_progress),
+        cmocka_unit_test(test_sql_invalid_snapshot_leaves_database_unchanged),
+        cmocka_unit_test(test_sql_restores_from_a_stored_snapshot),
     };
     return cmocka_run_group_tests(tests, nullptr, nullptr);
 }
