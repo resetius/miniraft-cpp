@@ -72,11 +72,14 @@ NNet::TFuture<void> Client(TPoller& poller, TSocket socket) {
 // The embedder decides when to compact: here after every `every` applied entries.
 template<typename TPoller>
 NNet::TVoidTask Compact(TPoller& poller, std::shared_ptr<TRaft> raft, std::shared_ptr<IRsm> rsm, uint64_t every) {
+    uint64_t lastTried = 0;
     while (true) {
         co_await poller.Sleep(std::chrono::milliseconds(1000));
-        if (rsm->LastAppliedIndex < raft->GetState()->SnapshotIndex + every) {
+        // Compact drops an image without new progress; do not re-serialize it every tick.
+        if (rsm->LastAppliedIndex < raft->GetState()->SnapshotIndex + every || rsm->LastAppliedIndex == lastTried) {
             continue;
         }
+        lastTried = rsm->LastAppliedIndex;
         try {
             raft->Compact(rsm->Snapshot());
         } catch (const std::exception& ex) {
