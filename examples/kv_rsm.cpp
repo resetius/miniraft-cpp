@@ -81,7 +81,9 @@ void TKv::Apply(TMessageHolder<TInstallSnapshotRequest> snapshot) {
     for (uint32_t i = 0; i < snapshot.PayloadSize; ++i) {
         auto record = snapshot.Payload[i].Cast<TLogEntry>();
         TKvEntry header;
-        if (record->Len < sizeof(TLogEntry) + sizeof(header)) throw TMessageError("Short KV snapshot record");
+        if (record->Len < sizeof(TLogEntry) + sizeof(header)) {
+            throw TMessageError("Short KV snapshot record");
+        }
         memcpy(&header, record->Data, sizeof(header));
         const auto data = record->Data + sizeof(header);
         ValidatePayloadRange(record, data, uint64_t(header.KeySize) + header.ValSize);
