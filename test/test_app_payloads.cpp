@@ -73,6 +73,23 @@ std::string ListKv(TKv& kv) {
     for (const auto& line : lines) sorted += line + "\n";
     return sorted;
 }
+TEST(AppPayloads, kv_short_entries_are_applied) {
+    TKv kv;
+    uint64_t index = 0;
+    for (const auto& [key, value] : std::vector<std::pair<std::string, std::string>>{
+             {"a", "b"}, {"ab", "c"}, {"a", "bcd"}, {"abcd", "e"}}) {
+        auto entry = kv.Prepare(SetKv(key, value));
+        ASSERT_EQ(entry->Len, sizeof(TLogEntry) + sizeof(TKvEntry) + key.size() + value.size());
+        kv.Write(entry, ++index);
+        auto read = NewHoldedMessage<TReadKv>(sizeof(TReadKv) + key.size());
+        read->KeySize = key.size();
+        memcpy(read->Data, key.data(), key.size());
+        auto reply = kv.Read(read, index).Cast<TCommandResponse>();
+        ASSERT_EQ(std::string(reply->Data, reply->Len - sizeof(TCommandResponse)), value);
+        kv.Write(kv.Prepare(SetKv(key, "")), ++index);
+        ASSERT_EQ(kv.Read(read, index)->Len, sizeof(TCommandResponse));
+    }
+}
 TEST(AppPayloads, kv_snapshot_roundtrip) {
     TKv kv;
     uint64_t index = 0;
